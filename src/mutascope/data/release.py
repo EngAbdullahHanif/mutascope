@@ -1,7 +1,7 @@
 """Typed view of the pinned ProteinGym release (``conf/data/proteingym.yaml``)."""
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -51,6 +51,8 @@ class Release:
     raw_dir: Path
     manifest_path: Path
     files: tuple[RemoteFile, ...]
+    structure_exceptions: dict[str, str] = field(default_factory=dict[str, str])
+    """assay_id -> documented reason its structure mapping is known to fail."""
 
     @property
     def manifest_key(self) -> str:
@@ -74,7 +76,18 @@ def load_release(data_cfg: DictConfig) -> Release:
         raw_dir=Path(_get(cfg, "raw_dir", str)),
         manifest_path=Path(_get(cfg, "manifest_path", str)),
         files=tuple(_remote_file(key, _mapping(files, key)) for key in files),
+        structure_exceptions=_structure_exceptions(cfg),
     )
+
+
+def _structure_exceptions(cfg: Mapping[str, Any]) -> dict[str, str]:
+    if cfg.get("structure_exceptions") is None:
+        return {}
+    exceptions = _mapping(cfg, "structure_exceptions")
+    for assay_id, reason in exceptions.items():
+        if not isinstance(reason, str) or not reason.strip():
+            raise ReleaseConfigError(f"structure_exceptions.{assay_id} needs a non-empty reason")
+    return {assay_id: str(reason).strip() for assay_id, reason in exceptions.items()}
 
 
 def _remote_file(key: str, spec: Mapping[str, Any]) -> RemoteFile:

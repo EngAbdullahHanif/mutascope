@@ -27,6 +27,9 @@ def test_committed_config_loads(monkeypatch: pytest.MonkeyPatch) -> None:
     assert all(f.url.endswith(f.filename) for f in release.files)
     assert len({f.filename for f in release.files}) == len(release.files)
 
+    assert len(release.structure_exceptions) == 4
+    assert all(reason for reason in release.structure_exceptions.values())
+
     zero_shot = release.file("zero_shot_scores").to_parquet
     assert zero_shot is not None and zero_shot.delete_archive
     assert ("ESM2_650M", "DOUBLE") in zero_shot.columns
