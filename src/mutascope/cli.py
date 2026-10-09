@@ -12,6 +12,7 @@ import typer
 from mutascope import __version__
 from mutascope.data.download import DownloadError, fetch_release
 from mutascope.data.release import load_release
+from mutascope.data.structures import StructureMappingError, map_structures
 from mutascope.utils.config import load_config
 from mutascope.utils.logging import configure_logging
 
@@ -60,3 +61,21 @@ def data_download(config_dir: ConfigDir = Path("conf"), overrides: Overrides = N
     except (DownloadError, httpx.HTTPError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
+
+
+@data_app.command("check-structures")
+def data_check_structures(
+    reference: Annotated[
+        Path, typer.Option(help="ProteinGym reference CSV.", exists=True, dir_okay=False)
+    ],
+    structures_dir: Annotated[
+        Path, typer.Option(help="Directory of AF2 PDB files.", exists=True, file_okay=False)
+    ],
+) -> None:
+    """Fail unless every assay maps to a PDB whose sequence matches its target range."""
+    try:
+        mappings = map_structures(reference, structures_dir)
+    except StructureMappingError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"{len(mappings)} assays mapped to structures")
