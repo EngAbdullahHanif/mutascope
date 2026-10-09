@@ -4,7 +4,7 @@ import csv
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
+from typer.testing import CliRunner, Result
 
 from mutascope.cli import app
 from mutascope.data.structures import (
@@ -14,6 +14,7 @@ from mutascope.data.structures import (
     pdb_sequence,
 )
 
+CONF = Path(__file__).parents[2] / "conf"
 ONE_TO_THREE = {"M": "MET", "K": "LYS", "V": "VAL", "A": "ALA", "R": "ARG", "P": "PRO"}
 
 
@@ -79,8 +80,9 @@ def test_maps_full_and_windowed_structures(tmp_path: Path, structures: Path) -> 
             row("WIN", "MKVAR", "WINDOW.pdb", "3-4"),
         ],
     )
-    mappings = map_structures(ref, structures)
-    assert [(m.assay_id, m.pdb_path.name, m.range_start, m.range_end) for m in mappings] == [
+    check = map_structures(ref, structures)
+    assert check.allowed_exceptions == []
+    assert [(m.assay_id, m.pdb_path.name, m.range_start, m.range_end) for m in check.mappings] == [
         ("FULL_a", "FULL.pdb", 1, 5),
         ("FULL_b", "FULL.pdb", 1, 5),
         ("WIN", "WINDOW.pdb", 3, 4),
@@ -103,7 +105,7 @@ def test_reports_every_unmappable_assay(tmp_path: Path, structures: Path) -> Non
         map_structures(ref, structures)
 
     message = str(excinfo.value)
-    assert message.startswith("5 of 6 assays")
+    assert message.startswith("5 structure mapping problem(s) in 6 assays")
     assert "OK " not in message
     assert "NOFILE (row 3): no pdb_file" in message
     assert "MISSING (row 4): GONE.pdb not found" in message
@@ -113,16 +115,62 @@ def test_reports_every_unmappable_assay(tmp_path: Path, structures: Path) -> Non
     assert "SHIFTED (row 7)" in message
 
 
-def test_cli_check_structures_exit_codes(tmp_path: Path, structures: Path) -> None:
+def test_documented_exceptions_are_allowed_but_not_mapped(tmp_path: Path, structures: Path) -> None:
+    ref = write_reference(
+        tmp_path / "ref.csv",
+        [row("OK", "MKVAR", "FULL.pdb", "1-5"), row("VARIANT", "MKPAR", "FULL.pdb", "1-5")],
+    )
+    check = map_structures(ref, structures, {"VARIANT": "known natural variant"})
+
+    assert [m.assay_id for m in check.mappings] == ["OK"]
+    [allowed] = check.allowed_exceptions
+    assert allowed.assay_id == "VARIANT"
+    assert allowed.documented_reason == "known natural variant"
+    assert "P3V" in allowed.observed_failure
+
+
+def test_stale_or_unknown_exceptions_fail(tmp_path: Path, structures: Path) -> None:
+    ref = write_reference(tmp_path / "ref.csv", [row("OK", "MKVAR", "FULL.pdb", "1-5")])
+    with pytest.raises(StructureMappingError) as excinfo:
+        map_structures(ref, structures, {"OK": "was broken once", "GHOST": "typo"})
+    message = str(excinfo.value)
+    assert "OK (row 2): listed as exception but maps fine" in message
+    assert "GHOST: listed as exception but not in reference" in message
+
+
+def test_cli_check_structures(tmp_path: Path, structures: Path) -> None:
     good = write_reference(tmp_path / "good.csv", [row("A", "MKVAR", "FULL.pdb", "1-5")])
     bad = write_reference(tmp_path / "bad.csv", [row("A", "MKVAA", "FULL.pdb", "1-5")])
     runner = CliRunner()
-    args = ["data", "check-structures", "--structures-dir", str(structures), "--reference"]
 
-    ok = runner.invoke(app, [*args, str(good)])
+    def invoke(reference: Path, *overrides: str) -> Result:
+        return runner.invoke(
+            app,
+            [
+                "data",
+                "check-structures",
+                "--config-dir",
+                str(CONF),
+                "--structures-dir",
+                str(structures),
+                "--reference",
+                str(reference),
+                *overrides,
+            ],
+        )
+
+    ok = invoke(good, "data.structure_exceptions=null")
     assert ok.exit_code == 0, ok.output
     assert "1 assays mapped" in ok.stdout
 
-    failed = runner.invoke(app, [*args, str(bad)])
+    failed = invoke(bad, "data.structure_exceptions=null")
     assert failed.exit_code == 1
     assert "A5R" in failed.stderr  # target A, structure R
+
+    allowed = invoke(
+        bad, "~data.structure_exceptions", "+data.structure_exceptions={A:'documented tag'}"
+    )
+    assert allowed.exit_code == 0, allowed.output
+    assert "0 assays mapped" in allowed.stdout
+    assert "1 allowed exceptions" in allowed.stdout
+    assert "A: documented tag" in allowed.stdout

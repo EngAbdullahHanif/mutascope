@@ -71,11 +71,21 @@ def data_check_structures(
     structures_dir: Annotated[
         Path, typer.Option(help="Directory of AF2 PDB files.", exists=True, file_okay=False)
     ],
+    config_dir: ConfigDir = Path("conf"),
+    overrides: Overrides = None,
 ) -> None:
-    """Fail unless every assay maps to a PDB whose sequence matches its target range."""
+    """Fail unless every assay maps to a PDB whose sequence matches its target range.
+
+    Assays listed under ``data.structure_exceptions`` are reported as allowed exceptions.
+    """
+    exceptions = load_release(load_config(config_dir, overrides).data).structure_exceptions
     try:
-        mappings = map_structures(reference, structures_dir)
+        check = map_structures(reference, structures_dir, exceptions)
     except StructureMappingError as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
-    typer.echo(f"{len(mappings)} assays mapped to structures")
+    typer.echo(f"{len(check.mappings)} assays mapped to structures")
+    if check.allowed_exceptions:
+        typer.echo(f"{len(check.allowed_exceptions)} allowed exceptions (no structure):")
+        for allowed in check.allowed_exceptions:
+            typer.echo(f"  {allowed.assay_id}: {allowed.documented_reason}")

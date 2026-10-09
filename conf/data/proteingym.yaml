@@ -91,3 +91,17 @@ files:
     size_bytes: 138728
     md5: null
     archive: false
+
+# Assays whose structure mapping fails for a known upstream reason (see docs/adr/0003). They are
+# reported by `mutascope data check-structures` as allowed exceptions and get no structure, so
+# structure-based models skip them; sequence-only models still use them. The check fails if an
+# entry stops failing or names an unknown assay, so this list cannot go stale silently.
+structure_exceptions:
+  CAS9_STRP1_Spencer_2017_positive: >-
+    22-residue C-terminal tag (NLS + HA) in PDB; pdb_range 1-1390 exceeds target length 1368
+  P53_HUMAN_Giacomelli_2018_Null_Etoposide: >-
+    Natural R72P variant between target (R72) and PDB (P72)
+  P53_HUMAN_Giacomelli_2018_Null_Nutlin: >-
+    Natural R72P variant between target (R72) and PDB (P72)
+  P53_HUMAN_Giacomelli_2018_WT_Nutlin: >-
+    Natural R72P variant between target (R72) and PDB (P72)
