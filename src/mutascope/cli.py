@@ -3,11 +3,16 @@
 Every pipeline step is a command here; Nextflow only ever calls these commands.
 """
 
+from pathlib import Path
 from typing import Annotated
 
+import httpx
 import typer
 
 from mutascope import __version__
+from mutascope.data.download import DownloadError, fetch_release
+from mutascope.data.release import load_release
+from mutascope.utils.config import load_config
 from mutascope.utils.logging import configure_logging
 
 app = typer.Typer(
@@ -15,6 +20,17 @@ app = typer.Typer(
     help="Functional-effect landscapes for single amino-acid substitutions.",
     no_args_is_help=True,
 )
+data_app = typer.Typer(help="Acquire and validate ProteinGym data.", no_args_is_help=True)
+app.add_typer(data_app, name="data")
+
+ConfigDir = Annotated[
+    Path,
+    typer.Option("--config-dir", help="Hydra config directory.", exists=True, file_okay=False),
+]
+Overrides = Annotated[
+    list[str] | None,
+    typer.Argument(help="Hydra overrides, e.g. data.data_dir=/scratch/data", show_default=False),
+]
 
 
 @app.callback()
@@ -31,3 +47,16 @@ def main(
 def version() -> None:
     """Print the installed MutaScope version."""
     typer.echo(__version__)
+
+
+@data_app.command("download")
+def data_download(config_dir: ConfigDir = Path("conf"), overrides: Overrides = None) -> None:
+    """Download the pinned ProteinGym release into the raw dir and verify every checksum."""
+    release = load_release(load_config(config_dir, overrides).data)
+    timeout = httpx.Timeout(30.0, read=120.0)
+    try:
+        with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+            fetch_release(release, client)
+    except (DownloadError, httpx.HTTPError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
