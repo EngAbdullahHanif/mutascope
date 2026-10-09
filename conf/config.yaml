@@ -1,0 +1,4 @@
+# Root Hydra config. Groups (data/, model/, train/, eval/) are added as their code lands.
+# conf/data/proteingym.yaml (release pin + checksums) is created deliberately in Phase 1 data work.
+defaults:
+  - _self_

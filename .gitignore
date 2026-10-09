@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+coverage.xml
+htmlcov/
+
+# Data and outputs (never committed)
+/data/
+/outputs/
+/multirun/
+/mlruns/
+
+# Nextflow
+.nextflow/
+.nextflow.log*
+/work/
+pipeline/results/
+timeline.html*
+report.html*
+trace.txt*
+
+# Node / web
+node_modules/
+.next/
+web/openapi.json
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Secrets
+.env
+.env.*
