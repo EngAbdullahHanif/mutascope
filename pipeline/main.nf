@@ -6,5 +6,6 @@
 
 workflow {
     log.info "MutaScope pipeline | profile: ${workflow.profile} | outdir: ${params.outdir}"
+    log.info "Hydra overrides: ${params.hydra_overrides ?: '(none)'}"
     log.info "No modules yet - nothing to run."
 }
