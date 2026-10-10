@@ -18,7 +18,7 @@ Goal: one command turns the raw ProteinGym download into clean, validated, versi
 - [ ] GitHub Actions: lint + typecheck + tests
 
 ### Data acquisition
-- [ ] Pin the ProteinGym release in `conf/data/proteingym.yaml`
+- [x] Pin the ProteinGym release in `conf/data/proteingym.yaml`
 - [ ] Download: DMS substitutions archive, reference file `DMS_substitutions.csv`, CV fold assignments,
       AF2 structures matched to DMS targets, precomputed zero-shot baseline scores (for reproduction in Phase 2)
 - [ ] `data/manifest.yaml` with sha256 per file; download verifies checksums and is idempotent

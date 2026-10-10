@@ -13,7 +13,9 @@ coverage.xml
 htmlcov/
 
 # Data and outputs (never committed)
-/data/
+/data/*
+# The checksum manifest is versioned: it is what every later download verifies against.
+!/data/manifest.yaml
 /outputs/
 /multirun/
 /mlruns/
