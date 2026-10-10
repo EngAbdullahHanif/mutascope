@@ -177,3 +177,39 @@ def test_cli_check_variants(dataset: tuple[Path, Path]) -> None:
     failed = runner.invoke(app, args)
     assert failed.exit_code == 1
     assert "A (row 2): V2A: wild-type mismatch" in failed.stderr
+
+
+def test_shifted_target_seq_fails_every_row_of_that_assay(tmp_path: Path) -> None:
+    """Regression: a target_seq off by one residue must fail every row, not just most.
+
+    Repeated residues (KK, AA) and the leading M make some rows' wild type match the shifted
+    target by chance; only the mutated_sequence check catches those, so it is exercised here.
+    """
+    targets = {"GOOD_A": "MKVAR", "SHIFTED": "MKKVAAR", "GOOD_B": "MSTW"}
+    dms = tmp_path / "dms"
+    dms.mkdir()
+    for assay_id, target in targets.items():
+        rows = [
+            [f"{wt}{i + 1}{mt}", target[:i] + mt + target[i + 1 :], "0.0", "0"]
+            for i, wt in enumerate(target)
+            for mt in ("C", "G")
+        ]
+        write_csv(dms / f"{assay_id}.csv", HEADER, rows)
+
+    shifted = "M" + targets["SHIFTED"][:-1]  # MMKKVAA: residues moved one position right
+    ref = write_csv(
+        tmp_path / "ref.csv",
+        ["DMS_id", "target_seq"],
+        [[a, shifted if a == "SHIFTED" else t] for a, t in targets.items()],
+    )
+
+    with pytest.raises(VariantValidationError) as excinfo:
+        check_assays(ref, dms)
+    problems = excinfo.value.problems
+
+    n_rows = 2 * len(targets["SHIFTED"])
+    assert {p.assay_id for p in problems} == {"SHIFTED"}
+    assert len(problems) == n_rows
+    assert sorted(p.row for p in problems if p.row is not None) == list(range(2, 2 + n_rows))
+    by_chance = [p for p in problems if "mutated_sequence differs" in p.reason]
+    assert len(by_chance) == 6  # M1, K3, A6 (two substitutions each) match the shifted target
