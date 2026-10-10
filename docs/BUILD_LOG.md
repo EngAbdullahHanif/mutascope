@@ -93,3 +93,55 @@ upstream data, and they are listed in the config with their reasons rather than 
   `data.structure_exceptions=null` so a 2-assay test subset does not trip the exceptions check.
 - *Tests run offline:* a mock HTTP server and zips built during the test keep `make test` fast and
   CI-safe.
+
+---
+
+## Entry 3 — Mutation parsing and variant validation (Phase 1, 2026-10-10)
+
+**Plain-language summary.** Each ProteinGym experiment lists its protein variants as short codes
+such as `H24C`: "position 24 has histidine (H); replace it with cysteine (C)". Positions count
+from 1, as biologists do, but Python counts from 0. If the two are ever confused, a model quietly
+scores the residue next to the right one. A single function, `parse_mutation`, now reads these
+codes and does the 1-to-0 conversion; no other code does. A new command,
+`mutascope data check-variants`, then checks every one of the 2,465,767 variants in all 217
+experiments in three ways: the row is well formed, the stated original residue is really at
+that position in the protein, and the full mutated sequence in the file matches the protein with
+the change applied. All three checks passed on every row, with 0 problems. To show that the
+check can fail, a test deliberately shifts one protein's sequence by one position and confirms
+that every row of that experiment is flagged. ADR 0004 records the rules.
+
+**The 3 most important design choices.**
+
+1. **Exactly one index conversion, with no way back:** `data.parse.parse_mutation` is the only
+   place a 1-based position becomes 0-based (`a3322d7`), and no function formats a 0-based
+   position back into a code. An off-by-one error can therefore only live in one line, and that
+   line is covered by hypothesis property tests over random residues and positions up to 10⁶.
+   The parser is strict on purpose. It rejects lowercase, non-canonical residues, position 0,
+   leading zeros, whitespace and "substitutions" that change nothing (`A12A`), because a lenient
+   parser is where silent misreadings start.
+2. **Three independent checks, because one is not enough:** each row passes a pandera schema
+   (`0b86b9f`), a wild-type check against `target_seq`, and a check that `mutated_sequence`
+   equals `target_seq` with the mutations applied (`a9d1042`). The third check looks redundant,
+   but it is not. With one real assay (BLAT_ECOLX_Deng_2012) shifted by a single residue, 399 of
+   its 4,996 rows still had a matching original residue by coincidence, and only the sequence
+   comparison caught them. A committed regression test (`78e43f3`) uses a small three-assay
+   fixture to pin this down: one assay is shifted, every one of its rows must be reported, the
+   other two must not be, and the rows that match by coincidence must still be caught.
+3. **Report everything, fix nothing, and be strict only about our own data:** the checker reads
+   all assays before failing and lists every problem with its assay id and CSV row; it never
+   corrects or drops a row. The raw schema describes files we do not control, so it accepts
+   extra columns and reports them. `ANCSZ_Hobbs_2022` has one: `DMS_bin_score`, identical to
+   `DMS_score_bin` on all 4,670 rows. The processed schema describes the table MutaScope will
+   write, so it allows only its own columns. It also requires the stored position and residues
+   to equal what `parse_mutation` returns for the mutant code, so the two can never drift apart.
+
+**Supporting details.**
+- *Result on v1.3:* 217 assays, 2,465,767 variants (696,311 single, 1,769,456 multi-mutant),
+  0 problems, in about 16 s. Multi-mutant rows are checked too, even though v1 filters them out
+  later, because a wrong residue in a multi-mutant still signals a numbering problem.
+- *Dependencies:* pandera and pandas were added (`6b03273`), plus pandas-stubs so pyright strict
+  can type-check pandas code.
+- *One shared alphabet:* `AA_ORDER` now lives in `mutascope.alphabet`, so the Phase 2 scorers
+  will import it instead of defining their own.
+- *Not done yet:* filtering to single mutants and writing processed Parquet (validated against
+  `ProcessedVariantSchema`) belong to the cleaning task that comes next.
