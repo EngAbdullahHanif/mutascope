@@ -24,8 +24,8 @@ Goal: one command turns the raw ProteinGym download into clean, validated, versi
 - [ ] `data/manifest.yaml` with sha256 per file; download verifies checksums and is idempotent
 
 ### Parsing and cleaning
-- [ ] `parse_mutation` — the only 1-indexed → 0-indexed conversion; hypothesis property tests
-- [ ] Wild-type residue check against the target sequence; mismatches fail loudly with assay id + row
+- [x] `parse_mutation` — the only 1-indexed → 0-indexed conversion; hypothesis property tests
+- [x] Wild-type residue check against the target sequence; mismatches fail loudly with assay id + row
 - [ ] Keep single mutants; log count of filtered multi-mutants per assay
 - [ ] Keep `DMS_score` (higher = fitter) and `DMS_score_bin`; drop NaN; dedupe
 - [ ] pandera schemas for every processed table; validate on write
