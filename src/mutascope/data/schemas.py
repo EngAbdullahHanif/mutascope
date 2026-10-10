@@ -86,3 +86,34 @@ def _parse_or_none(text: str) -> tuple[str, int, str] | None:
     except MutationParseError:
         return None
     return sub.wt, sub.position, sub.mt
+
+
+DROP_REASONS = ("multi_mutant", "missing_value", "duplicate", "conflicting_duplicate")
+"""Why ``mutascope data clean`` removes a row, in the order the filters apply.
+
+Each removed row is counted under exactly one reason (the first that applies), so
+``rows_in == rows_out + sum(reasons)`` for every assay.
+"""
+
+
+class CleaningReportSchema(pa.DataFrameModel):
+    """One row per assay: rows read, rows written, and rows removed per reason."""
+
+    assay_id: Series[str] = pa.Field(unique=True)
+    rows_in: Series[int] = pa.Field(ge=0)
+    multi_mutant: Series[int] = pa.Field(ge=0)
+    missing_value: Series[int] = pa.Field(ge=0)
+    duplicate: Series[int] = pa.Field(ge=0)
+    conflicting_duplicate: Series[int] = pa.Field(ge=0)
+    rows_out: Series[int] = pa.Field(ge=0)
+
+    class Config:  # pyright: ignore[reportIncompatibleVariableOverride]
+        strict = True
+        ordered = True
+
+    @pa.dataframe_check  # pyright: ignore[reportUnknownMemberType] — untyped in pandera
+    @classmethod
+    def rows_add_up(cls, df: pd.DataFrame) -> "pd.Series[bool]":
+        """Every row read is either written or counted under one drop reason."""
+        dropped = df[list(DROP_REASONS)].sum(axis=1)
+        return (df["rows_in"] == df["rows_out"] + dropped).astype(bool)

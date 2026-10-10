@@ -26,11 +26,11 @@ Goal: one command turns the raw ProteinGym download into clean, validated, versi
 ### Parsing and cleaning
 - [x] `parse_mutation` — the only 1-indexed → 0-indexed conversion; hypothesis property tests
 - [x] Wild-type residue check against the target sequence; mismatches fail loudly with assay id + row
-- [ ] Keep single mutants; log count of filtered multi-mutants per assay
-- [ ] Keep `DMS_score` (higher = fitter) and `DMS_score_bin`; drop NaN; dedupe
-- [ ] pandera schemas for every processed table; validate on write
-- [ ] Parquet partitioned by `assay_id`; DuckDB views over processed data
-- [ ] Cleaning report (per assay: rows in, rows out, reasons)
+- [x] Keep single mutants; log count of filtered multi-mutants per assay
+- [x] Keep `DMS_score` (higher = fitter) and `DMS_score_bin`; drop NaN; dedupe
+- [x] pandera schemas for every processed table; validate on write
+- [x] Parquet partitioned by `assay_id`; DuckDB views over processed data
+- [x] Cleaning report (per assay: rows in, rows out, reasons)
 
 ### Structure features
 - [ ] Per assay: AF2 structure → Foldseek 3Di string (`foldseek structureto3didescriptor`)

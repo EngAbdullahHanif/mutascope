@@ -10,8 +10,10 @@ import httpx
 import typer
 
 from mutascope import __version__
+from mutascope.data.clean import clean_dataset
 from mutascope.data.download import DownloadError, fetch_release
 from mutascope.data.release import load_release
+from mutascope.data.report import write_report
 from mutascope.data.structures import StructureMappingError, map_structures
 from mutascope.data.validate import VariantValidationError, check_assays
 from mutascope.utils.config import load_config
@@ -119,3 +121,37 @@ def data_check_variants(
     for assay in check.assays:
         if assay.extra_columns:
             typer.echo(f"  {assay.assay_id}: extra columns {', '.join(assay.extra_columns)}")
+
+
+@data_app.command("clean")
+def data_clean(
+    reference: Annotated[
+        Path, typer.Option(help="ProteinGym reference CSV.", exists=True, dir_okay=False)
+    ],
+    dms_dir: Annotated[
+        Path,
+        typer.Option(help="Directory of per-assay DMS CSVs.", exists=True, file_okay=False),
+    ],
+    out_dir: Annotated[
+        Path, typer.Option(help="Output directory for assay_id=<id>/ Parquet partitions.")
+    ],
+    report_dir: Annotated[
+        Path, typer.Option(help="Directory for cleaning_report.parquet and .md.")
+    ],
+) -> None:
+    """Write the processed single-mutant table and a per-assay cleaning report.
+
+    Removes multi-mutants, rows with missing values and duplicates, each counted per assay.
+    Wild-type mismatches and malformed values fail the run; nothing is written then.
+    """
+    try:
+        report = clean_dataset(reference, dms_dir, out_dir)
+    except VariantValidationError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    parquet, markdown = write_report(report, report_dir)
+    typer.echo(
+        f"{len(report)} assays: {int(report['rows_in'].sum())} rows in, "
+        f"{int(report['rows_out'].sum())} single mutants out -> {out_dir}"
+    )
+    typer.echo(f"report: {parquet}, {markdown}")
