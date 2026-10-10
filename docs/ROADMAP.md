@@ -13,7 +13,7 @@ Goal: one command turns the raw ProteinGym download into clean, validated, versi
 - [x] uv + `pyproject.toml`, `src/mutascope/`, ruff, pyright strict, pytest + hypothesis, pre-commit
 - [x] Typer CLI as the single entry point; Nextflow calls CLI commands only
 - [ ] Hydra configs in `conf/`
-- [ ] marimo for notebooks
+- [x] marimo for notebooks
 - [x] ADRs in `docs/adr/`
 - [x] GitHub Actions: lint + typecheck + tests (+ coverage, Nextflow `local,test` smoke run)
 
@@ -45,8 +45,10 @@ Goal: one command turns the raw ProteinGym download into clean, validated, versi
       `local` and `test` done; `docker` waits for the Phase 4 image
 
 ### Outputs
-- [ ] marimo EDA notebook (assay sizes, function types, score distributions, sequence lengths)
-- [ ] Dataset card; processed dataset published to the Hugging Face Hub
+- [x] marimo EDA notebook (assay sizes, function types, score distributions, sequence lengths)
+- [x] Dataset card (`docs/DATA_CARD.md`)
+- [ ] Processed dataset published to the Hugging Face Hub (`mutascope data publish` stages it;
+      `--push` waits for the card review, ADR 0008)
 
 Done when: `make pipeline` produces clean Parquet + structure features + 3Di; `make lint test` green; data card written.
 

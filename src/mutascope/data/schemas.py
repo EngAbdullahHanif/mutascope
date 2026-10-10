@@ -227,3 +227,50 @@ class StructureReportSchema(pa.DataFrameModel):
             & (df["variants_with_structure"] == 0)
             & df["documented_reason"].notna()
         ) | (~exception & df["residues"].notna() & df["documented_reason"].isna())
+
+
+FUNCTION_TYPES = ("Activity", "Binding", "Expression", "OrganismalFitness", "Stability")
+"""ProteinGym's ``coarse_selection_type`` values: the second level of its aggregation."""
+
+
+class PublishedAssaySchema(pa.DataFrameModel):
+    """One row per assay in the published dataset: ProteinGym reference metadata we redistribute.
+
+    Column names are ProteinGym's, except ``DMS_id`` -> ``assay_id`` to join with the other
+    tables. ``DMS_number_single_mutants`` must equal the processed variant count (checked by
+    the publish step), so the two tables cannot drift.
+    """
+
+    assay_id: Series[str] = pa.Field(unique=True)
+    uniprot_id: Series[str] = pa.Field(alias="UniProt_ID")
+    taxon: Series[str]
+    source_organism: Series[str] = pa.Field(nullable=True)
+    molecule_name: Series[str] = pa.Field(nullable=True)
+    target_seq: Series[str] = pa.Field(str_matches=_SEQUENCE_FULL)
+    seq_len: Series[int] = pa.Field(ge=1)
+    coarse_selection_type: Series[str] = pa.Field(isin=list(FUNCTION_TYPES))
+    selection_assay: Series[str] = pa.Field(nullable=True)
+    selection_type: Series[str] = pa.Field(nullable=True)
+    dms_number_single_mutants: Series[int] = pa.Field(alias="DMS_number_single_mutants", ge=1)
+    dms_binarization_cutoff: Series[float] = pa.Field(alias="DMS_binarization_cutoff")
+    dms_binarization_method: Series[str] = pa.Field(
+        alias="DMS_binarization_method", isin=["median", "manual"]
+    )
+    first_author: Series[str] = pa.Field(nullable=True)
+    year: Series[int]
+    jo: Series[str] = pa.Field(nullable=True)
+    """Journal, as ProteinGym names the column."""
+    pdb_file: Series[str] = pa.Field(nullable=True)
+    pdb_range: Series[str] = pa.Field(nullable=True)
+    has_structure: Series[bool]
+    """False for the documented ``structure_exceptions``: no rows in the structure tables."""
+
+    class Config:  # pyright: ignore[reportIncompatibleVariableOverride]
+        strict = True
+        ordered = True
+
+    @pa.dataframe_check  # pyright: ignore[reportUnknownMemberType] — untyped in pandera
+    @classmethod
+    def seq_len_matches(cls, df: pd.DataFrame) -> "pd.Series[bool]":
+        """``seq_len`` is the length of ``target_seq``."""
+        return (df["target_seq"].str.len() == df["seq_len"]).astype(bool)

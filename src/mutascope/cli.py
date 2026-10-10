@@ -4,16 +4,19 @@ Every pipeline step is a command here; Nextflow only ever calls these commands.
 """
 
 import csv
+from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated
 
 import httpx
 import typer
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 from mutascope import __version__
 from mutascope.data.clean import clean_dataset
+from mutascope.data.db import connect
 from mutascope.data.download import DownloadError, fetch_release
+from mutascope.data.manifest import Manifest
 from mutascope.data.release import load_release
 from mutascope.data.report import write_report
 from mutascope.data.staging import SubsetError, link_release, subset_release
@@ -31,7 +34,8 @@ from mutascope.data.structure_report import (
 from mutascope.data.structures import StructureCheck, StructureMappingError, map_structures
 from mutascope.data.three_di import FoldseekConfig, FoldseekError, build_three_di, check_foldseek
 from mutascope.data.validate import VariantValidationError, check_assays
-from mutascope.utils.config import load_config
+from mutascope.export.hub import PublishError, push_dataset, stage_dataset
+from mutascope.utils.config import as_str_dict, load_config
 from mutascope.utils.logging import configure_logging
 
 app = typer.Typer(
@@ -342,3 +346,78 @@ def data_structure_report(
         report, report_dir, low_plddt_threshold=threshold, foldseek=foldseek
     )
     typer.echo(f"report: {parquet}, {markdown}")
+
+
+@data_app.command("publish")
+def data_publish(
+    push: Annotated[
+        bool,
+        typer.Option(
+            "--push",
+            help="Upload the staged folder to publish.repo_id. Without it, only stage locally.",
+        ),
+    ] = False,
+    config_dir: ConfigDir = Path("conf"),
+    overrides: Overrides = None,
+) -> None:
+    """Stage the processed dataset for the Hugging Face Hub, and optionally push it.
+
+    Staging writes ``publish.stage_dir``: one Parquet file per table (validated against its
+    schema), the cleaning and structure reports, the dataset card, ``provenance.json`` and
+    ``SHA256SUMS``. ``--push`` uploads that folder as one commit; it needs ``publish.repo_id``
+    and a write token in ``HF_TOKEN`` (or a cached ``hf auth login``).
+    """
+    cfg = load_config(config_dir, overrides)
+    data, publish = cfg.data, cfg.publish
+    if push and not publish.repo_id:
+        typer.echo("error: --push needs publish.repo_id=<user>/<name>", err=True)
+        raise typer.Exit(code=1)
+    release = load_release(data)
+    processed, reports = Path(data.processed_dir), Path(data.reports_dir)
+    manifest = Manifest.load(release.manifest_path)
+    inputs = {
+        name: asdict(entry)
+        for key in ("reference", "dms_substitutions", "af2_structures")
+        if (entry := manifest.get(release.manifest_key, name := release.file(key).filename))
+    }
+    provenance = {
+        "proteingym_release": as_str_dict(
+            OmegaConf.to_container(data.release, resolve=True), "data.release"
+        ),
+        "input_checksums": inputs,
+        "foldseek_version": str(cfg.structure.foldseek.version),
+        "structure_exceptions": release.structure_exceptions,
+    }
+    with connect(
+        processed / "variants",
+        reference_csv=release.raw_dir / release.file("reference").filename,
+        structure_features_dir=processed / "structure_features",
+        three_di_dir=processed / "three_di",
+    ) as con:
+        try:
+            staged = stage_dataset(
+                con,
+                card=Path(publish.card),
+                card_metadata=as_str_dict(
+                    OmegaConf.to_container(publish.card_metadata, resolve=True),
+                    "publish.card_metadata",
+                ),
+                reports_dir=reports,
+                provenance=provenance,
+                out_dir=Path(publish.stage_dir),
+            )
+        except PublishError as exc:
+            typer.echo(f"error: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+    for name, rows in staged.rows.items():
+        typer.echo(f"  {name}: {rows:,} rows")
+    typer.echo(f"staged -> {staged.out_dir}")
+    if not push:
+        typer.echo("not pushed (pass --push to upload)")
+        return
+    try:
+        url = push_dataset(staged.out_dir, str(publish.repo_id), private=bool(publish.private))
+    except PublishError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"pushed -> {url}")
