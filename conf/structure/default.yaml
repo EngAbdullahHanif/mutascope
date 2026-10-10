@@ -1,0 +1,22 @@
+# Per-residue structure features and Foldseek 3Di (docs/adr/0006). The ProteinGym pins stay in
+# data/; this group holds only how features are computed from the structures.
+
+# Two residues are in contact if their CB atoms (CA for glycine) are closer than this, in Å.
+# This is the CASP contact definition.
+contact_cutoff: 8.0
+
+# Shrake-Rupley SASA (biotite): water probe radius in Å, and test points per atom (biotite's default).
+sasa_probe_radius: 1.4
+sasa_point_number: 1000
+
+# Reported per assay: the share of residues below this pLDDT. SaProt masks their 3Di as `#`.
+low_plddt_threshold: 70.0
+
+foldseek:
+  # Executable. Unset (null) means "find `foldseek` on PATH"; FOLDSEEK_BIN overrides that.
+  # See README, "Installing Foldseek".
+  bin: ${oc.env:FOLDSEEK_BIN,null}
+  # `foldseek version` must print exactly this (GitHub release 10-941cd33). 3Di strings depend on
+  # the Foldseek build, so a different binary fails instead of silently changing the tokens.
+  version: 941cd33ff0771cd2e3f144e3293e22a2b87e9fda
+  threads: 4
