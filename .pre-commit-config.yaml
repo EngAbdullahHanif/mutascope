@@ -3,8 +3,11 @@ repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
+      # Test fixtures are upstream files kept byte-identical (PDB lines are fixed-width).
       - id: trailing-whitespace
+        exclude: ^tests/data/fixtures/
       - id: end-of-file-fixer
+        exclude: ^tests/data/fixtures/
       - id: check-yaml
       - id: check-toml
       - id: check-added-large-files
