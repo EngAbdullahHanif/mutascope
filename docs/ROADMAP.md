@@ -11,11 +11,11 @@ Goal: one command turns the raw ProteinGym download into clean, validated, versi
 
 ### Tooling
 - [x] uv + `pyproject.toml`, `src/mutascope/`, ruff, pyright strict, pytest + hypothesis, pre-commit
-- [ ] Typer CLI as the single entry point; Nextflow calls CLI commands only
+- [x] Typer CLI as the single entry point; Nextflow calls CLI commands only
 - [ ] Hydra configs in `conf/`
 - [ ] marimo for notebooks
 - [x] ADRs in `docs/adr/`
-- [ ] GitHub Actions: lint + typecheck + tests
+- [x] GitHub Actions: lint + typecheck + tests (+ coverage, Nextflow `local,test` smoke run)
 
 ### Data acquisition
 - [x] Pin the ProteinGym release in `conf/data/proteingym.yaml`
@@ -39,8 +39,10 @@ Goal: one command turns the raw ProteinGym download into clean, validated, versi
 - [x] Check that structure length/sequence matches the DMS target sequence
 
 ### Pipeline
-- [ ] Nextflow DSL2 modules: `DOWNLOAD → VALIDATE → CLEAN → STRUCT_FEATURES → FOLDSEEK_3DI`
-- [ ] Profiles: `local` (uv env, MPS), `docker` (CPU, amd64), `test` (2 small assays)
+- [x] Nextflow DSL2 modules: `DOWNLOAD → VALIDATE → CLEAN → STRUCT_FEATURES → FOLDSEEK_3DI`
+      (+ `SUBSET` for the test profile, `STRUCTURE_REPORT` as the final cross-check; ADR 0007)
+- [ ] Profiles: `local` (uv env, MPS), `docker` (CPU, amd64), `test` (2 small assays).
+      `local` and `test` done; `docker` waits for the Phase 4 image
 
 ### Outputs
 - [ ] marimo EDA notebook (assay sizes, function types, score distributions, sequence lengths)

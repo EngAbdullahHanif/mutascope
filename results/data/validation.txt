@@ -1,0 +1,8 @@
+217 assays, 2465767 variants (696311 single, 1769456 multi): 0 problems
+  ANCSZ_Hobbs_2022: extra columns DMS_bin_score
+213 assays mapped to structures
+4 allowed exceptions (no structure):
+  CAS9_STRP1_Spencer_2017_positive: 22-residue C-terminal tag (NLS + HA) in PDB; pdb_range 1-1390 exceeds target length 1368
+  P53_HUMAN_Giacomelli_2018_Null_Etoposide: Natural R72P variant between target (R72) and PDB (P72)
+  P53_HUMAN_Giacomelli_2018_Null_Nutlin: Natural R72P variant between target (R72) and PDB (P72)
+  P53_HUMAN_Giacomelli_2018_WT_Nutlin: Natural R72P variant between target (R72) and PDB (P72)

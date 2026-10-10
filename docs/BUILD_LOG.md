@@ -412,3 +412,75 @@ data. ADR 0006 records the rules.
   external binary pinned by version (README, ADR 0006).
 - *Not done yet:* the Nextflow `STRUCT_FEATURES` and `FOLDSEEK_3DI` modules (next task, after
   review), and installing the Linux Foldseek in CI and the Docker image.
+
+---
+
+## Entry 6 — Pipeline wiring and CI (Phase 1, 2026-10-10)
+
+**Plain-language summary.** Until now each data step was a command run by hand. The workflow
+engine (Nextflow) now runs them in order: download and verify the release, check every variant
+and structure, clean the variants, compute structure features and 3Di tokens, and cross-check it
+all in a final report. `make pipeline` does this for all 217 experiments in 42 seconds once the
+data is downloaded, and its output is byte-identical to the hand-run results of entries 4 and 5.
+A fast test version, `make pipeline-test`, runs the same steps on two small experiments in about
+30 seconds from an empty cache. GitHub Actions runs it on every push, after linting,
+type-checking and the test suite with coverage. ADR 0007 records the rules. Commits: `26dd71e`
+(CLI), `ba35f79` (pipeline), `c6720ad` (CI), `b30436b` (validation report).
+
+**The 3 most important design choices.**
+
+1. **The release is cached outside the pipeline and linked in, not copied.** Nextflow normally
+   writes each step's output into its own work directory, which here would mean downloading
+   2 GB on every fresh run. Instead `DOWNLOAD` keeps the release in `data/`, where the existing
+   downloader re-verifies every file against the committed checksums (about 75 MB to hash), and
+   `data download --link-dir` then symlinks it into a fixed three-entry layout. The 2-assay
+   `SUBSET` step writes the same layout, so no later step can tell a test run from a real one.
+2. **The test assays are named explicitly.** `AICDA_HUMAN_Gajula_2014_3cycles` and
+   `B2L11_HUMAN_Dutta_2010_binding-Mcl-1` are both 198 residues long, with 209 and 170 single
+   mutants, and they cover two function types. AICDA's structure file has the `TITLE` record that
+   broke 3Di parsing in entry 5, so CI re-tests that fix on real data. A rule such as "the 2
+   smallest assays" would have picked NPC1_HUMAN (1,278 residues), and its choice would change
+   whenever the reference file changed.
+3. **One list of config overrides reaches every command, and the pipeline proves it.** Every
+   `mutascope` call in the pipeline ends with `${params.hydra_overrides}`, and every `data`
+   command accepts overrides, which a test enforces. The test profile needs
+   `data.structure_exceptions=null`. Without it, the run stops at `VALIDATE` with "4 structure
+   mapping problem(s) in 2 assays", because the four documented exceptions are not among the two
+   test assays. With it, validation passes. Validation's log is an input to every output step, so
+   nothing is written unless both checks pass.
+
+**Problems encountered and how they were solved.**
+
+1. **Two commands would have rejected the override list.** *Found:* while reading the CLI before
+   wiring it. `check-variants` and `clean` took no config arguments, and Typer refuses
+   undeclared ones (`Got unexpected extra argument(s) (data.structure_exceptions=null)`). *Fix:*
+   both now take `--config-dir` and overrides. They read nothing from the config yet, but they
+   still compose it, so a misspelt override fails instead of being silently ignored.
+   *Verified:* a test runs `check-variants` with `data.structure_exceptons=null` (misspelt) and
+   expects Hydra's `ConfigCompositionException`. A parametrised test checks that all 8 `data`
+   commands take overrides.
+2. **The test profile would have downloaded 1.9 GB.** *Found:* `zero_shot_scores` is
+   1,911,045,703 of the release's roughly 2 GB, and no Phase 1 step reads it. *Fix:* the test
+   profile adds the Hydra deletion override `~data.files.zero_shot_scores`. *Verified:* from an
+   empty cache, the test run downloads the other files (42 MB DMS, 19 MB structures, 13 MB CV
+   folds and three CSVs) and finishes in 32 s. `data/manifest.yaml` is unchanged (`cmp`), because
+   the downloader keeps the manifest entries of files it skips.
+
+**Supporting details.**
+- *Equivalence with the hand-run outputs:* `diff -rq` finds no differences between the pipeline's
+  `variants` (217 partitions), `structure_features` (213) and `three_di` (213) and the entry 4/5
+  outputs. The committed `cleaning_report.*` and `structure_report.*` regenerate unchanged. The
+  test run's partitions for its two assays equal the full run's (0 rows differ either way).
+- *Timings (M4 Pro):* `make pipeline` 42 s with the download cached, `make pipeline-test` 32 s
+  from an empty cache and about 5 s when cached.
+- *CI:* three jobs. Lint (`make lint`) and tests (`make test` with coverage via a new
+  `PYTEST_ARGS`, at 97% line coverage) run first, then the smoke test. The smoke test installs
+  Nextflow 26.04.7 and the linux-avx2 Foldseek (sha256 `e6a3e386…74ac7`, computed from the
+  release asset because GitHub publishes no digest for it), caches the ~75 MB of downloads, and
+  fails if `data/manifest.yaml` changes. The workflow passes actionlint (with shellcheck). It has
+  not run on GitHub yet: this PR is its first run.
+- *Tests:* 19 new (172 in the suite, 1 skipped without Foldseek).
+- *Dependencies:* none added.
+- *Not done yet:* `docker,test` (needs the Phase 4 image, which also needs `params.data_dir`
+  mounted). The old hand-run outputs in `data/processed/proteingym_v1.3/` are now superseded by
+  `data/processed/<table>/` and can be deleted.

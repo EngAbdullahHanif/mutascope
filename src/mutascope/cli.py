@@ -16,6 +16,7 @@ from mutascope.data.clean import clean_dataset
 from mutascope.data.download import DownloadError, fetch_release
 from mutascope.data.release import load_release
 from mutascope.data.report import write_report
+from mutascope.data.staging import SubsetError, link_release, subset_release
 from mutascope.data.structure_features import (
     FeatureParams,
     StructureFeatureError,
@@ -73,9 +74,30 @@ def version() -> None:
     typer.echo(__version__)
 
 
+def _accept_overrides(config_dir: Path, overrides: list[str] | None) -> None:
+    """Compose the config for a command that reads nothing from it yet.
+
+    Every pipeline command takes the same Hydra overrides, so Nextflow can append one list to
+    all of them. Composing still rejects a malformed or unknown override here, instead of
+    silently ignoring it.
+    """
+    load_config(config_dir, overrides)
+
+
 @data_app.command("download")
-def data_download(config_dir: ConfigDir = Path("conf"), overrides: Overrides = None) -> None:
-    """Download the pinned ProteinGym release into the raw dir and verify every checksum."""
+def data_download(
+    link_dir: Annotated[
+        Path | None,
+        typer.Option(help="Also symlink the staged input layout (see data.staging) here."),
+    ] = None,
+    config_dir: ConfigDir = Path("conf"),
+    overrides: Overrides = None,
+) -> None:
+    """Download the pinned ProteinGym release into the raw dir and verify every checksum.
+
+    The raw dir is a cache shared across runs; ``--link-dir`` gives the pipeline its inputs as
+    paths without copying or re-downloading them.
+    """
     release = load_release(load_config(config_dir, overrides).data)
     timeout = httpx.Timeout(30.0, read=120.0)
     try:
@@ -84,6 +106,36 @@ def data_download(config_dir: ConfigDir = Path("conf"), overrides: Overrides = N
     except (DownloadError, httpx.HTTPError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
+    if link_dir is not None:
+        link_release(release, link_dir)
+        typer.echo(f"inputs linked in {link_dir}")
+
+
+@data_app.command("subset")
+def data_subset(
+    reference: Reference,
+    dms_dir: Annotated[
+        Path,
+        typer.Option(help="Directory of per-assay DMS CSVs.", exists=True, file_okay=False),
+    ],
+    structures_dir: StructuresDir,
+    assay: Annotated[list[str], typer.Option("--assay", help="Assay id to keep; repeat it.")],
+    out_dir: Annotated[Path, typer.Option(help="Output dir (new or empty).")],
+    config_dir: ConfigDir = Path("conf"),
+    overrides: Overrides = None,
+) -> None:
+    """Copy the named assays' reference rows, DMS CSVs and PDBs into ``out_dir``.
+
+    Writes ``DMS_substitutions.csv``, ``dms/`` and ``structures/``, the layout every later step
+    reads, so the pipeline's ``test`` profile runs the real steps on a couple of assays.
+    """
+    _accept_overrides(config_dir, overrides)
+    try:
+        subset = subset_release(reference, dms_dir, structures_dir, assay, out_dir)
+    except SubsetError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"{len(assay)} assays, {subset.pdb_files} PDB files -> {out_dir}")
 
 
 @data_app.command("check-structures")
@@ -123,12 +175,15 @@ def data_check_variants(
         Path,
         typer.Option(help="Directory of per-assay DMS CSVs.", exists=True, file_okay=False),
     ],
+    config_dir: ConfigDir = Path("conf"),
+    overrides: Overrides = None,
 ) -> None:
     """Fail unless every variant's wild-type residues match its assay's target sequence.
 
     Also validates each CSV against the raw variant schema. Every problem is listed; none is
     fixed or dropped.
     """
+    _accept_overrides(config_dir, overrides)
     try:
         check = check_assays(reference, dms_dir)
     except VariantValidationError as exc:
@@ -158,12 +213,15 @@ def data_clean(
     report_dir: Annotated[
         Path, typer.Option(help="Directory for cleaning_report.parquet and .md.")
     ],
+    config_dir: ConfigDir = Path("conf"),
+    overrides: Overrides = None,
 ) -> None:
     """Write the processed single-mutant table and a per-assay cleaning report.
 
     Removes multi-mutants, rows with missing values and duplicates, each counted per assay.
     Wild-type mismatches and malformed values fail the run; nothing is written then.
     """
+    _accept_overrides(config_dir, overrides)
     try:
         report = clean_dataset(reference, dms_dir, out_dir)
     except VariantValidationError as exc:
