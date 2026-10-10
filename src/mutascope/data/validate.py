@@ -142,16 +142,23 @@ def check_wild_type(
     return problems
 
 
-def check_assays(reference_csv: Path, dms_dir: Path) -> VariantCheck:
-    """Validate every assay CSV in ``dms_dir`` against the reference file's target sequences.
+@dataclass(frozen=True)
+class AssayInput:
+    """One assay present in both the reference file and the DMS directory."""
 
-    Args:
-        reference_csv: ProteinGym reference file (one row per assay: ``DMS_id``, ``target_seq``).
-        dms_dir: Directory of per-assay CSVs named ``<DMS_id>.csv``.
+    assay_id: str
+    target_seq: str
+    csv_path: Path
 
-    Raises:
-        VariantValidationError: Any schema, parse, wild-type or sequence problem, or an assay
-            present in only one of the reference and ``dms_dir``.
+
+def pair_assays(
+    reference_csv: Path, dms_dir: Path
+) -> tuple[list[AssayInput], list[VariantProblem], int]:
+    """Match reference rows to ``<DMS_id>.csv`` files one to one.
+
+    Returns:
+        The assays with a file and a canonical ``target_seq`` (sorted by id), a whole-file
+        problem for every assay that lacks either, and the number of distinct assay ids seen.
     """
     with reference_csv.open(newline="") as fh:
         targets = {row["DMS_id"]: row["target_seq"] for row in csv.DictReader(fh)}
@@ -166,8 +173,7 @@ def check_assays(reference_csv: Path, dms_dir: Path) -> VariantCheck:
         VariantProblem(a, None, None, "CSV has no entry in the reference file")
         for a in sorted(files.keys() - targets.keys())
     )
-
-    summaries: list[AssaySummary] = []
+    assays: list[AssayInput] = []
     for assay_id in sorted(targets.keys() & files.keys()):
         target_seq = targets[assay_id]
         if not target_seq or set(target_seq) - set(AA_ORDER):
@@ -175,17 +181,41 @@ def check_assays(reference_csv: Path, dms_dir: Path) -> VariantCheck:
                 VariantProblem(assay_id, None, None, "target_seq has non-canonical residues")
             )
             continue
-        summary, assay_problems = _check_assay(assay_id, target_seq, files[assay_id])
-        problems.extend(assay_problems)
-        if not assay_problems:
-            summaries.append(summary)
+        assays.append(AssayInput(assay_id, target_seq, files[assay_id]))
+    return assays, problems, len(targets.keys() | files.keys())
 
+
+def raise_if_problems(problems: Sequence[VariantProblem], n_assays: int) -> None:
+    """Log every problem, then raise :class:`VariantValidationError` if there is any."""
     for p in problems:
         log.error(
             "variant_problem", assay_id=p.assay_id, row=p.row, mutant=p.mutant, reason=p.reason
         )
     if problems:
-        raise VariantValidationError(problems, len(targets.keys() | files.keys()))
+        raise VariantValidationError(problems, n_assays)
+
+
+def check_assays(reference_csv: Path, dms_dir: Path) -> VariantCheck:
+    """Validate every assay CSV in ``dms_dir`` against the reference file's target sequences.
+
+    Args:
+        reference_csv: ProteinGym reference file (one row per assay: ``DMS_id``, ``target_seq``).
+        dms_dir: Directory of per-assay CSVs named ``<DMS_id>.csv``.
+
+    Raises:
+        VariantValidationError: Any schema, parse, wild-type or sequence problem, or an assay
+            present in only one of the reference and ``dms_dir``.
+    """
+    assays, problems, n_assays = pair_assays(reference_csv, dms_dir)
+
+    summaries: list[AssaySummary] = []
+    for assay in assays:
+        summary, assay_problems = _check_assay(assay.assay_id, assay.target_seq, assay.csv_path)
+        problems.extend(assay_problems)
+        if not assay_problems:
+            summaries.append(summary)
+
+    raise_if_problems(problems, n_assays)
     check = VariantCheck(summaries)
     log.info(
         "variants_checked",
