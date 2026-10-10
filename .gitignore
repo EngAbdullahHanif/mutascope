@@ -20,6 +20,9 @@ htmlcov/
 /multirun/
 /mlruns/
 
+# marimo session cache
+__marimo__/
+
 # Nextflow
 .nextflow/
 .nextflow.log*
