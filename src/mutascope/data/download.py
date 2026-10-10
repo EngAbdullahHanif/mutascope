@@ -18,6 +18,7 @@ import httpx
 from mutascope.data.manifest import Manifest, ManifestEntry
 from mutascope.data.release import ParquetConversion, Release, RemoteFile
 from mutascope.utils.hashing import CHUNK_SIZE, DigestAccumulator, Digests, file_digests
+from mutascope.utils.io import fresh_tmp_dir
 from mutascope.utils.logging import get_logger
 
 log = get_logger(__name__)
@@ -176,7 +177,7 @@ def extract_archive(archive_path: Path, out_dir: Path) -> None:
     Extracts into a temporary sibling and renames at the end, so ``out_dir`` existing means the
     extraction completed.
     """
-    tmp = _fresh_tmp_dir(out_dir)
+    tmp = fresh_tmp_dir(out_dir)
     with zipfile.ZipFile(archive_path) as archive:
         members = _members(archive)
         for name, member in members:
@@ -194,7 +195,7 @@ def convert_archive_to_parquet(
     Each CSV is staged to disk one at a time (DuckDB cannot read zip members directly), read as
     text and cast to the configured types, so peak extra disk use is a single CSV.
     """
-    tmp = _fresh_tmp_dir(out_dir)
+    tmp = fresh_tmp_dir(out_dir)
     wanted = [name for name, _ in conversion.columns]
     select = ", ".join(
         f"CAST({_quote(name)} AS {dtype}) AS {_quote(name)}" for name, dtype in conversion.columns
@@ -223,14 +224,6 @@ def convert_archive_to_parquet(
             staged.unlink()
     tmp.replace(out_dir)
     log.info("converted", archive=archive_path.name, assays=len(members), out_dir=str(out_dir))
-
-
-def _fresh_tmp_dir(out_dir: Path) -> Path:
-    tmp = out_dir.with_name(out_dir.name + ".tmp")
-    if tmp.exists():
-        shutil.rmtree(tmp)  # leftover from an interrupted run; never trusted
-    tmp.mkdir(parents=True)
-    return tmp
 
 
 def _quote(identifier: str) -> str:
