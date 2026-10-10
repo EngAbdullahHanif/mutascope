@@ -303,3 +303,112 @@ querying, plus a report in Parquet and Markdown (`results/data/`). ADR 0005 reco
   `check-variants` and the downloader instead of duplicated (`dae1dbb`).
 - *Not done yet:* the Nextflow `CLEAN` module comes after the pipeline's `DOWNLOAD` and
   `VALIDATE` modules.
+
+---
+
+## Entry 5 — Structure features and Foldseek 3Di (Phase 1, 2026-10-10)
+
+**Plain-language summary.** Each ProteinGym experiment comes with a 3D structure of its protein,
+predicted by AlphaFold2. Three new commands turn those structures into per-residue
+information that later models can use. `mutascope data structure-features` records, for every
+residue, how confident AlphaFold was (pLDDT), how exposed it is to water (relative solvent
+accessibility), and how many other residues are packed around it. It deliberately does not
+record helix/strand/loop (see problem 2): the only method available portably got disordered
+regions wrong, and it was better to ship less data than wrong data.
+`mutascope data foldseek-3di` runs the Foldseek tool to describe each residue's 3D
+neighbourhood as one of 20 letters (the "3Di" alphabet), which the structure-aware SaProt
+model will read in Phase 2. `mutascope data structure-report` checks the two outputs
+against each other and summarises them per experiment. On ProteinGym v1.3, 213 experiments
+get both tables (185 structure files, 77,338 residues each). The 4 documented exceptions get
+nothing, and all 665,793 variants in the other 213 fall on a residue that has structure
+data. ADR 0006 records the rules.
+
+**The 3 most important design choices.**
+
+1. **Key everything by position in the experiment's own sequence:** both tables use the same
+   0-based `position` as the variants table, so a variant's structure features are a plain
+   join on `(assay_id, position)`. Some structures model only a window of the protein (ZIKV,
+   for example, models residues 291–794 of 3,423), so the offset is applied in one place,
+   `StructureMapping.offset`, just as `parse_mutation` is the one place mutation codes change
+   from 1-based to 0-based. The ZIKV variants span exactly 291–794, so the full coverage is
+   genuine and not a join error.
+2. **Three independent sequence checks, plus a cross-check:** a structure is accepted only if
+   its residues equal the experiment's sequence range according to three parsers that share
+   no code: our CA-line reader, biotite, and Foldseek's own amino-acid output. The report then
+   requires the two tables to have identical keys and residues, and requires that no
+   documented exception has any rows. As a final check, the wild-type residue of all 665,793
+   variants equals the structure table's residue at that position.
+3. **Pin the tool, not just the data:** 3Di letters depend on the Foldseek build, so the
+   config pins the exact commit (`10-941cd33`) and the command refuses any other binary. This
+   is the same reasoning as the data checksums (ADR 0002): a rerun either produces identical
+   tokens or stops. Both tables were byte-identical across reruns (all 213 Parquet files), and
+   the 3Di strings match a standalone Foldseek run.
+
+**Problems encountered and how they were solved.**
+
+1. **Foldseek appends a PDB's title to the structure name.** *Found:* the first real
+   `foldseek-3di` run failed with `'AICDA_HUMAN.pdb_A ALPHAFOLD MONOMER V2.0 PREDICTION FOR
+   ...' is not chain A`, because the parser accepts only names of the form `<file>_A`. *Cause:*
+   13 of the 185 structures in use have a `TITLE` record, and Foldseek appends it to the
+   entry name after a space. *Fix:* use only the first word of the name, as the official
+   SaProt code does (`desc.split(" ")[0]`). *Verified:* a regression test, and on the full
+   run all 185 Foldseek sequences equal their target ranges. The strict parser turned what
+   could have been 13 silently mis-keyed structures into a loud failure.
+2. **The secondary-structure method called disordered regions "strand".** *Found:* while
+   checking whether the features make physical sense, BRCA1 (mean pLDDT 41) came out 35%
+   strand. *Cause:* P-SEA, biotite's method, uses only the geometry of the CA atoms, and
+   AlphaFold draws disordered regions as long extended chains that look like strands. Of the
+   12,301 residues with pLDDT < 50, 32.9% were called strand, against 18.4% of the 40,323 with
+   pLDDT ≥ 90. *Fix tried:* replace it with DSSP, the hydrogen-bond-based standard. DSSP could
+   not be installed portably: Homebrew has no `dssp` formula (`brew info dssp`: "No available
+   formula"), conda is not used, and PyPI has no official bindings (`mkdssp` and `dssp` do not
+   exist there). Building it from source would have to be repeated in CI and Docker, and
+   `pydssp` is a simplified reimplementation rather than DSSP. *Decision:* the `sse` column
+   was removed from the schema, the code and the report, rather than kept with a caveat, because
+   a model would learn "strand" as a proxy for disorder. Low `plddt` is the disorder flag.
+   *Verified:* the rerun Parquet has columns `position, residue, plddt, sasa, rel_sasa,
+   contact_count` (213 assays, 77,338 rows), a test pins that column list, and the
+   regenerated report has no SSE columns (ADR 0006, "Alternatives rejected").
+3. **Foldseek could not be installed from Homebrew or conda, and its location was fragile.**
+   *Found:* `brew info foldseek` reports no formula, and conda is not installed. The first
+   version used the official release tarball (`10-941cd33`, sha256 `6d8b07e1…cae5`) in
+   `~/.local/bin`, a location that does not exist in CI or on a fresh clone. *Fix:*
+   `foldseek-3di` now resolves the binary before any work (`FOLDSEEK_BIN` if set, else
+   `foldseek` on `PATH`) and fails with install instructions if neither exists. It records the
+   binary's version, sha256 and how it was found in `three_di/foldseek_run.json` (plus its path,
+   for local debugging only), which `structure-report` requires. The README's "Installing Foldseek" section
+   documents the exact release, both checksums and where to put the binary. The release is
+   immutable and also ships the `linux-avx2` binary CI and Docker will need. *Verified:* with
+   neither set, the real command exits 1 with "Foldseek not found: FOLDSEEK_BIN is not set and
+   `foldseek` is not on PATH" before mapping any structure, and creates no output. A CLI test
+   confirms the check runs before the structure mapping. The real-data report identifies the
+   binary by version, sha256 (`1b446bbe…aadab`) and lookup (`FOLDSEEK_BIN`) only. The absolute
+   path was kept out of the report so it stays reproducible across machines, and lives only in
+   the gitignored `foldseek_run.json`.
+4. **A pre-commit hook rewrote the test structure.** *Found:* the first commit attempt
+   reported `trailing-whitespace ... Fixing tests/data/fixtures/SR43C_ARATH.pdb`. PDB lines are
+   fixed-width, so trailing spaces are part of the format, and the hook would have committed a
+   file that no longer matched ProteinGym's. *Fix:* exclude `tests/data/fixtures/` from the
+   whitespace hooks (`0d1882a`). *Verified:* `cmp` shows the committed fixture is
+   byte-identical to the raw download.
+5. **biotite has no type information.** *Found:* the first `make lint` gave 46 pyright-strict
+   errors in `structure_features.py`. *Fix:* biotite is treated as dynamic in one place, and
+   everything it returns is converted to typed numpy arrays in `load_chain`, so the rest of
+   the module stays fully checked without scattered `ignore` comments. *Verified:* pyright
+   strict reports 0 errors.
+
+**Supporting details.**
+- *Run time and size on v1.3:* features 11 s, 3Di 1 s, report under 1 s. The tables take
+  2.4 MB and 1.0 MB.
+- *Sanity checks on real data:* pLDDT equals the PDB text in 500 of 500 random residues.
+  Relative SASA correlates with contact count at r = −0.90, as buried residues should, and
+  0.28% of residues exceed 1 (max 1.38, exposed termini; not clipped).
+- *Tests:* 32 new tests (153 in the suite, 1 skipped without Foldseek), using a real
+  48-residue ProteinGym structure checked against a hand-written parser of the PDB text,
+  plus golden values. A
+  shell script stands in for Foldseek so CI needs no binary, and one golden test runs the real
+  Foldseek whenever it is installed.
+- *Dependencies:* biotite 1.6 (`uv add biotite`) for PDB parsing and SASA. Foldseek is an
+  external binary pinned by version (README, ADR 0006).
+- *Not done yet:* the Nextflow `STRUCT_FEATURES` and `FOLDSEEK_3DI` modules (next task, after
+  review), and installing the Linux Foldseek in CI and the Docker image.

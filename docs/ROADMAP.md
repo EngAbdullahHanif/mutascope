@@ -33,9 +33,10 @@ Goal: one command turns the raw ProteinGym download into clean, validated, versi
 - [x] Cleaning report (per assay: rows in, rows out, reasons)
 
 ### Structure features
-- [ ] Per assay: AF2 structure → Foldseek 3Di string (`foldseek structureto3didescriptor`)
-- [ ] Per residue: pLDDT, relative SASA, secondary structure (biotite), contact count (Cα/Cβ within 8 Å)
-- [ ] Check that structure length/sequence matches the DMS target sequence
+- [x] Per assay: AF2 structure → Foldseek 3Di string (`foldseek structureto3didescriptor`)
+- [x] Per residue: pLDDT, relative SASA, contact count (Cα/Cβ within 8 Å). Secondary structure dropped
+      (ADR 0006): biotite's P-SEA mislabels disordered regions and DSSP has no portable install
+- [x] Check that structure length/sequence matches the DMS target sequence
 
 ### Pipeline
 - [ ] Nextflow DSL2 modules: `DOWNLOAD → VALIDATE → CLEAN → STRUCT_FEATURES → FOLDSEEK_3DI`
@@ -91,7 +92,7 @@ Goal: beat zero-shot using the assay data, under ProteinGym's supervised protoco
 - [ ] One-hot wt and mt, BLOSUM62
 - [ ] 20-dim log-probabilities at i (ESM-2, SaProt)
 - [ ] Position-i embeddings: ESM-2 650M (mean of last 4 layers, 1280-d) and SaProt
-- [ ] Structure: pLDDT, relative SASA, secondary structure, contact count; relative position
+- [ ] Structure: pLDDT, relative SASA, contact count; relative position
 
 ### Model ladder
 - [ ] Augmented ridge (one-hot + zero-shot score; Hsu et al., 2022)
