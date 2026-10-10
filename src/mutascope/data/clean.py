@@ -34,12 +34,12 @@ from mutascope.data.validate import (
     raise_if_problems,
 )
 from mutascope.utils.io import fresh_tmp_dir, replace_dir
+from mutascope.utils.io import write_partition as write_validated_partition
 from mutascope.utils.logging import get_logger
 
 log = get_logger(__name__)
 
 REQUIRED_COLUMNS = ("mutant", "mutated_sequence", "DMS_score", "DMS_score_bin")
-PARTITION_FILE = "data.parquet"
 
 
 @dataclass(frozen=True)
@@ -241,14 +241,9 @@ def clean_dataset(reference_csv: Path, dms_dir: Path, out_dir: Path) -> pd.DataF
 
 
 def write_partition(con: duckdb.DuckDBPyConnection, variants: pd.DataFrame, part_dir: Path) -> None:
-    """Validate one assay's rows, then write them to ``part_dir/data.parquet``.
-
-    ``assay_id`` is validated but not stored in the file: it lives in the hive partition path,
-    which is where DuckDB reads it from.
-    """
+    """Validate one assay's rows, then write them to ``part_dir/data.parquet``."""
     ProcessedVariantSchema.validate(variants, lazy=True)
-    part_dir.mkdir()
-    con.from_df(variants.drop(columns="assay_id")).write_parquet(str(part_dir / PARTITION_FILE))
+    write_validated_partition(con, variants, part_dir)
 
 
 def cleaning_report(counts: list[AssayCleaning]) -> pd.DataFrame:

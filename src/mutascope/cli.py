@@ -3,18 +3,31 @@
 Every pipeline step is a command here; Nextflow only ever calls these commands.
 """
 
+import csv
 from pathlib import Path
 from typing import Annotated
 
 import httpx
 import typer
+from omegaconf import DictConfig
 
 from mutascope import __version__
 from mutascope.data.clean import clean_dataset
 from mutascope.data.download import DownloadError, fetch_release
 from mutascope.data.release import load_release
 from mutascope.data.report import write_report
-from mutascope.data.structures import StructureMappingError, map_structures
+from mutascope.data.structure_features import (
+    FeatureParams,
+    StructureFeatureError,
+    build_structure_features,
+)
+from mutascope.data.structure_report import (
+    StructureReportError,
+    structure_report,
+    write_structure_report,
+)
+from mutascope.data.structures import StructureCheck, StructureMappingError, map_structures
+from mutascope.data.three_di import FoldseekConfig, FoldseekError, build_three_di
 from mutascope.data.validate import VariantValidationError, check_assays
 from mutascope.utils.config import load_config
 from mutascope.utils.logging import configure_logging
@@ -34,6 +47,12 @@ ConfigDir = Annotated[
 Overrides = Annotated[
     list[str] | None,
     typer.Argument(help="Hydra overrides, e.g. data.data_dir=/scratch/data", show_default=False),
+]
+Reference = Annotated[
+    Path, typer.Option(help="ProteinGym reference CSV.", exists=True, dir_okay=False)
+]
+StructuresDir = Annotated[
+    Path, typer.Option(help="Directory of AF2 PDB files.", exists=True, file_okay=False)
 ]
 
 
@@ -154,4 +173,102 @@ def data_clean(
         f"{len(report)} assays: {int(report['rows_in'].sum())} rows in, "
         f"{int(report['rows_out'].sum())} single mutants out -> {out_dir}"
     )
+    typer.echo(f"report: {parquet}, {markdown}")
+
+
+def _structure_check(
+    reference: Path, structures_dir: Path, config_dir: Path, overrides: list[str] | None
+) -> tuple[StructureCheck, DictConfig]:
+    """Map assays to structures (exceptions skipped), or exit 1 listing every problem."""
+    cfg = load_config(config_dir, overrides)
+    exceptions = load_release(cfg.data).structure_exceptions
+    try:
+        return map_structures(reference, structures_dir, exceptions), cfg
+    except StructureMappingError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+
+@data_app.command("structure-features")
+def data_structure_features(
+    reference: Reference,
+    structures_dir: StructuresDir,
+    out_dir: Annotated[Path, typer.Option(help="Output dir for assay_id=<id>/ partitions.")],
+    config_dir: ConfigDir = Path("conf"),
+    overrides: Overrides = None,
+) -> None:
+    """Write per-residue pLDDT, SASA, secondary structure and contact counts per assay.
+
+    Only assays whose structure matches their target range get rows; documented
+    ``structure_exceptions`` get none.
+    """
+    check, cfg = _structure_check(reference, structures_dir, config_dir, overrides)
+    params = FeatureParams.from_config(cfg.structure)
+    try:
+        rows = build_structure_features(check, out_dir, params)
+    except StructureFeatureError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"{len(check.mappings)} assays, {rows} residues -> {out_dir}")
+    typer.echo(f"{len(check.allowed_exceptions)} documented exceptions skipped")
+
+
+@data_app.command("foldseek-3di")
+def data_foldseek_3di(
+    reference: Reference,
+    structures_dir: StructuresDir,
+    out_dir: Annotated[Path, typer.Option(help="Output dir for assay_id=<id>/ partitions.")],
+    config_dir: ConfigDir = Path("conf"),
+    overrides: Overrides = None,
+) -> None:
+    """Write the Foldseek 3Di state of every structure residue per assay.
+
+    Requires the Foldseek version pinned in ``structure.foldseek.version``.
+    """
+    check, cfg = _structure_check(reference, structures_dir, config_dir, overrides)
+    config = FoldseekConfig.from_config(cfg.structure.foldseek)
+    try:
+        rows = build_three_di(check, out_dir, config)
+    except FoldseekError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"{len(check.mappings)} assays, {rows} residues -> {out_dir}")
+    typer.echo(f"{len(check.allowed_exceptions)} documented exceptions skipped")
+
+
+@data_app.command("structure-report")
+def data_structure_report(
+    reference: Reference,
+    structures_dir: StructuresDir,
+    variants_dir: Annotated[
+        Path, typer.Option(help="Processed variant partitions.", exists=True, file_okay=False)
+    ],
+    features_dir: Annotated[
+        Path, typer.Option(help="Structure feature partitions.", exists=True, file_okay=False)
+    ],
+    three_di_dir: Annotated[
+        Path, typer.Option(help="3Di partitions.", exists=True, file_okay=False)
+    ],
+    report_dir: Annotated[Path, typer.Option(help="Directory for structure_report.*.")],
+    config_dir: ConfigDir = Path("conf"),
+    overrides: Overrides = None,
+) -> None:
+    """Cross-check the structure outputs and write a per-assay report (Parquet + Markdown)."""
+    check, cfg = _structure_check(reference, structures_dir, config_dir, overrides)
+    threshold = FeatureParams.from_config(cfg.structure).low_plddt_threshold
+    with reference.open(newline="") as fh:
+        lengths = {r["DMS_id"]: len(r["target_seq"]) for r in csv.DictReader(fh)}
+    try:
+        report = structure_report(
+            check,
+            target_lengths=lengths,
+            variants_dir=variants_dir,
+            features_dir=features_dir,
+            three_di_dir=three_di_dir,
+            low_plddt_threshold=threshold,
+        )
+    except StructureReportError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    parquet, markdown = write_structure_report(report, report_dir, low_plddt_threshold=threshold)
     typer.echo(f"report: {parquet}, {markdown}")

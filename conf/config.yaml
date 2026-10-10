@@ -1,4 +1,5 @@
 # Root Hydra config. Groups (data/, model/, train/, eval/) are added as their code lands.
 defaults:
   - data: proteingym
+  - structure: default
   - _self_

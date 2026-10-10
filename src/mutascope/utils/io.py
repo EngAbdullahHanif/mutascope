@@ -3,6 +3,11 @@
 import shutil
 from pathlib import Path
 
+import duckdb
+import pandas as pd
+
+PARTITION_FILE = "data.parquet"
+
 
 def fresh_tmp_dir(out_dir: Path) -> Path:
     """Create an empty ``<out_dir>.tmp`` sibling to build ``out_dir`` in.
@@ -21,3 +26,13 @@ def replace_dir(tmp: Path, out_dir: Path) -> None:
     if out_dir.exists():
         shutil.rmtree(out_dir)
     tmp.replace(out_dir)
+
+
+def write_partition(con: duckdb.DuckDBPyConnection, frame: pd.DataFrame, part_dir: Path) -> None:
+    """Write one assay's (already validated) rows to ``part_dir/data.parquet``.
+
+    ``assay_id`` is not stored in the file: it lives in the hive partition path
+    (``assay_id=<id>``), which is where DuckDB reads it from.
+    """
+    part_dir.mkdir()
+    con.from_df(frame.drop(columns="assay_id")).write_parquet(str(part_dir / PARTITION_FILE))
