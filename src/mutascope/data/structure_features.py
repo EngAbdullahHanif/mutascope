@@ -13,11 +13,13 @@ Per residue:
   united-atom radii that already account for them; the PDBs carry explicit hydrogens.
 - ``rel_sasa``: ``sasa`` divided by the residue type's theoretical maximum (Tien et al. 2013).
   Not clipped: exposed termini legitimately exceed 1.
-- ``sse``: P-SEA secondary structure from CA geometry (``biotite.structure.annotate_sse``):
-  ``a`` helix, ``b`` strand, ``c`` coil. This is a 3-state assignment, not DSSP.
 - ``contact_count``: number of other residues whose CB (CA for glycine) is closer than the
   cutoff to this residue's CB. Low-pLDDT regions are kept as they are; use ``plddt`` to
   down-weight them.
+
+There is deliberately no secondary-structure column (docs/adr/0006): biotite's P-SEA calls
+AF2's extended disordered regions "strand", and DSSP could not be installed portably. Use
+``plddt`` to flag disordered regions.
 
 Each structure's residues are checked again against ``target_seq`` after biotite parses them,
 independently of the CA-line parser in ``structures.py``.
@@ -91,7 +93,7 @@ class Chain:
     """Heavy atoms of one chain, as typed arrays plus biotite's ``AtomArray``.
 
     biotite's annotation arrays are untyped, so they are converted once here; ``atoms`` is kept
-    only to hand to biotite's own algorithms (SASA, P-SEA).
+    only to hand to biotite's SASA algorithm.
     """
 
     atoms: Any
@@ -130,8 +132,8 @@ def residue_features(chain: Chain, params: FeatureParams) -> pd.DataFrame:
     """Features of every residue of one chain, in file order.
 
     Returns:
-        Columns ``residue`` (one-letter), ``plddt``, ``sasa``, ``rel_sasa``, ``sse``,
-        ``contact_count``; row ``i`` is the structure's ``i``-th residue.
+        Columns ``residue`` (one-letter), ``plddt``, ``sasa``, ``rel_sasa``, ``contact_count``;
+        row ``i`` is the structure's ``i``-th residue.
 
     Raises:
         StructureFeatureError: Non-canonical residue, numbering gap, varying B-factor within a
@@ -151,7 +153,6 @@ def residue_features(chain: Chain, params: FeatureParams) -> pd.DataFrame:
             "plddt": _plddt(chain),
             "sasa": sasa,
             "rel_sasa": sasa / np.array([MAX_ASA[aa] for aa in sequence]),
-            "sse": _sse(chain),
             "contact_count": contact_counts(_contact_coords(chain), params.contact_cutoff),
         }
     )
@@ -172,14 +173,6 @@ def _residue_sasa(chain: Chain, params: FeatureParams) -> npt.NDArray[np.float64
         bad = sorted({str(n) for n in chain.atom_name[np.isnan(atom_sasa)]})
         raise StructureFeatureError(f"no ProtOr radius for atoms {bad}")
     return np.add.reduceat(atom_sasa, chain.starts)
-
-
-def _sse(chain: Chain) -> list[str]:
-    """P-SEA state per residue; every residue must get one."""
-    sse = [str(s) for s in struc.annotate_sse(chain.atoms)]
-    if len(sse) != len(chain.starts) or "" in sse:
-        raise StructureFeatureError("P-SEA did not assign every residue")
-    return sse
 
 
 def _plddt(chain: Chain) -> npt.NDArray[np.float64]:

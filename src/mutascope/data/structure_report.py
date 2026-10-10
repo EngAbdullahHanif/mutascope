@@ -7,7 +7,9 @@ against the structure mapping. Any disagreement raises instead of being reported
 - they have the same ``(assay_id, position)`` keys with the same ``residue``.
 
 Like the cleaning report, the Markdown has no timestamps or local paths, so a rerun on the same
-data gives an identical file.
+data and the same Foldseek build gives an identical file on any machine. The Foldseek binary is
+identified by version and sha256, which pin it uniquely; its absolute path stays only in the
+gitignored ``foldseek_run.json`` next to the 3Di partitions, for local debugging.
 """
 
 from pathlib import Path
@@ -19,6 +21,7 @@ import pandas as pd
 from mutascope.data.db import connect
 from mutascope.data.schemas import StructureReportSchema
 from mutascope.data.structures import StructureCheck
+from mutascope.data.three_di import RUN_FILE, FoldseekBinary
 
 REPORT_PARQUET = "structure_report.parquet"
 REPORT_MARKDOWN = "structure_report.md"
@@ -56,8 +59,7 @@ def structure_report(
             """
             SELECT assay_id, count(*) AS residues, avg(plddt) AS mean_plddt,
                    avg((plddt < ?)::INT) AS frac_low_plddt,
-                   avg((sse = 'a')::INT) AS frac_helix, avg((sse = 'b')::INT) AS frac_strand,
-                   avg((sse = 'c')::INT) AS frac_coil, avg(rel_sasa) AS mean_rel_sasa,
+                   avg(rel_sasa) AS mean_rel_sasa,
                    avg(contact_count) AS mean_contact_count
             FROM structure_features GROUP BY assay_id
             """,
@@ -139,8 +141,24 @@ def _cross_check(con: duckdb.DuckDBPyConnection, check: StructureCheck) -> None:
         )
 
 
+def read_foldseek_run(three_di_dir: Path) -> FoldseekBinary:
+    """The binary recorded by ``foldseek-3di``; its absence means the 3Di table is unattributed.
+
+    Raises:
+        StructureReportError: ``foldseek_run.json`` is missing.
+    """
+    path = three_di_dir / RUN_FILE
+    if not path.is_file():
+        raise StructureReportError(f"{path} is missing: rerun `mutascope data foldseek-3di`")
+    return FoldseekBinary.from_json(path.read_text())
+
+
 def write_structure_report(
-    report: pd.DataFrame, report_dir: Path, *, low_plddt_threshold: float
+    report: pd.DataFrame,
+    report_dir: Path,
+    *,
+    low_plddt_threshold: float,
+    foldseek: FoldseekBinary,
 ) -> tuple[Path, Path]:
     """Validate ``report`` and write it as Parquet and Markdown into ``report_dir``."""
     report = StructureReportSchema.validate(report, lazy=True)
@@ -148,12 +166,16 @@ def write_structure_report(
     parquet, markdown = report_dir / REPORT_PARQUET, report_dir / REPORT_MARKDOWN
     with duckdb.connect() as con:
         con.from_df(report).write_parquet(str(parquet))
-    markdown.write_text(render_markdown(report, low_plddt_threshold=low_plddt_threshold))
+    markdown.write_text(
+        render_markdown(report, low_plddt_threshold=low_plddt_threshold, foldseek=foldseek)
+    )
     return parquet, markdown
 
 
-def render_markdown(report: pd.DataFrame, *, low_plddt_threshold: float) -> str:
-    """Totals, exceptions, assays needing a look, then every assay."""
+def render_markdown(
+    report: pd.DataFrame, *, low_plddt_threshold: float, foldseek: FoldseekBinary
+) -> str:
+    """Totals, the Foldseek binary, exceptions, assays needing a look, then every assay."""
     ok = report[report["status"] == "features"]
     exc = report[report["status"] == "exception"]
     threshold = f"{low_plddt_threshold:g}"
@@ -178,6 +200,18 @@ def render_markdown(report: pd.DataFrame, *, low_plddt_threshold: float) -> str:
         f"| residue rows per table | {int(ok['residues'].sum()):,} |",
         f"| variants in assays with structure | {int(ok['variants'].sum()):,} |",
         f"| of which at a position with structure | {int(ok['variants_with_structure'].sum()):,} |",
+        "",
+        "## Foldseek binary",
+        "",
+        "The executable that produced the 3Di table, as recorded by `foldseek-3di`. Its sha256 "
+        "identifies it uniquely; the local path is kept out of the report so it is the same on "
+        "every machine.",
+        "",
+        "| | |",
+        "|---|---|",
+        f"| found via | {foldseek.found_via} |",
+        f"| version | `{foldseek.version}` |",
+        f"| sha256 | `{foldseek.sha256}` |",
         "",
         "## Documented exceptions",
         "",
@@ -220,15 +254,14 @@ def render_markdown(report: pd.DataFrame, *, low_plddt_threshold: float) -> str:
 def _table(df: pd.DataFrame) -> list[str]:
     rows = [
         "| assay_id | pdb_file | range | length | residues | mean pLDDT | low pLDDT "
-        "| helix | strand | coil | mean rel SASA | mean contacts | variants (with structure) |",
-        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| mean rel SASA | mean contacts | variants (with structure) |",
+        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for r in df.itertuples(index=False):
         rows.append(
             f"| {r.assay_id} | {r.pdb_file} | {r.range_start}-{r.range_end} | "
             f"{r.target_length:,} | {r.residues:,} | {r.mean_plddt:.1f} | "
-            f"{r.frac_low_plddt:.2f} | {r.frac_helix:.2f} | {r.frac_strand:.2f} | "
-            f"{r.frac_coil:.2f} | {r.mean_rel_sasa:.2f} | {r.mean_contact_count:.1f} | "
+            f"{r.frac_low_plddt:.2f} | {r.mean_rel_sasa:.2f} | {r.mean_contact_count:.1f} | "
             f"{r.variants:,} ({r.variants_with_structure:,}) |"
         )
     return [*rows, ""]

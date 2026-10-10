@@ -23,11 +23,12 @@ from mutascope.data.structure_features import (
 )
 from mutascope.data.structure_report import (
     StructureReportError,
+    read_foldseek_run,
     structure_report,
     write_structure_report,
 )
 from mutascope.data.structures import StructureCheck, StructureMappingError, map_structures
-from mutascope.data.three_di import FoldseekConfig, FoldseekError, build_three_di
+from mutascope.data.three_di import FoldseekConfig, FoldseekError, build_three_di, check_foldseek
 from mutascope.data.validate import VariantValidationError, check_assays
 from mutascope.utils.config import load_config
 from mutascope.utils.logging import configure_logging
@@ -197,7 +198,7 @@ def data_structure_features(
     config_dir: ConfigDir = Path("conf"),
     overrides: Overrides = None,
 ) -> None:
-    """Write per-residue pLDDT, SASA, secondary structure and contact counts per assay.
+    """Write per-residue pLDDT, SASA and contact counts per assay.
 
     Only assays whose structure matches their target range get rows; documented
     ``structure_exceptions`` get none.
@@ -223,12 +224,20 @@ def data_foldseek_3di(
 ) -> None:
     """Write the Foldseek 3Di state of every structure residue per assay.
 
-    Requires the Foldseek version pinned in ``structure.foldseek.version``.
+    Foldseek is looked up first (FOLDSEEK_BIN, else ``foldseek`` on PATH) and must report the
+    version pinned in ``structure.foldseek.version``; the binary used is recorded in the
+    output directory and the structure report.
     """
-    check, cfg = _structure_check(reference, structures_dir, config_dir, overrides)
-    config = FoldseekConfig.from_config(cfg.structure.foldseek)
+    config = FoldseekConfig.from_config(load_config(config_dir, overrides).structure.foldseek)
     try:
-        rows = build_three_di(check, out_dir, config)
+        binary = check_foldseek(config)
+    except FoldseekError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"foldseek: {binary.path} (via {binary.found_via}, version {binary.version})")
+    check, _ = _structure_check(reference, structures_dir, config_dir, overrides)
+    try:
+        rows = build_three_di(check, out_dir, binary, config.threads)
     except FoldseekError as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -259,6 +268,7 @@ def data_structure_report(
     with reference.open(newline="") as fh:
         lengths = {r["DMS_id"]: len(r["target_seq"]) for r in csv.DictReader(fh)}
     try:
+        foldseek = read_foldseek_run(three_di_dir)
         report = structure_report(
             check,
             target_lengths=lengths,
@@ -270,5 +280,7 @@ def data_structure_report(
     except StructureReportError as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
-    parquet, markdown = write_structure_report(report, report_dir, low_plddt_threshold=threshold)
+    parquet, markdown = write_structure_report(
+        report, report_dir, low_plddt_threshold=threshold, foldseek=foldseek
+    )
     typer.echo(f"report: {parquet}, {markdown}")

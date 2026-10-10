@@ -119,9 +119,6 @@ class CleaningReportSchema(pa.DataFrameModel):
         return (df["rows_in"] == df["rows_out"] + dropped).astype(bool)
 
 
-SSE_CODES = ("a", "b", "c")
-"""P-SEA secondary structure states as biotite returns them: helix, strand, coil."""
-
 THREE_DI_ALPHABET = AA_ORDER
 """Foldseek's 20 3Di states are written with the same 20 letters as the amino acids."""
 
@@ -143,7 +140,6 @@ class StructureFeatureSchema(pa.DataFrameModel):
     """Solvent-accessible surface area of the residue's heavy atoms, in Å²."""
     rel_sasa: Series[float] = pa.Field(ge=0)
     """``sasa`` over the residue's theoretical maximum. Not clipped: exposed termini exceed 1."""
-    sse: Series[str] = pa.Field(isin=list(SSE_CODES))
     contact_count: Series[int] = pa.Field(ge=0)
 
     class Config:  # pyright: ignore[reportIncompatibleVariableOverride]
@@ -209,9 +205,6 @@ class StructureReportSchema(pa.DataFrameModel):
     residues: Series[pd.Int64Dtype] = pa.Field(ge=1, nullable=True)
     mean_plddt: Series[float] = pa.Field(ge=0, le=100, nullable=True)
     frac_low_plddt: Series[float] = pa.Field(ge=0, le=1, nullable=True)
-    frac_helix: Series[float] = pa.Field(ge=0, le=1, nullable=True)
-    frac_strand: Series[float] = pa.Field(ge=0, le=1, nullable=True)
-    frac_coil: Series[float] = pa.Field(ge=0, le=1, nullable=True)
     mean_rel_sasa: Series[float] = pa.Field(ge=0, nullable=True)
     mean_contact_count: Series[float] = pa.Field(ge=0, nullable=True)
     variants: Series[int] = pa.Field(ge=0)
@@ -234,10 +227,3 @@ class StructureReportSchema(pa.DataFrameModel):
             & (df["variants_with_structure"] == 0)
             & df["documented_reason"].notna()
         ) | (~exception & df["residues"].notna() & df["documented_reason"].isna())
-
-    @pa.dataframe_check  # pyright: ignore[reportUnknownMemberType] — untyped in pandera
-    @classmethod
-    def sse_fractions_sum_to_one(cls, df: pd.DataFrame) -> "pd.Series[bool]":
-        """Every residue gets exactly one P-SEA state."""
-        total = df[["frac_helix", "frac_strand", "frac_coil"]].sum(axis=1)
-        return (df["residues"].isna() | ((total - 1).abs() < 1e-9)).astype(bool)

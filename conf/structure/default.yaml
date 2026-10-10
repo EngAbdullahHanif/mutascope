@@ -13,8 +13,9 @@ sasa_point_number: 1000
 low_plddt_threshold: 70.0
 
 foldseek:
-  # Executable; set FOLDSEEK_BIN if it is not on PATH.
-  bin: ${oc.env:FOLDSEEK_BIN,foldseek}
+  # Executable. Unset (null) means "find `foldseek` on PATH"; FOLDSEEK_BIN overrides that.
+  # See README, "Installing Foldseek".
+  bin: ${oc.env:FOLDSEEK_BIN,null}
   # `foldseek version` must print exactly this (GitHub release 10-941cd33). 3Di strings depend on
   # the Foldseek build, so a different binary fails instead of silently changing the tokens.
   version: 941cd33ff0771cd2e3f144e3293e22a2b87e9fda
