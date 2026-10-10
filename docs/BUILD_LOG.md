@@ -31,13 +31,16 @@ single commit, `0742ede` (`chore: scaffold repository skeleton`).
    local hooks, `make lint` and CI behave identically. Tests that need the large real models are
    marked `slow` and excluded by default so `make test` stays under two minutes.
 
-**Gaps (not recoverable from git).** The scaffold was squashed into a single commit, so the work
-before it left no record.
-- *`.gitignore` anchor fix:* in `0742ede`, `.gitignore` already uses anchored patterns
-  (`/data/`, `/outputs/`, `/work/`, …). The original problem and its fix happened before that
-  commit. **TODO (author): The original .gitignore had a bare data/ rule that was ignoring src/mutascope/data/ and conf/data/. I noticed this when my source files weren't showing up in git status. I fixed it by anchoring the rule to /data/ and adding !/data/manifest.yaml.**
-- *Alternatives considered:* anything that was tried and dropped while setting up the tooling, and
-  any reasons beyond those written in ADR 0001. **TODO (author). Before settling on uv, I considered Poetry and pip-tools. Before ruff, I considered Black + isort + flake8. I chose uv and ruff because they're faster, modern, and reduce the number of tools I need to manage.**
+**Context (from the author).** The scaffold was squashed into a single commit, so the work before
+it is not in git; these notes record it.
+- *`.gitignore` anchor fix:* the first `.gitignore` had a bare `data/` rule. Git applies a pattern
+  without a leading slash at every depth, so it also ignored `src/mutascope/data/` and
+  `conf/data/`. This showed up as source files missing from `git status`. Anchoring the rule to
+  `/data/` limits it to the top-level data directory, and `0742ede` already contains the fix.
+- *Alternatives considered:* Poetry and pip-tools instead of uv, and Black + isort + flake8 instead
+  of ruff. uv and ruff won because they are much faster and each replaces several tools: uv handles
+  the Python version, virtual environment, dependency resolution and lockfile, and ruff does
+  formatting, import sorting and linting in one pass.
 
 ---
 
@@ -78,6 +81,10 @@ upstream data, and they are listed in the config with their reasons rather than 
 - *Verified on the real download:* every file matched Zenodo; a second run downloaded nothing; all
   217 zero-shot assays have row counts equal to their DMS files (2,465,767 rows) with no missing
   ESM2_650M or SaProt_650M_AF2 scores; 213 assays map to structures, plus the 4 allowed exceptions.
+- *Committing the manifest:* `.gitignore` changed from `/data/` to `/data/*` plus
+  `!/data/manifest.yaml` (`2cbd89b`), so the checksums are versioned while the data stays out of
+  git. The switch to `/data/*` is required because Git cannot re-include a file whose parent
+  directory is itself excluded.
 - *Crash safety:* downloads go to `.part` files and extractions to `.tmp` directories, and are
   renamed only when complete and verified, so a file at its final path is always complete and
   verified.
