@@ -12,16 +12,16 @@ Goal: one command turns the raw ProteinGym download into clean, validated, versi
 ### Tooling
 - [x] uv + `pyproject.toml`, `src/mutascope/`, ruff, pyright strict, pytest + hypothesis, pre-commit
 - [x] Typer CLI as the single entry point; Nextflow calls CLI commands only
-- [ ] Hydra configs in `conf/`
+- [x] Hydra configs in `conf/` (`data`, `structure`, `publish`; model/train/eval groups land with their code)
 - [x] marimo for notebooks
 - [x] ADRs in `docs/adr/`
 - [x] GitHub Actions: lint + typecheck + tests (+ coverage, Nextflow `local,test` smoke run)
 
 ### Data acquisition
 - [x] Pin the ProteinGym release in `conf/data/proteingym.yaml`
-- [ ] Download: DMS substitutions archive, reference file `DMS_substitutions.csv`, CV fold assignments,
+- [x] Download: DMS substitutions archive, reference file `DMS_substitutions.csv`, CV fold assignments,
       AF2 structures matched to DMS targets, precomputed zero-shot baseline scores (for reproduction in Phase 2)
-- [ ] `data/manifest.yaml` with sha256 per file; download verifies checksums and is idempotent
+- [x] `data/manifest.yaml` with sha256 per file; download verifies checksums and is idempotent
 
 ### Parsing and cleaning
 - [x] `parse_mutation` — the only 1-indexed → 0-indexed conversion; hypothesis property tests
