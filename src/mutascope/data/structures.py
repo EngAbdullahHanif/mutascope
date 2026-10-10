@@ -40,6 +40,16 @@ class StructureMapping:
     pdb_path: Path
     range_start: int
     range_end: int
+    target_seq: str
+
+    @property
+    def offset(self) -> int:
+        """0-based ``target_seq`` index of the structure's first residue.
+
+        Structure residue ``i`` (0-based, in file order) is ``target_seq[offset + i]``. This is
+        the one place the 1-based ``pdb_range`` becomes a 0-based index.
+        """
+        return self.range_start - 1
 
 
 @dataclass(frozen=True)
@@ -57,6 +67,12 @@ class StructureCheck:
 
     mappings: list[StructureMapping]
     allowed_exceptions: list[AllowedException]
+
+    def __post_init__(self) -> None:
+        """A documented exception must never get a structure (ADR 0003), whoever built this."""
+        leaked = {a.assay_id for a in self.allowed_exceptions} & {m.assay_id for m in self.mappings}
+        if leaked:
+            raise StructureMappingError(f"structure exceptions also mapped: {sorted(leaked)}")
 
 
 def pdb_sequence(pdb_text: str) -> str:
@@ -182,7 +198,7 @@ def _map_one(
             f"{pdb_file} sequence differs from target_seq {start}-{end}: "
             + _describe_difference(expected, structure_seq, first_position=start)
         )
-    return StructureMapping(row["DMS_id"], pdb_path, start, end)
+    return StructureMapping(row["DMS_id"], pdb_path, start, end, target)
 
 
 def _describe_difference(expected: str, actual: str, *, first_position: int) -> str:

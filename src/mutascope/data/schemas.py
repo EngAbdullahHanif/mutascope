@@ -117,3 +117,127 @@ class CleaningReportSchema(pa.DataFrameModel):
         """Every row read is either written or counted under one drop reason."""
         dropped = df[list(DROP_REASONS)].sum(axis=1)
         return (df["rows_in"] == df["rows_out"] + dropped).astype(bool)
+
+
+SSE_CODES = ("a", "b", "c")
+"""P-SEA secondary structure states as biotite returns them: helix, strand, coil."""
+
+THREE_DI_ALPHABET = AA_ORDER
+"""Foldseek's 20 3Di states are written with the same 20 letters as the amino acids."""
+
+
+class StructureFeatureSchema(pa.DataFrameModel):
+    """Per-residue features of an assay's AF2 structure, one row per (assay, position).
+
+    ``position`` is the 0-based index into the assay's ``target_seq``, so the table joins with
+    :class:`ProcessedVariantSchema` on ``(assay_id, position)``. A structure covering only a
+    window of the target has rows for that window only.
+    """
+
+    assay_id: Series[str]
+    position: Series[int] = pa.Field(ge=0)
+    residue: Series[str] = pa.Field(isin=list(AA_ORDER))
+    """``target_seq[position]``; checked against the structure's residue before writing."""
+    plddt: Series[float] = pa.Field(ge=0, le=100)
+    sasa: Series[float] = pa.Field(ge=0)
+    """Solvent-accessible surface area of the residue's heavy atoms, in Å²."""
+    rel_sasa: Series[float] = pa.Field(ge=0)
+    """``sasa`` over the residue's theoretical maximum. Not clipped: exposed termini exceed 1."""
+    sse: Series[str] = pa.Field(isin=list(SSE_CODES))
+    contact_count: Series[int] = pa.Field(ge=0)
+
+    class Config:  # pyright: ignore[reportIncompatibleVariableOverride]
+        strict = True
+        ordered = True
+        unique = ["assay_id", "position"]  # noqa: RUF012 — pandera reads this class attribute
+
+    @pa.dataframe_check  # pyright: ignore[reportUnknownMemberType] — untyped in pandera
+    @classmethod
+    def contiguous_positions(cls, df: pd.DataFrame) -> "pd.Series[bool]":
+        """A structure models one unbroken stretch of the target."""
+        return _contiguous_per_assay(df)
+
+
+class ThreeDiSchema(pa.DataFrameModel):
+    """Foldseek 3Di state of each residue of an assay's AF2 structure.
+
+    Same ``(assay_id, position)`` keys as :class:`StructureFeatureSchema`. The per-assay 3Di
+    string is ``three_di`` ordered by ``position``.
+    """
+
+    assay_id: Series[str]
+    position: Series[int] = pa.Field(ge=0)
+    residue: Series[str] = pa.Field(isin=list(AA_ORDER))
+    """``target_seq[position]``; checked against Foldseek's own amino-acid output."""
+    three_di: Series[str] = pa.Field(isin=list(THREE_DI_ALPHABET))
+
+    class Config:  # pyright: ignore[reportIncompatibleVariableOverride]
+        strict = True
+        ordered = True
+        unique = ["assay_id", "position"]  # noqa: RUF012 — pandera reads this class attribute
+
+    @pa.dataframe_check  # pyright: ignore[reportUnknownMemberType] — untyped in pandera
+    @classmethod
+    def contiguous_positions(cls, df: pd.DataFrame) -> "pd.Series[bool]":
+        """A structure models one unbroken stretch of the target."""
+        return _contiguous_per_assay(df)
+
+
+def _contiguous_per_assay(df: pd.DataFrame) -> "pd.Series[bool]":
+    """True on every row of an assay whose positions are exactly ``min..max`` with no gaps."""
+    groups = df.groupby("assay_id")["position"]
+    span = groups.transform("max") - groups.transform("min") + 1
+    return (span == groups.transform("size")).astype(bool)
+
+
+STRUCTURE_STATUSES = ("features", "exception")
+
+
+class StructureReportSchema(pa.DataFrameModel):
+    """One row per assay: what the structure steps produced for it, or why nothing.
+
+    Exceptions (``status == "exception"``) have no structure columns, only their reasons.
+    """
+
+    assay_id: Series[str] = pa.Field(unique=True)
+    status: Series[str] = pa.Field(isin=list(STRUCTURE_STATUSES))
+    pdb_file: Series[str] = pa.Field(nullable=True)
+    range_start: Series[pd.Int64Dtype] = pa.Field(ge=1, nullable=True)
+    """1-based inclusive ``pdb_range`` as published."""
+    range_end: Series[pd.Int64Dtype] = pa.Field(ge=1, nullable=True)
+    target_length: Series[int] = pa.Field(ge=1)
+    residues: Series[pd.Int64Dtype] = pa.Field(ge=1, nullable=True)
+    mean_plddt: Series[float] = pa.Field(ge=0, le=100, nullable=True)
+    frac_low_plddt: Series[float] = pa.Field(ge=0, le=1, nullable=True)
+    frac_helix: Series[float] = pa.Field(ge=0, le=1, nullable=True)
+    frac_strand: Series[float] = pa.Field(ge=0, le=1, nullable=True)
+    frac_coil: Series[float] = pa.Field(ge=0, le=1, nullable=True)
+    mean_rel_sasa: Series[float] = pa.Field(ge=0, nullable=True)
+    mean_contact_count: Series[float] = pa.Field(ge=0, nullable=True)
+    variants: Series[int] = pa.Field(ge=0)
+    variants_with_structure: Series[int] = pa.Field(ge=0)
+    documented_reason: Series[str] = pa.Field(nullable=True)
+    observed_failure: Series[str] = pa.Field(nullable=True)
+
+    class Config:  # pyright: ignore[reportIncompatibleVariableOverride]
+        strict = True
+        ordered = True
+
+    @pa.dataframe_check  # pyright: ignore[reportUnknownMemberType] — untyped in pandera
+    @classmethod
+    def exceptions_have_no_structure(cls, df: pd.DataFrame) -> "pd.Series[bool]":
+        """An exception has a reason and no residues or covered variants; others the reverse."""
+        exception = df["status"] == "exception"
+        return (
+            exception
+            & df["residues"].isna()
+            & (df["variants_with_structure"] == 0)
+            & df["documented_reason"].notna()
+        ) | (~exception & df["residues"].notna() & df["documented_reason"].isna())
+
+    @pa.dataframe_check  # pyright: ignore[reportUnknownMemberType] — untyped in pandera
+    @classmethod
+    def sse_fractions_sum_to_one(cls, df: pd.DataFrame) -> "pd.Series[bool]":
+        """Every residue gets exactly one P-SEA state."""
+        total = df[["frac_helix", "frac_strand", "frac_coil"]].sum(axis=1)
+        return (df["residues"].isna() | ((total - 1).abs() < 1e-9)).astype(bool)
