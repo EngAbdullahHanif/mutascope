@@ -82,6 +82,9 @@ Run `make lint test` before declaring any task done.
 - Docstrings on public functions (Google style), explaining *why* when non-obvious.
 - Seed everything (`mutascope.utils.seeding.seed_all`) for any stochastic step.
 - New dependency → add via `uv add`, justify in the PR description.
+- Before pinning any external action, image, binary, or package version, verify the exact tag exists
+  by checking the upstream releases page. Do not infer a moving major-version tag from a full version
+  number.
 
 ## Data rules (non-negotiable)
 
@@ -168,5 +171,8 @@ lint → typecheck → tests (+ coverage) → Nextflow `-profile local,test` smo
 
 ## Current phase
 
-Weeks 1–2: foundations and data engineering. Update this section at the start of each phase.
+Weeks 3–4: zero-shot model zoo and benchmark harness (Phase 2). Phase 1 delivered a pinned,
+checksum-verified ProteinGym v1.3 pipeline producing 696,311 validated single mutants across 217 assays,
+structure features and 3Di for 213 of them, an EDA notebook and a data card (ADR 0009).
+Update this section at the start of each phase.
 The per-phase task checklist lives in `docs/ROADMAP.md`; mark items `[x]` there as they land.
