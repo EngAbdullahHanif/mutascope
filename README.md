@@ -87,3 +87,10 @@ machine. The full path is kept only in `<three_di dir>/foldseek_run.json`, under
 `data/`, for local debugging. The macOS binary
 above has sha256 `1b446bbece6b01cf0a50b28419f353522204f44a10a5872462f8ad400d9aadab`. Without
 Foldseek, `make test` still passes, because one golden test is skipped.
+
+## License
+
+MutaScope is released under the [MIT License](LICENSE). The processed dataset derived from
+ProteinGym v1.3 is also MIT-licensed, matching ProteinGym's own licence. When you use specific
+assays, please also cite ProteinGym and the original studies
+([docs/DATA_CARD.md](docs/DATA_CARD.md)).
