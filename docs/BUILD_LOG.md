@@ -1,8 +1,18 @@
 # MutaScope build log
 
 A technical journal of how MutaScope was built, one entry per completed task, in chronological
-order. Each entry has a plain-language summary and the three design choices that mattered most.
-Commit hashes refer to this repository's history.
+order. Commit hashes refer to this repository's history.
+
+Every entry has these sections, in this order:
+
+1. **Plain-language summary:** what was built and why, readable without the code.
+2. **The 3 most important design choices:** each with the reasoning and the evidence behind it.
+3. **Problems encountered and how they were solved:** a numbered list. Each item gives the
+   problem in one line, how it was found, the fix, and how the fix was verified, with the actual
+   numbers. If nothing qualifies, the section says "None worth documenting." Problems are never
+   invented to fill it.
+4. **Supporting details:** results, dependencies, and loose ends. Entry 1 calls this section
+   "Context (from the author)".
 
 ---
 
@@ -31,12 +41,17 @@ single commit, `0742ede` (`chore: scaffold repository skeleton`).
    local hooks, `make lint` and CI behave identically. Tests that need the large real models are
    marked `slow` and excluded by default so `make test` stays under two minutes.
 
+**Problems encountered and how they were solved.**
+
+1. **A `.gitignore` rule hid source code.** *Found:* source files under `src/mutascope/data/`
+   and `conf/data/` were missing from `git status`. *Cause:* the first `.gitignore` had a bare
+   `data/` rule, and Git applies a pattern without a leading slash at every depth, so it ignored
+   every directory named `data`, not only the top-level data folder. *Fix:* anchor the rule as
+   `/data/`, so it matches only the top-level directory. *Verified:* the scaffold commit
+   `0742ede` tracks `src/mutascope/data/__init__.py` and `conf/data/.gitkeep`.
+
 **Context (from the author).** The scaffold was squashed into a single commit, so the work before
 it is not in git; these notes record it.
-- *`.gitignore` anchor fix:* the first `.gitignore` had a bare `data/` rule. Git applies a pattern
-  without a leading slash at every depth, so it also ignored `src/mutascope/data/` and
-  `conf/data/`. This showed up as source files missing from `git status`. Anchoring the rule to
-  `/data/` limits it to the top-level data directory, and `0742ede` already contains the fix.
 - *Alternatives considered:* Poetry and pip-tools instead of uv, and Black + isort + flake8 instead
   of ruff. uv and ruff won because they are much faster and each replaces several tools: uv handles
   the Python version, virtual environment, dependency resolution and lockfile, and ruff does
@@ -77,6 +92,32 @@ upstream data, and they are listed in the config with their reasons rather than 
    reference. That keeps structure-based (213 assays) and sequence-only (217) results honestly
    labelled (ADR 0003).
 
+**Problems encountered and how they were solved.**
+
+1. **4 of 217 assays have a structure that doesn't match their sequence.** *Found:*
+   `check-structures` on the real download mapped 213 assays and failed 4. *Cause:* upstream
+   data, not our code. `CAS9_STRP1_Spencer_2017_positive`'s PDB carries a 22-residue C-terminal
+   tag, so its `pdb_range` (1-1390) runs past the 1,368-residue target. Three
+   `P53_HUMAN_Giacomelli_2018` assays have R72 in the target but P72 (a natural variant) in the
+   shared PDB. *Fix:* an explicit `structure_exceptions` list in the config, each entry with a
+   written reason. These assays are left out of structure-based models only. We rejected
+   dropping them silently, editing the PDB, or failing the whole pipeline (ADR 0003).
+   *Verified:* the check reports 213 mapped and 4 allowed exceptions, and fails if a listed
+   assay starts mapping or disappears from the reference, so the list cannot go stale.
+2. **Logging crashed on the second CLI call in a test.** *Found:* invoking the CLI twice with
+   Typer's `CliRunner` failed with "I/O operation on closed file". *Cause:* structlog caches
+   loggers on first use, and the logger factory was bound to the `sys.stderr` object present at
+   configure time. The test runner later swapped out and closed that stream, but the cached
+   logger kept writing to it. *Fix:* a small proxy that looks up the current `sys.stderr` on
+   every write (`ee1809e`). *Verified:* a regression test in `tests/test_logging.py`.
+3. **The Nextflow `test` profile could never pass the structure check.** *Found:* while
+   setting up the 2-assay smoke-test profile. *Cause:* the check fails on any listed exception
+   that is missing from the reference, and a 2-assay subset never contains the 4 listed assays.
+   *Fix:* a `params.hydra_overrides` hook appended to every `mutascope` command, set to
+   `data.structure_exceptions=null` in the `test` profile (`d89eb00`). *Verified:* on a
+   2-assay subset of the real reference, `check-structures` exits 1 without the override and
+   0 with it.
+
 **Supporting details.**
 - *Verified on the real download:* every file matched Zenodo; a second run downloaded nothing; all
   217 zero-shot assays have row counts equal to their DMS files (2,465,767 rows) with no missing
@@ -88,9 +129,6 @@ upstream data, and they are listed in the config with their reasons rather than 
 - *Crash safety:* downloads go to `.part` files and extractions to `.tmp` directories, and are
   renamed only when complete and verified, so a file at its final path is always complete and
   verified.
-- *Fixed along the way:* a logging bug where cached loggers wrote to a closed stderr (`ee1809e`,
-  with a regression test), and the Nextflow `test` profile now sets
-  `data.structure_exceptions=null` so a 2-assay test subset does not trip the exceptions check.
 - *Tests run offline:* a mock HTTP server and zips built during the test keep `make test` fast and
   CI-safe.
 
@@ -135,6 +173,23 @@ that every row of that experiment is flagged. ADR 0004 records the rules.
    write, so it allows only its own columns. It also requires the stored position and residues
    to equal what `parse_mutation` returns for the mutant code, so the two can never drift apart.
 
+**Problems encountered and how they were solved.**
+
+1. **The wild-type check alone misses a shifted sequence on some rows.** *Found:* by
+   deliberately shifting one real assay's target sequence (BLAT_ECOLX_Deng_2012) by one residue
+   to confirm the checker fails. 399 of its 4,996 rows still had the stated original residue at
+   the stated position, by coincidence. *Fix:* the `mutated_sequence` comparison stays a
+   required third check, even though it looks redundant. It caught all 399. *Verified:* a
+   committed regression test (`78e43f3`) with a three-assay fixture. Repeated residues make 6
+   rows of the shifted assay match by chance, and the test asserts that every row of that assay
+   is reported and no row of the other two is.
+2. **An upstream file has an extra column.** *Found:* validating the real v1.3 download, where
+   `ANCSZ_Hobbs_2022` carries `DMS_bin_score` next to `DMS_score_bin`. *Fix:* the raw schema is
+   non-strict and the checker reports extra columns instead of failing, because we don't control
+   upstream files. The processed schema, which describes our own output, stays strict.
+   *Verified:* the column equals `DMS_score_bin` on all 4,670 rows, and `check-variants` lists
+   it in its summary.
+
 **Supporting details.**
 - *Result on v1.3:* 217 assays, 2,465,767 variants (696,311 single, 1,769,456 multi-mutant),
   0 problems, in about 16 s. Multi-mutant rows are checked too, even though v1 filters them out
@@ -145,3 +200,98 @@ that every row of that experiment is flagged. ADR 0004 records the rules.
   will import it instead of defining their own.
 - *Not done yet:* filtering to single mutants and writing processed Parquet (validated against
   `ProcessedVariantSchema`) belong to the cleaning task that comes next.
+
+---
+
+## Entry 4 — Cleaning to the processed single-mutant table (Phase 1, 2026-10-10)
+
+**Plain-language summary.** The raw ProteinGym files mix variants with one amino-acid change
+and variants with several. Version 1 of MutaScope models only single changes, so a new command,
+`mutascope data clean`, builds the table every later step reads: one row per single-change
+variant, with its position, original and new residue, measured score and fit/unfit label. It
+removes rows for four possible reasons (multiple changes, a missing value, an exact duplicate,
+or the same variant listed twice with different measurements), and it records how many rows
+each experiment lost for each reason. It never removes a row that looks wrong, such as one
+whose stated original residue isn't in the protein; it stops and lists every such row instead.
+On ProteinGym v1.3 it reads 2,465,767 rows from 217 experiments, removes 1,769,456
+multi-change variants, and keeps 696,311 single-change variants. No row had a missing value or
+a duplicate. The output is written as one Parquet file per experiment, with DuckDB views for
+querying, plus a report in Parquet and Markdown (`results/data/`). ADR 0005 records the rules.
+
+**The 3 most important design choices.**
+
+1. **Every removed row is counted under exactly one reason:** the first that applies, in a
+   fixed order (`multi_mutant`, `missing_value`, `duplicate`, `conflicting_duplicate`). So, for
+   every experiment, rows in = rows out + rows removed. The report's pandera schema
+   (`CleaningReportSchema`) enforces that equation, so a report that doesn't add up cannot be
+   written. Anyone auditing the data can account for every row without trusting the code.
+2. **Errors stop the run, and output is all or nothing:** a wrong original residue, a
+   `mutated_sequence` that disagrees with the mutation, an unreadable mutation code, a
+   non-numeric score or a label other than 0/1 fails the run. All experiments are checked first,
+   so one run lists every problem with its experiment and CSV row. Each experiment's table is
+   validated against `ProcessedVariantSchema` before it is written, and the output is built in
+   a temporary folder that replaces the old one only after all 217 pass (`41f7fc4`). A failed
+   run therefore leaves the previous good output untouched.
+3. **Check the output against sources we didn't produce:** our counts were compared with two
+   independent upstream sources. Per experiment, rows in, multi-mutants removed and rows out
+   equal the totals published in ProteinGym's reference file. The set of kept variants equals
+   ProteinGym's own single-mutant cross-validation files exactly, with none missing and none
+   extra. Comparing scores as well, not just counts, is what exposed the parsing bug below.
+
+**Problems encountered and how they were solved.**
+
+1. **3,124 of 696,311 scores were silently changed when text was turned into numbers.**
+   *Found:* by comparing our cleaned scores with the same variants in ProteinGym's CV-fold
+   files. At first 771 differed, by at most 4.9 × 10⁻¹⁶ relative. For the examples checked, both
+   upstream files had identical text (e.g. `CAPSD_AAV2S_Sinai_2021` R585V:
+   `3.5267435205148114`), so the error was ours. *Cause:* `pd.to_numeric` uses a fast parser
+   that is not correctly rounded and ignores digits past about the 16th. It turned
+   `3.5267435205148114` into `3.526743520514811`, the neighbouring float, and
+   `-0.00012111549999999999` (`HSP82_YEAST_Cote-Hammarlof_2020_growth-H2O2` F322A) into
+   `-0.0001211154999999`. Measured against exact parsing, it got 3,124 scores in 95 assays
+   wrong: 1,936 by one ulp, the worst by 9.3 × 10⁻¹³ relative. The cross-check had shown only
+   771 because 2,799 of the wrong values happened to equal the fold files' shorter printed
+   values, which hid the error. These sizes cannot move a Spearman correlation, but the
+   processed table must hold exactly what ProteinGym published. *Fix:* scores are parsed from the
+   raw text with Python's correctly rounded `float()`, with underscores and padding rejected
+   (`float()` accepts both) (`41f7fc4`). *Verified:* a regression test pins both examples, and
+   all 696,311 processed scores equal the raw files' text exactly, with 0 differences.
+   *Lesson:* the first count (771) was itself wrong. Only measuring the parser against an
+   exact reference gave the real size of the bug.
+2. **ProteinGym's fold files are not a safe source of scores or labels.** *Found:* the same
+   cross-check after the fix. Scores now differed from the fold files on 3,297 rows, more than
+   before, because the fix removed the matches that had been hiding real differences.
+   Re-parsing both files exactly gave the same 3,297 and showed two real upstream
+   differences. (a) The fold files print scores with fewer digits than the raw files (16
+   significant digits instead of 17 in the examples checked), so 3,297 values in 82 assays
+   differ, by at most 9.3 × 10⁻¹³ relative. (b) 6 assays have empty `DMS_score_bin` in the fold
+   files although the raw files have labels, for example `Q53Z42_HUMAN_McShan_2019_binding-TAPBPR`
+   and `_expression` (3,344 rows each) and `HSP82_YEAST_Cote-Hammarlof_2020_growth-H2O2`
+   (2,252). *Decision:* Phase 3 uses the fold files only for fold assignments, joined on
+   `(assay_id, mutant)`. Scores and labels always come from the processed table (ADR 0005).
+   *Verified:* labels agree on every row where the fold files have one, and the mutant sets
+   are identical.
+3. **What to do when the same variant has two different measurements.** *Found:* while
+   designing the duplicate rule, not in the data: v1.3 has no such rows. *Decision:* remove
+   every copy and log the experiment, mutant and CSV rows, instead of keeping the first copy or
+   averaging. Either of those would be a silent correction of published data, which the data
+   rules forbid. Exact repeats (same score and label) keep their first copy, since nothing is
+   being chosen. *Verified:* unit tests cover both cases. The report schema's
+   rows in = rows out + removed check guarantees that any such removal shows up in the counts.
+
+**Supporting details.**
+- *Result on v1.3:* 217 experiments, 2,465,767 rows in, 1,769,456 multi-change variants
+  removed (from 69 experiments), 0 missing values, 0 duplicates, 696,311 out. The smallest
+  experiment keeps 33 variants and the largest 16,897. A full run takes about 18 s, and the
+  processed data is 9.3 MB.
+- *Storage:* `variants/assay_id=<id>/data.parquet`, written with DuckDB so pyarrow is not
+  needed. `assay_id` is stored only in the folder name, where DuckDB's hive partitioning
+  reads it. `mutascope.data.db.connect` exposes the views `variants`, `cleaning_report` and
+  `assays` (the reference file, joinable on `assay_id`, for per-UniProt and per-function-type
+  aggregation later) (`23a2c72`).
+- *Reproducible report:* the Markdown has no timestamps or local paths, so a rerun on the same
+  data produces an identical file, and its git diff shows only real count changes (`9648d4f`).
+- *Refactor:* assay/CSV matching and the temp-folder helpers are shared with
+  `check-variants` and the downloader instead of duplicated (`dae1dbb`).
+- *Not done yet:* the Nextflow `CLEAN` module comes after the pipeline's `DOWNLOAD` and
+  `VALIDATE` modules.
