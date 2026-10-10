@@ -33,9 +33,9 @@ Goal: one command turns the raw ProteinGym download into clean, validated, versi
 - [x] Cleaning report (per assay: rows in, rows out, reasons)
 
 ### Structure features
-- [ ] Per assay: AF2 structure → Foldseek 3Di string (`foldseek structureto3didescriptor`)
-- [ ] Per residue: pLDDT, relative SASA, secondary structure (biotite), contact count (Cα/Cβ within 8 Å)
-- [ ] Check that structure length/sequence matches the DMS target sequence
+- [x] Per assay: AF2 structure → Foldseek 3Di string (`foldseek structureto3didescriptor`)
+- [x] Per residue: pLDDT, relative SASA, secondary structure (biotite), contact count (Cα/Cβ within 8 Å)
+- [x] Check that structure length/sequence matches the DMS target sequence
 
 ### Pipeline
 - [ ] Nextflow DSL2 modules: `DOWNLOAD → VALIDATE → CLEAN → STRUCT_FEATURES → FOLDSEEK_3DI`
