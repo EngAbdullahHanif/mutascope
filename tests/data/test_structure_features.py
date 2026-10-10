@@ -91,7 +91,9 @@ def test_rel_sasa_is_sasa_over_tien_maximum(features: pd.DataFrame) -> None:
 
 def test_golden_values_for_fixture(features: pd.DataFrame) -> None:
     """Pinned outputs on a real structure; a change means the algorithm or a dependency moved."""
-    assert "".join(features["sse"]) == "ccccccccccccccccbbbbbcccccccbbbbbccccccaaaaaaaac"
+    assert list(features.columns) == [
+        "residue", "plddt", "sasa", "rel_sasa", "contact_count",
+    ]  # fmt: skip
     assert features["contact_count"].tolist()[:8] == [6, 6, 12, 7, 9, 14, 8, 7]
     assert round(float(features["sasa"].sum()), 1) == 3556.3
 

@@ -16,6 +16,9 @@ checked before running. Masking low-pLDDT residues (``#``) is SaProt's tokenisat
 Foldseek's, and is done by the scorer from the pLDDT in the structure-features table.
 """
 
+import hashlib
+import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -35,6 +38,14 @@ from mutascope.utils.logging import get_logger
 
 log = get_logger(__name__)
 
+RUN_FILE = "foldseek_run.json"
+"""Written next to the partitions: which Foldseek binary produced them."""
+
+INSTALL_HINT = (
+    "Install Foldseek release 10-941cd33 (see README, 'Installing Foldseek') and put `foldseek` "
+    "on PATH, or set FOLDSEEK_BIN to the binary."
+)
+
 CHAIN = "A"
 """ProteinGym AF2 structures are single-chain, chain A (``structures.pdb_sequence`` checks one)."""
 
@@ -47,7 +58,8 @@ class FoldseekError(RuntimeError):
 class FoldseekConfig:
     """From the ``structure.foldseek`` config group."""
 
-    bin: str
+    bin: str | None
+    """Explicit binary (from FOLDSEEK_BIN or an override), or None to search PATH."""
     version: str
     threads: int
 
@@ -55,7 +67,34 @@ class FoldseekConfig:
     def from_config(cls, cfg: DictConfig) -> "FoldseekConfig":
         """Build from the resolved ``structure.foldseek`` config group."""
         values = as_str_dict(OmegaConf.to_container(cfg, resolve=True), "structure.foldseek")
-        return cls(str(values["bin"]), str(values["version"]), int(values["threads"]))
+        binary = values["bin"]
+        return cls(
+            None if binary is None or str(binary) == "" else str(binary),
+            str(values["version"]),
+            int(values["threads"]),
+        )
+
+
+@dataclass(frozen=True)
+class FoldseekBinary:
+    """The Foldseek executable a run used, recorded in :data:`RUN_FILE` and the report."""
+
+    path: str
+    """Absolute path of the executable."""
+    found_via: str
+    """``"FOLDSEEK_BIN"``, ``"structure.foldseek.bin"`` or ``"PATH"``."""
+    version: str
+    sha256: str
+
+    def to_json(self) -> str:
+        """Stable JSON (sorted keys) for :data:`RUN_FILE`."""
+        return json.dumps(self.__dict__, indent=2, sort_keys=True) + "\n"
+
+    @classmethod
+    def from_json(cls, text: str) -> "FoldseekBinary":
+        """Read :data:`RUN_FILE` back."""
+        values = as_str_dict(json.loads(text), RUN_FILE)
+        return cls(**{k: str(values[k]) for k in ("path", "found_via", "version", "sha256")})
 
 
 @dataclass(frozen=True)
@@ -66,28 +105,48 @@ class Descriptor:
     three_di: str
 
 
-def check_foldseek(config: FoldseekConfig) -> Path:
-    """Resolve the Foldseek binary and require the pinned version.
+def check_foldseek(config: FoldseekConfig) -> FoldseekBinary:
+    """Find the Foldseek binary and require the pinned version.
 
-    Returns:
-        The absolute path of the binary.
+    An explicit binary (FOLDSEEK_BIN, or ``structure.foldseek.bin``) must be an executable
+    file; otherwise ``foldseek`` must be on PATH. Run this before any work, so a missing or
+    wrong binary fails in seconds with an actionable message.
+
+    Raises:
+        FoldseekError: Not found, not executable, or not the pinned version.
     """
-    found = shutil.which(config.bin)
-    if found is None:
-        raise FoldseekError(
-            f"foldseek not found ({config.bin!r}); install release 10-941cd33 or set FOLDSEEK_BIN"
-        )
-    result = subprocess.run([found, "version"], capture_output=True, text=True, check=False)
+    if config.bin is not None:
+        found_via = "FOLDSEEK_BIN" if os.environ.get("FOLDSEEK_BIN") else "structure.foldseek.bin"
+        found = shutil.which(config.bin)
+        if found is None:
+            raise FoldseekError(
+                f"{found_via}={config.bin!r} is not an executable file. {INSTALL_HINT}"
+            )
+    else:
+        found_via = "PATH"
+        found = shutil.which("foldseek")
+        if found is None:
+            raise FoldseekError(
+                f"Foldseek not found: FOLDSEEK_BIN is not set and `foldseek` is not on PATH. "
+                f"{INSTALL_HINT}"
+            )
+    path = Path(found).resolve()
+    result = subprocess.run([str(path), "version"], capture_output=True, text=True, check=False)
     version = result.stdout.strip()
     if result.returncode != 0 or version != config.version:
         raise FoldseekError(
-            f"{found} reports version {version!r}, config pins {config.version!r}: 3Di tokens "
-            "may differ between builds"
+            f"{path} reports version {version!r}, config pins {config.version!r}: 3Di tokens "
+            f"may differ between builds. {INSTALL_HINT}"
         )
-    return Path(found)
+    return FoldseekBinary(
+        path=str(path),
+        found_via=found_via,
+        version=version,
+        sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+    )
 
 
-def run_foldseek(binary: Path, pdb_paths: list[Path], threads: int) -> dict[str, Descriptor]:
+def run_foldseek(binary: str, pdb_paths: list[Path], threads: int) -> dict[str, Descriptor]:
     """Run ``structureto3didescriptor`` on ``pdb_paths``.
 
     Returns:
@@ -96,7 +155,7 @@ def run_foldseek(binary: Path, pdb_paths: list[Path], threads: int) -> dict[str,
     with tempfile.TemporaryDirectory(prefix="foldseek_") as work:
         out = Path(work) / "descriptors.tsv"
         cmd = [
-            str(binary),
+            binary,
             "structureto3didescriptor",
             *(str(p) for p in pdb_paths),
             str(out),
@@ -166,18 +225,20 @@ def assay_three_di(mapping: StructureMapping, descriptor: Descriptor) -> pd.Data
     )
 
 
-def build_three_di(check: StructureCheck, out_dir: Path, config: FoldseekConfig) -> int:
+def build_three_di(
+    check: StructureCheck, out_dir: Path, binary: FoldseekBinary, threads: int
+) -> int:
     """Write ``out_dir/assay_id=<id>/data.parquet`` (3Di per residue) for every mapped assay.
 
     Partitions are validated against :class:`ThreeDiSchema` and built in ``<out_dir>.tmp``,
-    which replaces ``out_dir`` only after every assay has succeeded.
+    which replaces ``out_dir`` only after every assay has succeeded. ``out_dir/`` also gets
+    :data:`RUN_FILE`, recording the binary (from :func:`check_foldseek`) that made them.
 
     Returns:
         The number of residue rows written.
     """
-    binary = check_foldseek(config)
     pdb_paths = sorted({m.pdb_path for m in check.mappings})
-    descriptors = run_foldseek(binary, pdb_paths, config.threads)
+    descriptors = run_foldseek(binary.path, pdb_paths, threads)
 
     tmp = fresh_tmp_dir(out_dir)
     rows = 0
@@ -188,6 +249,7 @@ def build_three_di(check: StructureCheck, out_dir: Path, config: FoldseekConfig)
                 ThreeDiSchema.validate(table, lazy=True)
                 write_partition(con, table, tmp / f"assay_id={mapping.assay_id}")
                 rows += len(table)
+        (tmp / RUN_FILE).write_text(binary.to_json())
     except BaseException:
         shutil.rmtree(tmp)
         raise
@@ -198,7 +260,8 @@ def build_three_di(check: StructureCheck, out_dir: Path, config: FoldseekConfig)
         pdb_files=len(pdb_paths),
         residues=rows,
         skipped_exceptions=len(check.allowed_exceptions),
-        foldseek=str(binary),
+        foldseek=binary.path,
+        foldseek_found_via=binary.found_via,
         out_dir=str(out_dir),
     )
     return rows

@@ -17,7 +17,13 @@ from mutascope.data.structure_report import (
     structure_report,
 )
 from mutascope.data.structures import StructureCheck
-from mutascope.data.three_di import FoldseekConfig, build_three_di
+from mutascope.data.three_di import (
+    RUN_FILE,
+    FoldseekBinary,
+    FoldseekConfig,
+    build_three_di,
+    check_foldseek,
+)
 
 CONF = Path(__file__).parents[2] / "conf"
 PINNED = "941cd33ff0771cd2e3f144e3293e22a2b87e9fda"
@@ -51,7 +57,8 @@ def outputs(
     three_di = tmp_path / "three_di"
     build_structure_features(check, features, PARAMS)
     script = fake_foldseek(PINNED, fixture_rows(fixture_seq))
-    build_three_di(check, three_di, FoldseekConfig(str(script), PINNED, 1))
+    found = check_foldseek(FoldseekConfig(str(script), PINNED, 1))
+    build_three_di(check, three_di, found, threads=1)
     # WINDOW's target has 3 residues before and 2 after the structure: positions 0 and 52 have
     # no structure, 3 does.
     variants = write_variants(
@@ -89,9 +96,13 @@ def test_report_counts(check: StructureCheck, outputs: dict[str, Path]) -> None:
     assert broken["documented_reason"] == "documented natural variant"
     assert "differs from target_seq" in broken["observed_failure"]
 
-    markdown = render_markdown(report.reset_index(), low_plddt_threshold=70.0)
+    foldseek = FoldseekBinary.from_json((outputs["three_di"] / RUN_FILE).read_text())
+    markdown = render_markdown(report.reset_index(), low_plddt_threshold=70.0, foldseek=foldseek)
     assert "| documented exceptions (no structure) | 1 |" in markdown
     assert "| WINDOW | SR43C_ARATH.pdb | 4-51 |" in markdown
+    assert f"| sha256 | `{foldseek.sha256}` |" in markdown
+    assert foldseek.path not in markdown  # no machine-specific paths in the report
+    assert "helix" not in markdown  # no secondary structure (ADR 0006)
 
 
 def test_exception_partition_fails(check: StructureCheck, outputs: dict[str, Path]) -> None:
@@ -116,6 +127,7 @@ def test_residue_disagreement_fails(check: StructureCheck, outputs: dict[str, Pa
 
 
 def test_cli_round_trip(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     reference: Path,
     structures_dir: Path,
@@ -135,11 +147,26 @@ def test_cli_round_trip(
     assert "2 assays, 96 residues" in result.stdout
     assert "1 documented exceptions skipped" in result.stdout
 
-    foldseek = f"structure.foldseek.bin={fake_foldseek(PINNED, fixture_rows(fixture_seq))}"
+    # Foldseek is checked before anything else: with no binary, the run fails on that alone,
+    # even though this config would also fail the structure mapping.
+    monkeypatch.delenv("FOLDSEEK_BIN", raising=False)
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
     result = runner.invoke(
-        app, ["data", "foldseek-3di", *common, "--out-dir", str(three_di), *exceptions, foldseek]
+        app,
+        ["data", "foldseek-3di", *common, "--out-dir", str(three_di),
+         "data.structure_exceptions=null"],
+    )  # fmt: skip
+    assert result.exit_code == 1
+    assert "FOLDSEEK_BIN is not set and `foldseek` is not on PATH" in result.stderr
+    assert "BROKEN" not in result.stderr
+
+    script = fake_foldseek(PINNED, fixture_rows(fixture_seq))
+    monkeypatch.setenv("FOLDSEEK_BIN", str(script))
+    result = runner.invoke(
+        app, ["data", "foldseek-3di", *common, "--out-dir", str(three_di), *exceptions]
     )
     assert result.exit_code == 0, result.output
+    assert f"foldseek: {script.resolve()} (via FOLDSEEK_BIN" in result.stdout
 
     variants = write_variants(tmp_path, {"FULL": [0], "WINDOW": [3], "BROKEN": [5]})
     result = runner.invoke(
@@ -149,7 +176,10 @@ def test_cli_round_trip(
          "--report-dir", str(tmp_path / "report"), *exceptions],
     )  # fmt: skip
     assert result.exit_code == 0, result.output
-    assert (tmp_path / "report" / "structure_report.md").is_file()
+    report_md = (tmp_path / "report" / "structure_report.md").read_text()
+    assert f"| version | `{PINNED}` |" in report_md
+    assert str(tmp_path) not in report_md  # the binary's absolute path stays out
+    assert "| found via | FOLDSEEK_BIN |" in report_md
 
     # Without the documented exception, the BROKEN assay fails the mapping and nothing runs.
     result = runner.invoke(
