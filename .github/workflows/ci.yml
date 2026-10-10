@@ -1,0 +1,91 @@
+# Lint and type-check, tests with coverage, then the Nextflow smoke test on 2 assays.
+# Every Python step runs through the Makefile, so CI runs the same commands as a laptop.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_VERSION: "0.12.24"
+  NEXTFLOW_VERSION: "26.04.7"
+  # Foldseek 10-941cd33, linux-avx2 build (README, "Installing Foldseek"; ADR 0006).
+  FOLDSEEK_URL: https://github.com/steineggerlab/foldseek/releases/download/10-941cd33/foldseek-linux-avx2.tar.gz
+  FOLDSEEK_SHA256: e6a3e3860e76b0b7b858736f627fe680d4d7f0fc7298301d8a92b9f711d74ac7
+
+jobs:
+  lint:
+    name: ruff + pyright
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          version: ${{ env.UV_VERSION }}
+      - run: uv sync --all-extras --locked
+      - run: make lint
+
+  test:
+    name: pytest + coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          version: ${{ env.UV_VERSION }}
+      - run: uv sync --all-extras --locked
+      - run: make test PYTEST_ARGS="--cov=mutascope --cov-report=term-missing --cov-report=xml"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: coverage.xml
+
+  pipeline:
+    name: Nextflow smoke test (2 assays)
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          version: ${{ env.UV_VERSION }}
+      - run: uv sync --all-extras --locked
+      - uses: nf-core/setup-nextflow@v3
+        with:
+          version: ${{ env.NEXTFLOW_VERSION }}
+      - name: Install Foldseek (pinned, checksum-verified)
+        run: |
+          curl -fsSL -o foldseek.tar.gz "$FOLDSEEK_URL"
+          echo "$FOLDSEEK_SHA256  foldseek.tar.gz" | sha256sum --check
+          tar xzf foldseek.tar.gz
+          sudo install -m 755 foldseek/bin/foldseek /usr/local/bin/foldseek
+          rm -rf foldseek foldseek.tar.gz
+          foldseek version
+      # Only the downloaded files (~75 MB): archives are re-extracted each run, and the
+      # downloader re-verifies every cached file against data/manifest.yaml anyway.
+      - uses: actions/cache@v6
+        with:
+          path: |
+            data/raw/*/*.zip
+            data/raw/*/*.csv
+          key: proteingym-${{ hashFiles('conf/data/proteingym.yaml', 'data/manifest.yaml') }}
+      - run: make pipeline-test
+      - name: Manifest unchanged
+        run: git diff --exit-code data/manifest.yaml
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pipeline-test
+          path: |
+            pipeline/results/reports/
+            .nextflow.log
+          include-hidden-files: true
