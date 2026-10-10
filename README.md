@@ -13,8 +13,27 @@ make lint test
 make pipeline
 ```
 
-Requires [uv](https://docs.astral.sh/uv/), Nextflow (Java 17+), Foldseek (see below) and, for
-`make pipeline-test`, Docker.
+Requires [uv](https://docs.astral.sh/uv/), Nextflow (Java 17+) and Foldseek (see below).
+
+## Running the pipeline
+
+`pipeline/main.nf` chains the `mutascope data` commands
+([ADR 0007](docs/adr/0007-pipeline-wiring-and-ci.md)):
+
+```
+DOWNLOAD -> [SUBSET] -> VALIDATE -> CLEAN, STRUCT_FEATURES, FOLDSEEK_3DI -> STRUCTURE_REPORT
+```
+
+- `make pipeline` runs on all 217 assays. The release is downloaded once into `data/raw/` and
+  re-verified against `data/manifest.yaml` on every run. Outputs go to
+  `data/processed/{variants,structure_features,three_di}/`, and reports (validation, cleaning,
+  structure) go to `results/data/`.
+- `make pipeline-test` runs the same steps on 2 small assays and skips the 1.9 GB zero-shot
+  archive. It writes only to `pipeline/results/` (gitignored), taking about 30 s from an empty
+  cache. CI runs it on every push.
+
+Hydra overrides reach every command through `--hydra_overrides`, for example
+`nextflow run pipeline/main.nf -profile local --hydra_overrides 'structure.foldseek.threads=8'`.
 
 ## Installing Foldseek
 

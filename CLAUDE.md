@@ -53,7 +53,7 @@ make fmt          # ruff format . && ruff check --fix .
 make test         # pytest -q (uses esm2_t6_8M; must stay fast, < 2 min)
 make test-slow    # pytest -m slow (real 650M models, MPS; run locally only)
 make pipeline     # nextflow run pipeline/main.nf -profile local
-make pipeline-test# nextflow run pipeline/main.nf -profile docker,test
+make pipeline-test# nextflow run pipeline/main.nf -profile local,test (docker,test once the image exists, Phase 4)
 make api          # uvicorn api.app.main:app --reload --port 7860
 make web          # cd web && pnpm dev
 make types        # regenerate web/src/lib/api-types.ts from OpenAPI (openapi-typescript)
@@ -152,7 +152,7 @@ Run `make lint test` before declaring any task done.
 
 ## CI (GitHub Actions)
 
-lint → typecheck → tests (+ coverage) → Nextflow `-profile docker,test` smoke run → build & push image to GHCR
+lint → typecheck → tests (+ coverage) → Nextflow `-profile local,test` smoke run (`docker,test` from Phase 4, ADR 0007) → build & push image to GHCR
 (amd64) → deploy to Hugging Face Space on version tags. CI must stay green on `main`.
 
 ## How to work in this repo
