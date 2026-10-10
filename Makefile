@@ -17,8 +17,11 @@ fmt:
 	uv run ruff format .
 	uv run ruff check --fix .
 
+# Extra pytest flags, e.g. CI's coverage: make test PYTEST_ARGS="--cov=mutascope"
+PYTEST_ARGS ?=
+
 test:
-	uv run pytest -q
+	uv run pytest -q $(PYTEST_ARGS)
 
 test-slow:
 	uv run pytest -m slow
@@ -26,8 +29,9 @@ test-slow:
 pipeline:
 	nextflow run pipeline/main.nf -profile local
 
+# Native uv env until the Docker image exists (Phase 4); see docs/adr/0007.
 pipeline-test:
-	nextflow run pipeline/main.nf -profile docker,test
+	nextflow run pipeline/main.nf -profile local,test
 
 api:
 	uv run uvicorn api.app.main:app --reload --port 7860
