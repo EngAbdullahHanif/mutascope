@@ -13,6 +13,7 @@ from mutascope import __version__
 from mutascope.data.download import DownloadError, fetch_release
 from mutascope.data.release import load_release
 from mutascope.data.structures import StructureMappingError, map_structures
+from mutascope.data.validate import VariantValidationError, check_assays
 from mutascope.utils.config import load_config
 from mutascope.utils.logging import configure_logging
 
@@ -89,3 +90,32 @@ def data_check_structures(
         typer.echo(f"{len(check.allowed_exceptions)} allowed exceptions (no structure):")
         for allowed in check.allowed_exceptions:
             typer.echo(f"  {allowed.assay_id}: {allowed.documented_reason}")
+
+
+@data_app.command("check-variants")
+def data_check_variants(
+    reference: Annotated[
+        Path, typer.Option(help="ProteinGym reference CSV.", exists=True, dir_okay=False)
+    ],
+    dms_dir: Annotated[
+        Path,
+        typer.Option(help="Directory of per-assay DMS CSVs.", exists=True, file_okay=False),
+    ],
+) -> None:
+    """Fail unless every variant's wild-type residues match its assay's target sequence.
+
+    Also validates each CSV against the raw variant schema. Every problem is listed; none is
+    fixed or dropped.
+    """
+    try:
+        check = check_assays(reference, dms_dir)
+    except VariantValidationError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(
+        f"{len(check.assays)} assays, {check.rows} variants "
+        f"({check.singles} single, {check.multis} multi): 0 problems"
+    )
+    for assay in check.assays:
+        if assay.extra_columns:
+            typer.echo(f"  {assay.assay_id}: extra columns {', '.join(assay.extra_columns)}")
