@@ -484,3 +484,81 @@ type-checking and the test suite with coverage. ADR 0007 records the rules. Comm
 - *Not done yet:* `docker,test` (needs the Phase 4 image, which also needs `params.data_dir`
   mounted). The old hand-run outputs in `data/processed/proteingym_v1.3/` are now superseded by
   `data/processed/<table>/` and can be deleted.
+
+---
+
+## Entry 7 — EDA notebook, data card and Hub staging (Phase 1, 2026-10-10)
+
+**Plain-language summary.** Phase 1's data is now described in three ways. A marimo notebook,
+`notebooks/eda.py`, charts the 217 experiments: how many variants each has, which kinds of
+function they measure, how their scores are distributed, and how long the proteins are. Every
+number and chart comes from a new package module, `mutascope.eda`; the notebook only lays them
+out. `docs/DATA_CARD.md` documents the dataset for outside readers: where it comes from, how it
+was cleaned, its counts, its known weaknesses and its licence (MIT, like ProteinGym v1.3). A new
+command, `mutascope data publish`, builds the exact folder the Hugging Face Hub will hold and
+checks it. Uploading is a separate flag (`--push`) and has not been run yet: the card is waiting
+for review. ADR 0008 records the decisions.
+
+**The 3 most important design choices.**
+
+1. **Summaries in SQL, charts in the package, layout in the notebook.** The 696,311 variants are
+   binned in DuckDB, and only the bins reach a chart. Altair refuses more than 5,000 rows by
+   default, and z-scoring per assay is a window query anyway. Because the summaries are package
+   functions, they have tests (13 new in total, 100% line coverage of `mutascope.eda`), and the
+   data card's numbers come from the same functions as the charts.
+2. **Stage, review, then push the same bytes.** `publish` writes `build/hf_dataset/`: one
+   schema-validated Parquet file per table, the reports, the card, `provenance.json` (release
+   pin, input checksums, Foldseek version) and `SHA256SUMS`. `--push` re-verifies those checksums
+   and refuses a folder edited after staging, so what reaches the Hub is exactly what was looked
+   at. New repos are created private. Staging twice gives byte-identical files, and all 696,311
+   published rows equal the processed table on `(assay_id, mutant)`, position, score and label.
+3. **Flat files with `assay_id` as a column for the Hub.** Locally, `assay_id` lives only in the
+   partition path (ADR 0005). The `datasets` loader and the Hub viewer do not read hive paths,
+   so the published tables carry it as a column and are sorted. Before anything is written, each
+   assay's published `DMS_number_single_mutants` must equal its processed row count; a test
+   changes one count and checks that nothing is staged.
+
+**Problems encountered and how they were solved.**
+
+1. **The sequence-length histogram rendered with no bars.** *Found:* every chart was rendered to
+   PNG (vl-convert) and checked by eye before the notebook was called done. The length chart
+   showed axes and the 1,022-residue marker but no bars. *Cause:* isolated by rendering layer by
+   layer. The bars alone drew 3 bar marks on a 3-row input, and adding the marker layer (either
+   as a data row or as a constant `datum`) dropped them to 0. *Fix:* bin with an explicit
+   `transform_bin` and encode the pre-binned edges (`bin="binned"`, `x2`). *Verified:* the
+   layered chart draws 3 bars on the same input, and the full chart shows all 217 assays with the
+   marker. The other six charts had no layered bins and rendered correctly.
+2. **The structure tables failed their schemas at the first real staging run.**
+   *Found:* `mutascope data publish` stopped with pandera `column_ordered` errors on
+   `StructureFeatureSchema` ("column 'assay_id' out-of-order"). The `variants` and `assays`
+   tables had already passed. *Cause:* `SELECT *` over a hive-partitioned view puts the
+   partition column `assay_id` last, and the schema is `ordered`. *Fix:* explicit column lists
+   for both structure tables. *Verified:* staging writes 77,338 rows to each, and the
+   toy-dataset tests stage all four tables.
+3. **The EDA found one assay whose binary labels are all 1.** *Found:* the label-balance chart
+   had one assay at 100%. *Cause:* upstream. `F7YBW8_MESOW_Aakre_2015`'s cutoff (−0.0017) is the
+   median over all 9,192 rows, 9,155 of them multi-mutants, and all 37 single mutants score at
+   least 0.0037. The same effect is milder elsewhere. The 83 median-binarized assays with only
+   single mutants have 45–53% labelled 1. The 43 with multi-mutants have a median of 67%, and 32
+   of them are more than 10 points from 50%. *Fix:* none to the data, as data rule 3 requires.
+   It is documented in the data card, and AUC and MCC are undefined for that assay, which the
+   Phase 2 metrics must handle. *Verified:* recomputed from the raw CSV (median of all rows =
+   −0.001725, single-mutant minimum 0.003679).
+
+**Supporting details.**
+- *Counts in the card:* 217 assays, 186 UniProt IDs, 696,311 single mutants (1,769,456
+  multi-mutants removed in 69 assays), 213 assays and 77,338 residues with structure features.
+  Function types: OrganismalFitness 77 assays / 375,411 variants, Stability 66 / 68,855,
+  Activity 43 / 145,367, Expression 18 / 74,923, Binding 13 / 31,755. 64 of the 66 stability
+  assays are Tsuboyama et al. 2023 (37–72 residues). 16 targets exceed 1,022 residues, with a
+  median coverage of 4.6% of all 19 × L substitutions (90.1% for the rest).
+- *`marimo edit notebooks/eda.py`* serves the notebook (HTTP 200); `marimo check` is clean, and
+  running it as a script executes every cell without error.
+- *Dependencies:* `huggingface_hub` (runtime, for `publish`); `marimo` and `altair` in a new
+  `notebooks` extra, which `make setup` and CI install via `--all-extras`.
+- *Config:* `data.processed_dir` and `data.reports_dir` (paths only, no pins changed), and a new
+  `publish` group (`repo_id`, `private: true`, `stage_dir`, card front matter).
+- *Tests:* 13 new (185 in the suite, 1 skipped without Foldseek), total line coverage 97%. The
+  push path is tested with a fake `HfApi`; nothing touches the network.
+- *Not done yet:* the upload itself (after the card review). The repository has no `LICENSE`
+  file yet, although the card states MIT for the dataset.

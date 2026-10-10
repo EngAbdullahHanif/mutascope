@@ -18,6 +18,10 @@ benchmarks_url: https://raw.githubusercontent.com/OATML-Markslab/ProteinGym/${da
 data_dir: ${oc.env:MUTASCOPE_DATA_DIR,data}
 raw_dir: ${data.data_dir}/raw/proteingym_${data.release.version}
 manifest_path: ${data.data_dir}/manifest.yaml
+# Outputs of `make pipeline` (Nextflow params processed_dir / reports_dir), read by the EDA notebook
+# and `mutascope data publish`.
+processed_dir: ${data.data_dir}/processed
+reports_dir: results/data
 
 # Each entry lands in `raw_dir`. Archives are extracted to `raw_dir/<filename stem>/` (flattened to
 # file basenames). With `to_parquet`, only the listed columns are kept (cast to the given type),
