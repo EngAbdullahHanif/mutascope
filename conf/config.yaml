@@ -2,4 +2,5 @@
 defaults:
   - data: proteingym
   - structure: default
+  - publish: hub
   - _self_
