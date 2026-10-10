@@ -1,0 +1,30 @@
+# Publishing the processed dataset to the Hugging Face Hub (`mutascope data publish`).
+# Staging is the default and touches nothing remote; `--push` uploads the staged folder.
+
+# Target dataset repo, "<user or org>/<name>". Required only with --push, e.g. on the command line:
+#   mutascope data publish --push publish.repo_id=<user>/mutascope-proteingym-v1.3
+repo_id: null
+# New repos are created private, so the upload can be checked on the Hub before going public.
+# An existing repo's visibility is never changed by the upload.
+private: true
+stage_dir: build/hf_dataset
+# Markdown body of the dataset card (the Hub's README.md); front matter is generated.
+card: docs/DATA_CARD.md
+
+# Hub dataset-card front matter (https://huggingface.co/docs/hub/datasets-cards). `configs` is
+# added by the code from the tables it writes, so file names live in one place.
+card_metadata:
+  pretty_name: MutaScope ProteinGym v1.3 single mutants
+  license: mit
+  tags:
+    - biology
+    - proteins
+    - protein-engineering
+    - deep-mutational-scanning
+    - variant-effect-prediction
+    - proteingym
+  task_categories:
+    - tabular-regression
+    - tabular-classification
+  size_categories:
+    - 100K<n<1M
