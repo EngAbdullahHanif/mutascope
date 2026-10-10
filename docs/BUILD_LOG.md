@@ -562,3 +562,35 @@ for review. ADR 0008 records the decisions.
   push path is tested with a fake `HfApi`; nothing touches the network.
 - *Not done yet:* the upload itself (after the card review). The repository has no `LICENSE`
   file yet, although the card states MIT for the dataset.
+
+---
+
+## Entry 8 — Phase 1 close-out (2026-10-10)
+
+**Plain-language summary.** Phase 1 is finished: one command downloads the pinned ProteinGym
+release, proves the files are the right ones, checks every one of 2,465,767 measurements, and
+writes 696,311 clean single-mutant variants for 217 experiments, plus structure features and 3Di
+tokens for 213 of them. ADR 0009 summarises what exists, the decisions that mattered most and
+what Phase 2 inherits. The roadmap's remaining Phase 1 items are ticked, except the `docker`
+profile (Phase 4) and the Hub upload (after the data card review). CLAUDE.md now points at
+Phase 2.
+
+**The 3 most important design choices.**
+
+1. **Fail loudly, fix nothing:** every upstream problem found in Phase 1 was reported and
+   documented rather than repaired (ADRs 0003–0005).
+2. **A checksum chain from Zenodo to git**, so a fresh clone rebuilds exactly the benchmarked data
+   (ADR 0002).
+3. **One CLI, orchestrated by Nextflow but never bypassed**, so every step runs and tests on its
+   own (ADRs 0001, 0007).
+
+**Problems encountered and how they were solved.** None worth documenting in this close-out.
+One lesson from Phase 1 became a rule: CI once pinned `astral-sh/setup-uv@v10`, a moving major
+tag that setup-uv does not publish (it has only full version tags), so the workflow failed to
+resolve it (fixed in `3608dec`). CLAUDE.md's coding conventions now require checking the upstream releases
+page for the exact tag before pinning any action, image, binary or package version.
+
+**Supporting details.**
+- *State at close:* `make pipeline` 42 s (download cached), `make pipeline-test` 32 s (empty
+  cache), 185 tests passing (1 skipped without Foldseek) in about 10 s, 97% line coverage.
+- *Open items:* the `docker` pipeline profile and the Hub upload.
