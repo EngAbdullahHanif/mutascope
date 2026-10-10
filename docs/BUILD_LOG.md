@@ -244,8 +244,10 @@ querying, plus a report in Parquet and Markdown (`results/data/`). ADR 0005 reco
    *Found:* by comparing our cleaned scores with the same variants in ProteinGym's CV-fold
    files. At first 771 differed, by at most 4.9 × 10⁻¹⁶ relative. For the examples checked, both
    upstream files had identical text (e.g. `CAPSD_AAV2S_Sinai_2021` R585V:
-   `3.5267435205148114`), so the error was ours. *Cause:* `pd.to_numeric` uses a fast parser
-   that is not correctly rounded and ignores digits past about the 16th. It turned
+   `3.5267435205148114`), so the error was ours. *Cause:* one line in the first version of
+   `clean.py`, which read each CSV as text with `pd.read_csv(path, dtype=str)` and then did
+   `score = pd.to_numeric(raw["DMS_score"], errors="coerce")`. That parser is not correctly
+   rounded and ignores digits past about the 16th. It turned
    `3.5267435205148114` into `3.526743520514811`, the neighbouring float, and
    `-0.00012111549999999999` (`HSP82_YEAST_Cote-Hammarlof_2020_growth-H2O2` F322A) into
    `-0.0001211154999999`. Measured against exact parsing, it got 3,124 scores in 95 assays
@@ -256,6 +258,12 @@ querying, plus a report in Parquet and Markdown (`results/data/`). ADR 0005 reco
    raw text with Python's correctly rounded `float()`, with underscores and padding rejected
    (`float()` accepts both) (`41f7fc4`). *Verified:* a regression test pins both examples, and
    all 696,311 processed scores equal the raw files' text exactly, with 0 differences.
+   *Attribution checked:* the line was fixed before the first commit, so `git show 41f7fc4^`
+   has no `clean.py` to recover it from. The code path was therefore rerun step by step on v1.3
+   instead. `read_csv(dtype=str)` keeps every score's text exactly (0 of 696,311 differ from
+   the file), the `pd.to_numeric` line alone produces exactly the 3,124 wrong values, and
+   `.astype(float)` on the same strings gets all of them right. pandas' default `read_csv` float
+   parsing has the same flaw (the same 3,124 wrong).
    *Lesson:* the first count (771) was itself wrong. Only measuring the parser against an
    exact reference gave the real size of the bug.
 2. **ProteinGym's fold files are not a safe source of scores or labels.** *Found:* the same
