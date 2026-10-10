@@ -35,9 +35,9 @@ single commit, `0742ede` (`chore: scaffold repository skeleton`).
 before it left no record.
 - *`.gitignore` anchor fix:* in `0742ede`, `.gitignore` already uses anchored patterns
   (`/data/`, `/outputs/`, `/work/`, …). The original problem and its fix happened before that
-  commit. **TODO (author): describe what was wrong and how it was found.**
+  commit. **TODO (author): The original .gitignore had a bare data/ rule that was ignoring src/mutascope/data/ and conf/data/. I noticed this when my source files weren't showing up in git status. I fixed it by anchoring the rule to /data/ and adding !/data/manifest.yaml.**
 - *Alternatives considered:* anything that was tried and dropped while setting up the tooling, and
-  any reasons beyond those written in ADR 0001. **TODO (author).**
+  any reasons beyond those written in ADR 0001. **TODO (author). Before settling on uv, I considered Poetry and pip-tools. Before ruff, I considered Black + isort + flake8. I chose uv and ruff because they're faster, modern, and reduce the number of tools I need to manage.**
 
 ---
 
@@ -81,7 +81,7 @@ upstream data, and they are listed in the config with their reasons rather than 
 - *Crash safety:* downloads go to `.part` files and extractions to `.tmp` directories, and are
   renamed only when complete and verified, so a file at its final path is always complete and
   verified.
-- *Fixed along the way:* a logging bug where cached loggers wrote to a closed stderr (`29145ed`,
+- *Fixed along the way:* a logging bug where cached loggers wrote to a closed stderr (`ee1809e`,
   with a regression test), and the Nextflow `test` profile now sets
   `data.structure_exceptions=null` so a 2-assay test subset does not trip the exceptions check.
 - *Tests run offline:* a mock HTTP server and zips built during the test keep `make test` fast and
