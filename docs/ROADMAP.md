@@ -47,7 +47,7 @@ Goal: one command turns the raw ProteinGym download into clean, validated, versi
 ### Outputs
 - [x] marimo EDA notebook (assay sizes, function types, score distributions, sequence lengths)
 - [x] Dataset card (`docs/DATA_CARD.md`)
-- [ ] Processed dataset published to the Hugging Face Hub (`mutascope data publish` stages it;
+- [x] Processed dataset published to the Hugging Face Hub (`mutascope data publish` stages it;
       `--push` waits for the card review, ADR 0008)
 
 Done when: `make pipeline` produces clean Parquet + structure features + 3Di; `make lint test` green; data card written.
