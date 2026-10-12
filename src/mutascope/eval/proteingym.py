@@ -16,7 +16,9 @@ from mutascope.data.db import literal
 RowSet = Literal["all", "single"]
 """``all``: every row ProteinGym scores (singles and multi-mutants), as on the leaderboard.
 ``single``: rows whose ``mutant`` has no ``:``. On the pinned release these are exactly the
-696,311 processed single mutants (same keys and labels)."""
+696,311 processed single mutants: same keys and ``DMS_score_bin``. ``DMS_score`` is the same
+number printed with different rounding in 3,297 rows of 82 assays (largest difference 3.7e-09),
+which can make or break a tie (ADR 0014)."""
 
 PRECOMPUTED_PREFIX = "proteingym:"
 """Model-name prefix for ProteinGym's precomputed scores in results, so they can never be

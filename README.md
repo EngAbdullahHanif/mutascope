@@ -22,19 +22,25 @@ Requires [uv](https://docs.astral.sh/uv/), Nextflow (Java 17+) and Foldseek (see
 
 ```
 DOWNLOAD -> [SUBSET] -> VALIDATE -> CLEAN, STRUCT_FEATURES, FOLDSEEK_3DI -> STRUCTURE_REPORT
-                                    CLEAN -> SCORE_ZERO_SHOT
+                                    CLEAN -> SCORE_ZERO_SHOT -> BENCHMARK_ZERO_SHOT
 ```
 
 - `make pipeline` runs on all 217 assays. The release is downloaded once into `data/raw/` and
   re-verified against `data/manifest.yaml` on every run. Outputs go to
   `data/processed/{variants,structure_features,three_di}/`, and reports (validation, cleaning,
   structure) go to `results/data/`.
-- `SCORE_ZERO_SHOT` scores every assay's single mutants with ESM-2 650M (`--model esm2_150m`
-  picks another `conf/model/` group) and writes `data/processed/zero_shot/<model>/`. It scores
-  only the positions each assay measures and is the long step: about 1.5 hours on an M4 Pro.
-  On a laptop, run it as `caffeinate -ims make pipeline` so the machine does not sleep.
+- `SCORE_ZERO_SHOT` scores every assay's single mutants, once per model and scoring method:
+  ESM-2 35M, 150M and 650M, each with the masked marginal and the wild-type marginal
+  (`--models esm2_650m --methods masked` narrows it). A score set is written to
+  `data/processed/zero_shot/<label>/`, where the label is the model name, plus `_wt` for the
+  wild-type marginal. Masked scoring covers only the positions each assay measures and is the
+  long step: about 1 h 41 min for 650M, 29 min for 150M and 19 min for 35M on an M4 Pro, against
+  under 30 s per model for the wild-type marginal. On a laptop, run it as `caffeinate -ims make pipeline` so the
+  machine does not sleep, and do not run anything else on the GPU meanwhile.
+- `BENCHMARK_ZERO_SHOT` turns each score set into `results/zero_shot_<label>_single.parquet`
+  (per assay) and `..._summary.parquet` (ProteinGym-style aggregates with bootstrap CIs).
 - `make pipeline-test` runs the same steps on 2 small assays, with the 30 MB `esm2_t6_8M`
-  model, and skips the 1.9 GB zero-shot archive. It writes only to `pipeline/results/`
+  model and both methods, and skips the 1.9 GB zero-shot archive. It writes only to `pipeline/results/`
   (gitignored), taking about 30 s from an empty cache. CI runs it on every push.
 
 ### Resuming an interrupted scoring run
@@ -43,7 +49,7 @@ Run the same command again. Every scored sequence is written to `data/cache/logp
 as it is finished, and that directory is outside Nextflow's work directory, so a rerun (with or
 without `-resume`) reads finished assays from disk and runs the model only for the rest. At most
 the one sequence in progress is lost, which is under 7 minutes of work. The command prints how
-many assays came from the cache, and `results/data/zero_shot_run_<model>.parquet` records
+many assays came from the cache, and `results/data/zero_shot_run_<label>.parquet` records
 `positions_computed` per assay (0 = read from the cache)
 ([ADR 0013](docs/adr/0013-benchmark-scoring-run.md)).
 
@@ -58,7 +64,25 @@ uv run mutascope eval model-gate \
 
 compares our scores with ProteinGym's precomputed `ESM2_650M` on the 696,311 single mutants
 (ADR 0010) and exits 1 if any assay has per-variant Spearman below 0.99 or the aggregate differs
-by more than 0.01. `make test-slow` runs the same check as a test.
+by more than 0.01. `make test-slow` runs the same check as a test. Add `model=esm2_35m` or
+`model=esm2_150m` (and their score directories) to gate the smaller checkpoints against
+`ESM2_35M` and `ESM2_150M`. The gate applies to masked marginals only: ProteinGym publishes no
+wild-type-marginal ESM-2 scores.
+
+### Experiment tracking
+
+Every `score zero-shot`, `eval zero-shot` and `eval model-gate` invocation logs one run to a
+local MLflow store, `mlruns/mlflow.db` plus `mlruns/artifacts/` (gitignored; no server and no
+account). A run holds the model name, Hub id and pinned revision, the scoring method, the git
+commit of the code, the full resolved config (`config.yaml`), the metrics, and the files the
+command wrote ([ADR 0014](docs/adr/0014-model-sizes-wt-marginal-tracking.md)).
+
+```bash
+make mlflow          # UI on http://127.0.0.1:5001
+```
+
+`tracking.enabled=false` turns it off, and `tracking.dir=<path>` moves the store. MLflow is the
+`tracking` extra, which `make setup` installs.
 
 Hydra overrides reach every command through `--hydra_overrides`, for example
 `nextflow run pipeline/main.nf -profile local --hydra_overrides 'structure.foldseek.threads=8'`.
