@@ -927,3 +927,199 @@ number is the same, 0.4125. This is the "model gate", and it passes. Decisions a
   The slow model-gate test takes about 10 s with the cache warm.
 - *Not done yet:* ESM-2 35M and 150M runs, the remaining 24,918 positions for website
   landscapes, SaProt, the ensemble, figures and experiment tracking.
+
+---
+
+## Entry 13 — ESM-2 35M and 150M, wild-type marginals, MLflow tracking (Phase 2, 2026-10-12)
+
+**Plain-language summary.** The two smaller ESM-2 models, 35M and 150M, have now scored the
+same 696,311 variants in 217 experiments that the 650M model scored in entry 12. All three
+models were also run with the quick scoring method, the "wild-type marginal", which reads every
+substitution from a single pass over the unchanged protein instead of one pass per position.
+That gives six sets of scores, and each was benchmarked in the same way. Bigger models are
+better (overall Spearman 0.311, 0.382 and 0.4125), and the quick method loses very little
+(0.303, 0.377 and 0.408) while taking seconds instead of 19 minutes to 1 hour 41 minutes. For
+all three models our masked scores rank the variants like the scores ProteinGym published
+(lowest Spearman in any experiment 0.9999999), so the model gate passes three times. Finally,
+every scoring, benchmark and gate run is now written to a local MLflow database, with the model,
+its pinned revision, the code version, the full configuration and the resulting numbers. It
+needs no server and no account, and `make mlflow` opens it in a browser. Decisions are in
+ADR 0014.
+
+**The 3 most important design choices.**
+
+1. **The scoring method is part of a score set's name, built in one function.** Results tables
+   have a `model` column and no method column, and the old directory and file names had only
+   the model in them, so a wild-type run would have overwritten the masked run of the same
+   checkpoint. `run_label` gives the masked marginal the bare model name (existing 650M files
+   keep theirs) and the wild-type marginal `<model>_wt`. Scores, reports, results and tracked
+   runs all use it, and the benchmark command refuses a score set whose label is not the one
+   the config names.
+2. **One command writes benchmark results, and tracking copies from them.** Until now only the
+   model gate wrote results, and it needs ProteinGym's scores for the same method, which do not
+   exist for the wild-type marginal. `mutascope eval zero-shot` benchmarks any score set against
+   the labels in the processed data; the gate only checks agreement. The numbers in MLflow are
+   read from the summary file the command has just written, so a tracked run and a results
+   file cannot disagree.
+3. **Tracking is local, one run per command, and tied to a commit.** The store is a SQLite file
+   and an artifact folder under `mlruns/`. Each run carries the pinned model revision, the
+   method, the whole resolved config and a `code_version` tag. The code was committed before
+   the final runs, so all 15 runs carry the clean commit `41bafb3` and none says `-dirty`. A
+   tracking failure fails the command, but only after its outputs are on disk.
+
+**Problems encountered and how they were solved.**
+
+1. **The 35M run died twice with "MPS backend out of memory".** *Found:* the first run stopped
+   at assay 42 after 9,199 positions, with "MPS allocated: 3.05 GiB, other allocations:
+   27.78 GiB". The test suite had been using the same GPU at that moment, and that was taken to
+   be the cause. It was not: the rerun, with nothing else on the GPU, read 41 assays from the
+   cache and died at assay 98 after another 9,166 positions (25.98 GiB of "other allocations").
+   Between the two, the 150M run had scored all 217 assays at a steady 3.4 GB. *Cause:* reproduced
+   without the cache on 14 targets (4,618 positions). With the 35M checkpoint the memory held
+   by the Metal driver grew from 1.31 to 8.62 GiB while PyTorch reported 0.13 GiB in use; the
+   8M checkpoint did the same (1.18 to 7.51 GiB). The 150M checkpoint stayed at 1.63 GiB over
+   all 14, and the 650M checkpoint at 4.11 GiB over the first six, which is where its output
+   was read. PyTorch keeps freed MPS buffers for reuse, and with the two small
+   checkpoints the buffers kept for each new sequence length were never released. Why only
+   those two is not known. *Fix:* the scorer calls `torch.mps.empty_cache()` after each
+   sequence. *Verified:* the same 14 targets stay at or below 0.67 GiB and take 83.1 s instead
+   of 81.1 s; a regression test with the 8M checkpoint goes from 1.27–2.75 GiB before the fix
+   to 0.10–0.32 GiB after it; the third 35M invocation scored the remaining 19,388 positions in
+   540 s without error, and the 35M gate passed. Each crash lost only the sequence in progress,
+   as designed in entry 12.
+2. **The regenerated 650M results were not identical to the committed ones.** *Found:* a check
+   that the new benchmark command reproduces the committed 650M results showed a largest
+   per-assay difference of 6.9e-06 where 0 was expected. *Cause:* the old results took their
+   labels from ProteinGym's zero-shot score files, the new ones from the processed DMS data,
+   and the two store `DMS_score` with different rounding: 3,297 of 696,311 labels differ, in 82
+   assays, by at most 3.7e-09. In `CCR5_HUMAN_Gill_2023` 122 labels differ by at most 2.2e-16,
+   which splits ties (955 distinct values in one file, 1,014 in the other) and moves that
+   assay's Spearman from 0.347414 to 0.347421. *Fix:* none to the numbers. The processed
+   variants are the label source from now on, because the supervised models train on them; the
+   docstring that claimed the two sources had the same labels was corrected. *Verified:* the
+   one assay is the only Spearman that changes, AUC, MCC and top recall are unchanged, the
+   aggregate moves from 0.4125268 to 0.4125269, and the gate table is bit-identical.
+3. **MLflow's default local store no longer works, and its artifacts would have gone to the
+   wrong place.** *Found:* a probe before writing the tracking code. MLflow 3.17.0 raised "The
+   filesystem tracking backend (e.g., './mlruns') is in maintenance mode" for a file store, and
+   with a SQLite store it wrote artifacts to `./mlruns` of the current directory, which under
+   Nextflow is a throwaway work directory. *Fix:* a SQLite store with an explicit artifact
+   location, both under `tracking.dir`, which Nextflow passes as an absolute path. *Verified:*
+   a test logs runs from another working directory and requires that directory to stay empty;
+   after the full pipeline run all 15 runs and their artifacts are under `mlruns/`.
+
+**Supporting details.**
+- *Results* (ProteinGym v1.3, single mutants, zero-shot, 95% bootstrap CI). Masked: 35M
+  Spearman 0.3113 [0.285, 0.338], 150M 0.3820 [0.358, 0.408], 650M 0.4125 [0.389, 0.441].
+  Wild-type: 35M 0.3028 [0.277, 0.329], 150M 0.3772 [0.354, 0.403], 650M 0.4078 [0.386, 0.436].
+  The other four metrics are in ADR 0014.
+- *Model time* (M4 Pro, MPS, from the cache log). Masked, 37,753 positions: 35M 1,119 s in
+  three invocations (335 s, 244 s and 540 s; the first shared the GPU with the test suite),
+  150M 1,718 s, 650M 6,081 s (entry 12). Wild-type, 62,671 positions: 7.7 s, 8.7 s and 24.5 s.
+- *Model gate:* lowest per-assay Spearman 0.99999996 (35M), 0.99999991 (150M) and 0.99999996
+  (650M); largest score difference 1.33e-04, 2.04e-04 and 2.35e-04; aggregates equal to
+  ProteinGym's to four decimals (0.3113, 0.3820, 0.4125).
+- *Wild-type against masked,* per assay, same checkpoint: median Spearman 0.983, 0.986 and
+  0.985; lowest 0.930, 0.923 and 0.834.
+- *The final run:* `caffeinate -ims make pipeline`, 18 tasks in about 11 minutes, of which 9
+  minutes were the 35M masked scoring; the other five score sets came from the cache. Then
+  `mutascope eval model-gate` three times.
+- *Run reports:* a rerun on a warm cache writes a report with `positions_computed = 0`. The
+  reports committed in `results/data/` are those of the invocations that ran the model: 650M
+  from entry 12, 150M and the three wild-type runs from their first run earlier in this
+  session, 35M from the final pipeline run (its third invocation).
+- *Dependencies:* `mlflow` 3.17.0, the latest release on PyPI, as the optional `tracking`
+  extra, so the serving image does not install it.
+- *Tests:* 9 new fast tests (317 passing, 1 skipped without Foldseek on `PATH`; `make test`
+  about 33 s) and 2 new slow cases (6 passing in 219 s).
+- *A wrong number in a commit message:* commit `ee825b1` says the 35M runs died "after about
+  11,000 positions". The cache log gives 9,199 and 9,166. The message was left as it is,
+  because the tracked runs refer to the commit that follows it.
+- *Noticed, not fixed:* `test_undefined_metrics_are_nan_and_logged` fails when it runs after a
+  CLI test in the same process (the CLI reconfigures logging). In the default order it runs
+  first and passes.
+- *Not done yet:* the remaining positions for website landscapes, SaProt, the ensemble and the
+  figures (model size, fast vs masked).
+
+---
+
+## Entry 14 — Order-independent tests and paired model comparisons (Phase 2, 2026-10-12)
+
+**Plain-language summary.** Two loose ends from entry 13 are closed. First, one test passed or
+failed depending on which tests ran before it. The cause was in the logging setup, not in the
+test: once a part of the program had written a log line, it kept using the logging settings of
+that moment and ignored any later change. That is fixed, and the test suite now runs in a
+different random order every time, so a test that leans on another one is found quickly.
+Second, entry 13 could not say whether the quick scoring method is really worse than the slow
+one, because the two error bars overlapped. Those error bars were the wrong tool. Two models
+scored on the same 217 experiments rise and fall together from one experiment to the next, and
+that shared variation fills most of each error bar. The new comparison resamples the
+experiments once and applies the same draw to both models, so the shared variation cancels and
+only the difference is left. With it, every size step and every masked-versus-quick difference
+is clearly above zero on Spearman. Decisions are in ADR 0014, decision 13.
+
+**The 3 most important design choices.**
+
+1. **The logging fix is in the program, not in the tests.** Loggers are no longer cached on
+   first use, so every log call follows the current configuration. A test-side reset could not
+   have worked: a cached logger keeps its old settings even after structlog is reset. The
+   cost is building the logger on each call, microseconds for a few lines per assay.
+2. **The paired bootstrap reuses the existing resampling and aggregation.** `bootstrap_ci` and
+   `paired_bootstrap` draw their resamples from one function (stratified by function type) and
+   aggregate with one routine (per UniProt ID, per function type, overall). A paired and an
+   unpaired interval can therefore differ only in what is being estimated. Regenerating the
+   650M summary after the refactor gave a bit-identical file.
+3. **Comparisons are a results file, produced by one command from a list in the config.**
+   `mutascope eval compare` reads `eval.comparisons`, starts every pair from the same seed (so
+   a pair's numbers do not depend on which other pairs are listed), and writes
+   `results/zero_shot/comparisons.parquet`. Figures read that file. CLAUDE.md now forbids
+   judging a difference from two separate CIs.
+
+**Problems encountered and how they were solved.**
+
+1. **A test failed only after two CLI tests had run in the same process.** *Found:* in entry
+   13, by running `test_cli_eval.py` before `test_benchmark.py`:
+   `test_undefined_metrics_are_nan_and_logged` captured 0 warnings instead of 4. *Cause:* the
+   first guess, that a cached logger is invisible to `capture_logs`, was wrong: `capture_logs`
+   edits the configured processor list in place, and a logger cached under that same
+   configuration is captured (1 of 1 in a direct check). The failure needs a second
+   `configure_logging` call, which every CLI invocation makes. It installs a new processor
+   list, and a logger cached earlier keeps the old one (0 of 1 captured; a logger created
+   afterwards, 1 of 1). One CLI test before the failing test is not enough; two are. The same
+   state made a later `--log-json` a no-op for loggers already used. *Fix:*
+   `cache_logger_on_first_use=False`. *Verified:* two new tests in `tests/test_logging.py` fail
+   without the fix and pass with it. With `pytest-randomly`, the fast suite passed under seeds
+   1, 20261012, 314159, 987654321 and 4242 (319 passed, 1 skipped each). With the fix
+   reverted, two of those five orders (314159 and 4242) reproduced the original failure in
+   `tests/eval`.
+2. **A sentence written from memory about the results was wrong.** *Found:* while checking the
+   ADR text against the data. The draft said the separate CIs of the two score sets overlap
+   "in every one of the five pairs". They overlap in four: 150M (0.358 to 0.408) and 35M (0.285
+   to 0.338) do not. *Fix:* the sentence now says four of five. *Verified:* a script compares
+   the two intervals for each pair from the summary files.
+
+**Supporting details.**
+- *Paired comparisons* (Spearman, overall, A − B, 95% paired CI, 10,000 resamples, seed 0,
+  217 assays): 150M − 35M +0.0707 [+0.0589, +0.0840]; 650M − 150M +0.0306 [+0.0225, +0.0405];
+  masked − wild-type +0.0085 [+0.0061, +0.0107] for 35M, +0.0048 [+0.0022, +0.0070] for 150M
+  and +0.0047 [+0.0007, +0.0079] for 650M. The first four are positive in all 10,000
+  resamples, the last in 99.0%.
+- *How much pairing narrows the interval:* the paired interval of 650M masked against
+  wild-type is 0.0073 wide; the unpaired intervals of the two score sets are 0.0515 and 0.0502
+  wide.
+- *Not every difference is clear.* On top-10% recall the wild-type marginal is not worse at
+  35M (−0.0032 [−0.0082, +0.0033]) or 150M (−0.0023 [−0.0045, +0.0004]). On Spearman by
+  function type, 650M against 150M is not clear for Binding (+0.028 [−0.002, +0.059], 13
+  assays), Expression or Stability. The intervals are not corrected for the number of
+  comparisons (150 rows in the file).
+- *Checked:* `mlruns/` is ignored (`/mlruns/` in `.gitignore`, no file tracked). The CI
+  pipeline job runs `make pipeline-test`, whose `test` profile sets `models = ['esm2_8m']`;
+  the fast tests load only the 8M checkpoint.
+- *Dependencies:* `pytest-randomly` 5.0.0, the latest release on PyPI, in the dev group. A
+  failing order is rerun with `-p randomly --randomly-seed=<seed>`; the seed is printed at the
+  top of every run.
+- *Tests:* 2 new in the first commit and 7 in the second (326 passing, 1 skipped without
+  Foldseek on `PATH`; `make test` about 34 s). All 6 slow tests pass in 223 s.
+- *Not done yet:* `eval compare` is a command, not a Nextflow step; it joins the pipeline with
+  the figures. One of the five seeded runs took 189 s instead of about 35 s for a reason that
+  was not looked into; the others, and every run since, took 34 to 53 s.

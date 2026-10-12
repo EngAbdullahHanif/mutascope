@@ -14,7 +14,8 @@ precomputed scores in every assay, and our aggregate is within ±0.01 of the agg
 harness computes from their scores on the same rows. It scores all 217 assays through the same
 function as ``mutascope score zero-shot``, with the configured cache: after ``make pipeline``
 every sequence is a cache hit and the test takes about a minute; on an empty cache it runs the
-650M model for hours.
+650M model for hours. ADR 0010's gate is the 650M checkpoint; the same check also runs for the
+35M and 150M checkpoints against ``ESM2_35M`` and ``ESM2_150M`` (ADR 0014), with the same limits.
 """
 
 from pathlib import Path
@@ -157,32 +158,38 @@ def test_aggregation_of_published_values_is_exact(metric: str, reference: pd.Dat
 VARIANTS_DIR = Path(_cfg.data.processed_dir) / "variants"
 
 
+GATED_MODELS = {"esm2_650m": "ESM2_650M", "esm2_150m": "ESM2_150M", "esm2_35m": "ESM2_35M"}
+"""Our model config -> ProteinGym's precomputed column. The first is ADR 0010's gate."""
+
+
 @pytest.mark.slow
 @needs_release
 @pytest.mark.skipif(
     not VARIANTS_DIR.is_dir(), reason="needs the processed variants (`make pipeline`)"
 )
-def test_esm2_650m_matches_proteingym_scores_on_single_mutants(
-    reference: pd.DataFrame, tmp_path: Path
+@pytest.mark.parametrize("model", list(GATED_MODELS))
+def test_esm2_matches_proteingym_scores_on_single_mutants(
+    model: str, reference: pd.DataFrame, tmp_path: Path
 ) -> None:
     """The model gate (ADR 0010), on all 696,311 single mutants of the 217 assays."""
-    assert str(_cfg.model.name) == "esm2_650m"
-    column = str(_cfg.model.proteingym_column)
-    assert column == "ESM2_650M"
+    assert str(_cfg.model.name) == "esm2_650m"  # the default model is the one ADR 0010 gates
+    cfg = load_config(CONF, [f"model={model}"])
+    column = str(cfg.model.proteingym_column)
+    assert column == GATED_MODELS[model]
     scorer = build_scorer(
-        as_str_dict(OmegaConf.to_container(_cfg.model, resolve=True), "model"),
-        device=str(_cfg.scoring.device),
-        cache_dir=Path(_cfg.scoring.cache_dir),
+        as_str_dict(OmegaConf.to_container(cfg.model, resolve=True), "model"),
+        device=str(cfg.scoring.device),
+        cache_dir=Path(cfg.scoring.cache_dir),
     )
     regions = scoring_regions(
-        reference, "benchmark", [str(a) for a in _cfg.eval.scoring_region.msa_region_assays]
+        reference, "benchmark", [str(a) for a in cfg.eval.scoring_region.msa_region_assays]
     )
     score_assays(scorer, reference, VARIANTS_DIR, regions, tmp_path / "scores")
     theirs = load_precomputed_scores(SCORES_DIR, [column], "single")
     joined = join_scores(load_scores(tmp_path / "scores"), theirs, column)
     thresholds = GateThresholds(
-        float(_cfg.eval.model_gate.min_assay_spearman),
-        float(_cfg.eval.model_gate.aggregate_tolerance),
+        float(cfg.eval.model_gate.min_assay_spearman),
+        float(cfg.eval.model_gate.aggregate_tolerance),
     )
     assert (thresholds.min_assay_spearman, thresholds.aggregate_tolerance) == (0.99, 0.01)
     gate = model_gate(joined, reference, thresholds)

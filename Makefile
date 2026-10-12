@@ -2,7 +2,7 @@
 
 export PYTORCH_ENABLE_MPS_FALLBACK := 1
 
-.PHONY: setup lint fmt test test-slow pipeline pipeline-test api web types
+.PHONY: setup lint fmt test test-slow pipeline pipeline-test mlflow api web types
 
 setup:
 	uv sync --all-extras
@@ -32,6 +32,10 @@ pipeline:
 # Native uv env until the Docker image exists (Phase 4); see docs/adr/0007.
 pipeline-test:
 	nextflow run pipeline/main.nf -profile local,test
+
+# Local MLflow UI over the tracking store (conf/tracking; ADR 0014). 5001: macOS uses 5000.
+mlflow:
+	uv run mlflow ui --backend-store-uri sqlite:///mlruns/mlflow.db --port 5001
 
 api:
 	uv run uvicorn api.app.main:app --reload --port 7860

@@ -61,19 +61,21 @@ Goal: several pretrained models score every mutation; our numbers reproduce the 
 ### Scorers
 - [x] `Scorer` protocol (`scoring/base.py`) returning `(L, 20)` landscapes in `AA_ORDER`; registry
 - [x] ESM-2 35M / 150M / 650M via Hugging Face `transformers`, pinned revisions (ADR 0012;
-      650M scored on all 217 assays at measured positions, ADR 0013; 35M and 150M not yet run)
+      all three scored on all 217 assays at measured positions, ADR 0013 and 0014)
 - [ ] SaProt 650M (AF2): combined AA + 3Di tokens, `#` where pLDDT < 70; scoring ported from the official repo
 - [ ] [stretch] ESM-1v ensemble; ESM C 300M (check licence first)
 
 ### Scoring methods
 - [x] Masked marginal: one masked pass per position, batched 16–32, `torch.inference_mode()`, float32 on MPS
-- [x] Wild-type marginal (`fast=True`): one unmasked pass
+- [x] Wild-type marginal (`fast=True`): one unmasked pass (all three sizes scored on all assays as
+      `<model>_wt` score sets, 8–24 s of model time each; ADR 0014)
 - [x] Sliding windows for L > 1022; each position from its most central window
 - [x] Disk cache keyed by `sha256(model_id + revision + sequence + struct_tokens + method + region)`
 - [x] Benchmark scoring region: MSA region where it is not the full target (5 assays, derived and
       checked against `conf/eval/scoring_region.yaml`); website landscapes use the full target (ADR 0012)
 - [x] Benchmark run: `mutascope score zero-shot` + Nextflow `SCORE_ZERO_SHOT`, measured positions
-      only, resumable from the cache (ADR 0013; 650M: 37,753 positions in 1 h 41 min on MPS)
+      only, resumable from the cache (ADR 0013; 37,753 positions on MPS: 650M 1 h 41 min,
+      150M 29 min, 35M 19 min), once per model and method, then `BENCHMARK_ZERO_SHOT` (ADR 0014)
 - [ ] Full masked landscapes at every position (the remaining 24,918 residues of the benchmark
       entries, plus the full targets of the five MSA-region assays); fills the same cache entries
 - [ ] Ensemble: per-assay z-score, then mean
@@ -89,9 +91,15 @@ Goal: several pretrained models score every mutation; our numbers reproduce the 
   - [x] Model gate (`slow`): our ESM-2 650M vs their `ESM2_650M` on single mutants, per-variant
         Spearman ≥ 0.99 in every assay, and single-mutant aggregate within ±0.01 of theirs
         computed by the same harness (passed: lowest assay 0.99999996, aggregate 0.4125 vs 0.4125)
-- [ ] Results in `results/*.parquet` (long format); MLflow or W&B tracking
-      (results files done for ProteinGym's precomputed scores and our ESM-2 650M; tracking not started)
-- [ ] Figures: model size vs Spearman, per-function-type bars, ensemble gain, fast vs masked marginal
+  - [x] The same check for 35M and 150M against `ESM2_35M` and `ESM2_150M` (ADR 0014; passed:
+        lowest assay 0.99999996 and 0.99999991, aggregates 0.3113 and 0.3820, equal to theirs)
+- [x] Results in `results/*.parquet` (long format) for ESM-2 35M / 150M / 650M, masked and
+      wild-type marginal; MLflow tracking of every scoring, benchmark and gate run, local SQLite
+      store (ADR 0014). SaProt and the ensemble add their results when they land
+- [x] Paired bootstrap for model comparisons (`mutascope eval compare`, ADR 0014): 150M vs 35M,
+      650M vs 150M, masked vs wild-type per size, in `results/zero_shot/comparisons.parquet`
+- [ ] Figures: model size vs Spearman, per-function-type bars, ensemble gain, fast vs masked marginal.
+      Any comparison between score sets uses the paired CIs from `comparisons.parquet`
 
 Done when: full landscapes for all assays from ESM-2 (3 sizes) + SaProt; harness and model gates pass; figures generated.
 
