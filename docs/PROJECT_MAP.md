@@ -27,7 +27,7 @@ and exclude merge commits.
 | `.pre-commit-config.yaml` | Whitespace/YAML/TOML hooks + ruff and pyright from the uv env | Checks on every commit; fixtures excluded in step 5 |
 | `.gitignore` | Ignores envs, data, Nextflow output | Data never committed; changed in step 2 to version the manifest |
 | `tests/test_smoke.py` | Package imports, CLI runs | Install sanity check |
-| `tests/test_reproduction.py` | `slow` placeholder for the ESM-2 650M reproduction gate | Implemented in Phase 2 |
+| `tests/test_reproduction.py` | Placeholders for the harness and model reproduction gates | Implemented in Phase 2; split in two by ADR 0010 |
 | `api/tests/test_health.py` | `/health` via httpx AsyncClient | API smoke test |
 | `CLAUDE.md` | Project rules for Claude Code | Updated in steps 6 and 8 |
 | `README.md` | Project overview and quick start | Extended in steps 5, 6 and 7 |
@@ -217,3 +217,20 @@ and exclude merge commits.
 - **CLI commands added:** none.
 - **Outputs:** none in the repository. `54f6ef0` marks the dataset as published to the Hub; the
   repo id is not recorded in the repository.
+
+## Step 9 — Hub repo id and split reproduction gate (before Phase 2, 2026-10-12)
+
+- **What this step did:** record the published Hub repo id, and split the reproduction gate into
+  a harness gate and a model gate (ADR 0010).
+- **Files created or modified:**
+
+| Path | What it does | Why it exists |
+|---|---|---|
+| `docs/DATA_CARD.md`, `README.md`, `conf/publish/hub.yaml` | Name `engAbdullahHanif/mutascope-proteingym-v1.3` | The card's loading examples had a placeholder |
+| `tests/export/test_hub.py` | Push-guard test clears `publish.repo_id` | The config default is no longer `null` |
+| `docs/adr/0010-split-reproduction-gate.md` | Harness gate vs model gate, with the evidence | The leaderboard includes multi-mutants; v1 data does not |
+| `CLAUDE.md`, `docs/ROADMAP.md`, `tests/test_reproduction.py` | Gate definition, checklist and placeholders follow ADR 0010 | Keep rules, plan and tests in step |
+| `docs/BUILD_LOG.md` | Entry 9 | Created in step 2 |
+
+- **CLI commands added:** none.
+- **Outputs:** re-staged `build/hf_dataset/` (only `README.md` and `SHA256SUMS` differ from the Hub).

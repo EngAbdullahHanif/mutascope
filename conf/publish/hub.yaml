@@ -1,9 +1,9 @@
 # Publishing the processed dataset to the Hugging Face Hub (`mutascope data publish`).
 # Staging is the default and touches nothing remote; `--push` uploads the staged folder.
 
-# Target dataset repo, "<user or org>/<name>". Required only with --push, e.g. on the command line:
-#   mutascope data publish --push publish.repo_id=<user>/mutascope-proteingym-v1.3
-repo_id: null
+# Target dataset repo, "<user or org>/<name>"; used only with --push. Published (public) since
+# 2026-10-11 at https://huggingface.co/datasets/engAbdullahHanif/mutascope-proteingym-v1.3.
+repo_id: engAbdullahHanif/mutascope-proteingym-v1.3
 # New repos are created private, so the upload can be checked on the Hub before going public.
 # An existing repo's visibility is never changed by the upload.
 private: true

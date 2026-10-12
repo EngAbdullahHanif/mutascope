@@ -594,3 +594,56 @@ page for the exact tag before pinning any action, image, binary or package versi
 - *State at close:* `make pipeline` 42 s (download cached), `make pipeline-test` 32 s (empty
   cache), 185 tests passing (1 skipped without Foldseek) in about 10 s, 97% line coverage.
 - *Open items:* the `docker` pipeline profile and the Hub upload.
+
+---
+
+## Entry 9 — Hub repo id and the split reproduction gate (before Phase 2, 2026-10-12)
+
+**Plain-language summary.** Two fixes before Phase 2 starts. First, the dataset card's loading
+examples still used a `<repo_id>` placeholder. They now name the published Hub repo,
+`engAbdullahHanif/mutascope-proteingym-v1.3`, which is also recorded as `publish.repo_id` in
+`conf/publish/hub.yaml` and linked from the README. The card was re-staged so it can be pushed on
+its own. Second, the reproduction gate compared a single-mutant score with ProteinGym's
+leaderboard number, which is computed over single and multi-mutants. ADR 0010 splits it in two.
+The *harness gate* checks our metrics and aggregation code against the published 0.414 using
+ProteinGym's own precomputed scores on all rows. The *model gate* checks our ESM-2 650M against
+those precomputed scores on single mutants only. CLAUDE.md, the roadmap and the placeholder tests
+follow the new definition.
+
+**The 3 most important design choices.**
+
+1. **Test the harness and the model separately.** If a single number fails, it cannot say
+   whether the metrics code or the scoring model is wrong. The harness gate uses ProteinGym's
+   scores, so the model cannot be the cause, and the model gate uses our harness on both sides,
+   so the harness cannot be the cause.
+2. **Compute the model gate's reference at test time.** "Within ±0.01 of theirs" uses the
+   aggregate our harness computes from ProteinGym's precomputed scores on the same 696,311 single
+   mutants (0.4125 today), not a hard-coded value. The comparison stays like-for-like if the row
+   set ever changes.
+3. **Per-assay agreement, not only an aggregate.** Spearman ≥ 0.99 between our scores and theirs
+   in every assay catches model bugs that an average can hide. The scratch check below shows how
+   much an average hides.
+
+**Problems encountered and how they were solved.**
+
+1. *The old gate could pass by coincidence.* Found by computing both aggregates from ProteinGym's
+   precomputed `ESM2_650M` scores with a scratch script (per UniProt ID, then per function type,
+   then overall). All 2,465,767 rows give 0.4137, matching the published 0.414, and per-assay
+   values match ProteinGym's DMS-level file within 0.0005. The 696,311 single mutants give
+   0.4125. The overall gap is only 0.0012, but all 69 multi-mutant assays change: 26 rise, 43
+   fall and 28 move by more than 0.1. The extremes are `SPG1_STRSG_Wu_2016` (0.128 → 0.551) and
+   `HIS7_YEAST_Pokusaeva_2019` (0.411 → 0.028). Fixed by the gate split in ADR 0010. The numbers
+   were verified by rerunning the script. The real harness is still to be written in Phase 2.
+2. *Setting a default `repo_id` would have made a test push for real.* `test_push_needs_a_repo_id`
+   relied on the config default being `null`. With the real repo id as the default, `--push`
+   would have passed the guard and called the real `HfApi`. Found by reading the test before
+   changing the config. The test now passes `publish.repo_id=null` explicitly, and
+   `tests/export/test_hub.py` passes (7 tests).
+
+**Supporting details.**
+- *Re-staged card:* compared with the Hub's `SHA256SUMS`, only `README.md` changed (and so its
+  checksum line). All four Parquet tables, the reports and `provenance.json` are byte-identical,
+  so the upload is limited to `README.md` and `SHA256SUMS`.
+- *Not changed:* `conf/data/proteingym.yaml` pins and the ±0.01 tolerance. The new per-assay
+  threshold (0.99) and the harness tolerance (|Δ| ≤ 0.0005, the published value's rounding) are
+  in ADR 0010.
