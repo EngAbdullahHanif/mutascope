@@ -1234,3 +1234,102 @@ for the ProteinGym maintainers is drafted but not sent. The decisions are in ADR
   scorer but is not benchmarked and has nothing upstream to be checked against. `SaProt_35M_AF2`
   was not scored or checked for the same two errors. Full-target SaProt landscapes for the
   website are not built.
+
+---
+
+## Entry 16 — Z-score ensemble and the Phase 2 figures (Phase 2, 2026-10-13)
+
+**Plain-language summary.** MutaScope now combines its two best models. ESM-2 650M reads the
+sequence and SaProt also reads the structure, and their scores are not on the same scale, so
+they cannot simply be added. Within each experiment, each model's scores are first rescaled to
+have mean 0 and spread 1 (a z-score), and the two rescaled scores are averaged. No model runs
+for this: the ensemble is built in seconds from the scores already on disk, for the 213
+experiments both models scored. The result is honest rather than exciting. The ensemble's
+overall Spearman is 0.4663, clearly better than ESM-2 650M (0.4144; paired difference +0.0519,
+95% interval +0.0419 to +0.0615) but not shown to be better than SaProt alone (0.4600;
++0.0063, interval −0.0018 to +0.0145, which includes zero). It helps clearly in one of the
+five function types, OrganismalFitness. The task also produced the four Phase 2 figures, as
+SVG and PNG in `results/figures/`: model size against Spearman, bars per function type, the
+ensemble's gain, and the fast (wild-type) against the masked marginal. Every number in them is
+read from a results file; the drawing code computes nothing. The decisions are in ADR 0016.
+
+**The 3 most important design choices.**
+
+1. **The combination rule was fixed in advance and kept when another one scored higher.** The
+   task specified per-assay z-score, then mean. A side check of two other rules on the same
+   213 assays gave 0.4735 for the mean of raw scores and 0.4627 for the mean of percentile
+   ranks, against 0.4663 for the z-score mean. Switching to the raw mean because it scored
+   higher would be choosing the method on the test data, so the rule stayed, the check is
+   written down in ADR 0016 as an ad hoc number without a CI, and CLAUDE.md now says not to
+   change the rule for that reason. The case for standardising is the data: within an assay
+   SaProt's score spread is between 0.50 and 3.43 times ESM-2's (median 1.04), so a raw mean
+   weights the members differently in every assay.
+2. **The ensemble is a score set like any other, built from written scores on the shared
+   assays.** It is a model config with `members`, each a model and a method, named through
+   `run_label`. `mutascope score ensemble` writes it in the score schema, and the existing
+   `mutascope eval zero-shot` benchmarks it, so there is still one writer of benchmark results
+   and the paired comparison needed no new code. It exists only where every member has scores:
+   a member may lack an assay only if it is a documented structure exception, and the members
+   must hold exactly the same variants. Its tracked runs record both members' pinned revisions.
+3. **Figure code computes nothing, and the two kinds of interval look different.** A missing
+   value or an uncompared pair stops the command with a message naming the config entry to
+   add. To draw ESM-2, SaProt and the ensemble side by side, `mutascope eval shared` first
+   writes each one's summary on the 213 shared assays (SaProt's rows come out identical to its
+   own summary file, which checks the command). A score set's own CI is a grey whisker with a
+   note that it does not compare score sets; a paired CI is a coloured line around the
+   difference, with a filled marker when it excludes zero. The ensemble gain and the fast
+   against masked comparison are drawn only as paired differences.
+
+**Problems encountered and how they were solved.**
+
+1. **The commit hook rewrote the figures.** *Found:* the commit of the results failed; the
+   trailing-whitespace hook reported "Fixing" all four SVG files. *Cause:* matplotlib ends many
+   SVG lines with a space (1,393 of the 2,279 lines of `model_size_vs_spearman.svg`). The hook
+   removes them, so the committed file would not have been the file the command wrote, and
+   every later redraw would have shown as a change. *Fix:* `save_figure` removes trailing
+   whitespace itself before writing (commit `719c395`). *Verified:* the raw output with the
+   spaces removed is equal to the new file; the four SVGs parse as XML; redrawing after the
+   commit leaves `git status` clean; a test asserts no line ends in whitespace and that two
+   draws are byte-identical.
+2. **Three layout faults in the first drawings.** *Found:* by opening the PNGs. The row label
+   "Organismal fitness (n = 77)" was cut off at the left edge, the x tick labels of the
+   three-panel figure ran into each other, and a difference of −0.00008 was printed as
+   "−0.000". *Fix:* a wider left margin, at most five ticks per panel, and "0.000" for a value
+   that rounds to zero. *Verified:* by opening the redrawn files.
+3. **A new test depended on a lucky draw.** *Found:* it failed on its first run. The test
+   meant to show that a raw mean follows the member with the larger scores while the z-score
+   mean does not, using two random vectors of four values; with that seed the two rankings
+   happened to coincide. *Fix:* fixed vectors (1, 2, 3, 5 and 2, 1, 4, 3) for which the
+   rankings differ by construction.
+
+**Supporting details.**
+- *Ensemble (213 assays, 665,793 single mutants):* Spearman 0.4663 [0.4467, 0.4902], AUC
+  0.7616, MCC 0.3657 (212 assays each), NDCG@10% 0.7777, top-10% recall 0.2137.
+- *Against SaProt by function type (paired, Spearman):* OrganismalFitness +0.0295 [+0.0202,
+  +0.0403], the only clear one; Activity +0.0082 [−0.0030, +0.0219]; Binding +0.0038
+  [−0.0276, +0.0313]; Expression −0.0100 [−0.0253, +0.0070]; Stability −0.0001 [−0.0119,
+  +0.0112]. Overall on the other metrics: MCC +0.0076 [+0.0004, +0.0141]; AUC, NDCG and
+  top-10% recall include zero. Against ESM-2 650M the gain is clear in every function type.
+  Not corrected for the number of comparisons.
+- *Per assay:* the ensemble is above both members in 97 of 213 assays, above SaProt in 131,
+  above ESM-2 in 177, below both in 2. The two members' scores have a median per-assay
+  Spearman of 0.80 with each other (lowest 0.16).
+- *Fast against masked (217 assays, from entry 14's comparisons):* the figure adds the
+  function types. The masked marginal's advantage is not clear for Binding at any size, nor
+  for Expression at 150M and 650M, nor for Stability at 650M (−0.0012 [−0.0058, +0.0039]).
+- *Files:* `comparisons.parquet` now has 240 rows (8 pairs; the first 180 are unchanged, which
+  was checked against the previous file). `shared_summary.parquet` has 90 rows.
+- *Dependency:* matplotlib, as the new optional extra `figures`. It was already installed as a
+  dependency of MLflow; Altair, used by the EDA notebook, needs another package to write SVG
+  or PNG.
+- *Tracking:* four runs (score, benchmark, compare, shared summary) with `code_version`
+  `ff03678`. The figure command is not tracked: it evaluates nothing.
+- *Tests:* 16 new fast test cases (13 new tests, and the generic "takes Hydra overrides" check
+  now covers the three new commands): 371 passing, 1 skipped, about 39 s. `make lint` clean.
+  No slow test was added or run; no model code changed.
+- *Not done yet:* the five commands (`score ensemble`, `eval zero-shot`, `eval compare`,
+  `eval shared`, `eval figures`) are not Nextflow processes; the two-assay test profile cannot
+  fill a figure with five function types. The raw-mean ensemble has no paired comparison, and
+  by the author's decision it will not get one: the z-score rule stands. The ensemble is defined per assay and has
+  no landscape for the website. Full masked landscapes at every position (the other open
+  Phase 2 item) are untouched.
