@@ -9,6 +9,9 @@ Both the point estimate and the bootstrap use one routine, :func:`_weighted_aggr
 which each assay carries a weight: 1 for the point estimate, its draw count in a bootstrap
 resample. A resample is then just another weight vector, so 10,000 resamples are a few matrix
 products rather than 10,000 pandas group-bys, and the two can never disagree on the protocol.
+
+:func:`paired_bootstrap` compares two score sets: one set of resampled assays is applied to
+both, and the CI is of the difference of their aggregates (ADR 0014).
 """
 
 from dataclasses import dataclass
@@ -108,28 +111,125 @@ def bootstrap_ci(
     Assays with an undefined (NaN) metric are left out before resampling, consistent with the
     point estimate.
     """
-    defined = ~np.isnan(values)
-    weights = np.zeros((n_resamples, values.size))
+    weights = _resample_weights(~np.isnan(values), groups, n_resamples, rng)
+    overall, by_function = _weighted_aggregate(weights, values, groups)
+    return BootstrapCI(
+        overall=_interval(overall, confidence),
+        by_function={
+            f: _interval(by_function[:, i], confidence) for i, f in enumerate(groups.functions)
+        },
+    )
+
+
+@dataclass(frozen=True)
+class Difference:
+    """A paired difference ``A - B`` of one aggregate, with its bootstrap summary."""
+
+    value_a: float
+    value_b: float
+    ci: tuple[float, float]
+    """Percentile CI of the difference."""
+    share_a_better: float
+    """Share of resamples in which A's aggregate is strictly greater than B's."""
+
+    @property
+    def diff(self) -> float:
+        return self.value_a - self.value_b
+
+
+@dataclass(frozen=True)
+class PairedDifference:
+    """Paired bootstrap of ``A - B``, overall and per function type."""
+
+    overall: Difference
+    by_function: dict[str, Difference]
+    n_assays: int
+    """Assays with a defined value for both A and B (the only ones used)."""
+    n_by_function: dict[str, int]
+
+
+def paired_bootstrap(
+    values_a: npt.NDArray[np.float64],
+    values_b: npt.NDArray[np.float64],
+    groups: AssayGroups,
+    *,
+    n_resamples: int,
+    confidence: float,
+    rng: np.random.Generator,
+) -> PairedDifference:
+    """Paired bootstrap of the difference between two score sets' ProteinGym aggregates.
+
+    Two models scored on the same assays are strongly correlated: an assay that is hard for
+    one is hard for the other. Their separate CIs (:func:`bootstrap_ci`) are dominated by that
+    shared assay-to-assay spread and overlap even when one model wins on almost every assay.
+    Here every resample draws one set of assays (stratified by function type, as in
+    :func:`bootstrap_ci`) and applies it to both, so the shared spread cancels in ``A - B``.
+    Each resample recomputes the full hierarchical aggregate of both.
+
+    An assay counts only if its value is defined for both; it is left out of both otherwise,
+    so the two aggregates are always over the same assays.
+
+    Args:
+        values_a: Per-assay metric of A, in ``groups.assay_ids`` order.
+        values_b: The same for B.
+        groups: Assay grouping.
+        n_resamples: Bootstrap resamples.
+        confidence: CI level, e.g. 0.95.
+        rng: Seeded generator.
+    """
+    if values_a.shape != values_b.shape:
+        raise ValueError("A and B must have one value per assay, in the same order")
+    paired = ~(np.isnan(values_a) | np.isnan(values_b))
+    a = np.where(paired, values_a, np.nan)
+    b = np.where(paired, values_b, np.nan)
+    point_a, point_b = aggregate(a, groups), aggregate(b, groups)
+    weights = _resample_weights(paired, groups, n_resamples, rng)
+    overall_a, function_a = _weighted_aggregate(weights, a, groups)
+    overall_b, function_b = _weighted_aggregate(weights, b, groups)
+
+    def difference(value_a: float, value_b: float, samples: npt.NDArray[np.float64]) -> Difference:
+        share = float("nan") if np.isnan(samples).all() else float(np.mean(samples > 0))
+        return Difference(value_a, value_b, _interval(samples, confidence), share)
+
+    function_of_assay = groups.function_of_group[groups.group_of_assay]
+    return PairedDifference(
+        overall=difference(point_a.overall, point_b.overall, overall_a - overall_b),
+        by_function={
+            f: difference(
+                point_a.by_function[f], point_b.by_function[f], function_a[:, i] - function_b[:, i]
+            )
+            for i, f in enumerate(groups.functions)
+        },
+        n_assays=int(paired.sum()),
+        n_by_function={
+            f: int((paired & (function_of_assay == i)).sum())
+            for i, f in enumerate(groups.functions)
+        },
+    )
+
+
+def _resample_weights(
+    defined: npt.NDArray[np.bool_], groups: AssayGroups, n_resamples: int, rng: np.random.Generator
+) -> FloatMatrix:
+    """Draw counts per assay (resamples x assays): within each function type, as many of its
+    ``defined`` assays as it has, with replacement. Other assays get 0."""
+    weights = np.zeros((n_resamples, defined.size))
     function_of_assay = groups.function_of_group[groups.group_of_assay]
     for f in range(len(groups.functions)):
         stratum = np.flatnonzero(defined & (function_of_assay == f))
         if stratum.size:
             uniform = np.full(stratum.size, 1 / stratum.size)
             weights[:, stratum] = rng.multinomial(stratum.size, uniform, size=n_resamples)
-    overall, by_function = _weighted_aggregate(weights, values, groups)
+    return weights
+
+
+def _interval(samples: npt.NDArray[np.float64], confidence: float) -> tuple[float, float]:
+    """Percentile interval of ``samples``; NaN if every sample is NaN."""
+    if np.isnan(samples).all():
+        return float("nan"), float("nan")
     tail = (1 - confidence) / 2 * 100
-    quantiles = (tail, 100 - tail)
-
-    def interval(samples: npt.NDArray[np.float64]) -> tuple[float, float]:
-        if np.isnan(samples).all():
-            return float("nan"), float("nan")
-        low, high = np.percentile(samples, quantiles)
-        return float(low), float(high)
-
-    return BootstrapCI(
-        overall=interval(overall),
-        by_function={f: interval(by_function[:, i]) for i, f in enumerate(groups.functions)},
-    )
+    low, high = np.percentile(samples, (tail, 100 - tail))
+    return float(low), float(high)
 
 
 def _weighted_aggregate(

@@ -1040,3 +1040,86 @@ ADR 0014.
   first and passes.
 - *Not done yet:* the remaining positions for website landscapes, SaProt, the ensemble and the
   figures (model size, fast vs masked).
+
+---
+
+## Entry 14 — Order-independent tests and paired model comparisons (Phase 2, 2026-10-12)
+
+**Plain-language summary.** Two loose ends from entry 13 are closed. First, one test passed or
+failed depending on which tests ran before it. The cause was in the logging setup, not in the
+test: once a part of the program had written a log line, it kept using the logging settings of
+that moment and ignored any later change. That is fixed, and the test suite now runs in a
+different random order every time, so a test that leans on another one is found quickly.
+Second, entry 13 could not say whether the quick scoring method is really worse than the slow
+one, because the two error bars overlapped. Those error bars were the wrong tool. Two models
+scored on the same 217 experiments rise and fall together from one experiment to the next, and
+that shared variation fills most of each error bar. The new comparison resamples the
+experiments once and applies the same draw to both models, so the shared variation cancels and
+only the difference is left. With it, every size step and every masked-versus-quick difference
+is clearly above zero on Spearman. Decisions are in ADR 0014, decision 13.
+
+**The 3 most important design choices.**
+
+1. **The logging fix is in the program, not in the tests.** Loggers are no longer cached on
+   first use, so every log call follows the current configuration. A test-side reset could not
+   have worked: a cached logger keeps its old settings even after structlog is reset. The
+   cost is building the logger on each call, microseconds for a few lines per assay.
+2. **The paired bootstrap reuses the existing resampling and aggregation.** `bootstrap_ci` and
+   `paired_bootstrap` draw their resamples from one function (stratified by function type) and
+   aggregate with one routine (per UniProt ID, per function type, overall). A paired and an
+   unpaired interval can therefore differ only in what is being estimated. Regenerating the
+   650M summary after the refactor gave a bit-identical file.
+3. **Comparisons are a results file, produced by one command from a list in the config.**
+   `mutascope eval compare` reads `eval.comparisons`, starts every pair from the same seed (so
+   a pair's numbers do not depend on which other pairs are listed), and writes
+   `results/zero_shot/comparisons.parquet`. Figures read that file. CLAUDE.md now forbids
+   judging a difference from two separate CIs.
+
+**Problems encountered and how they were solved.**
+
+1. **A test failed only after two CLI tests had run in the same process.** *Found:* in entry
+   13, by running `test_cli_eval.py` before `test_benchmark.py`:
+   `test_undefined_metrics_are_nan_and_logged` captured 0 warnings instead of 4. *Cause:* the
+   first guess, that a cached logger is invisible to `capture_logs`, was wrong: `capture_logs`
+   edits the configured processor list in place, and a logger cached under that same
+   configuration is captured (1 of 1 in a direct check). The failure needs a second
+   `configure_logging` call, which every CLI invocation makes. It installs a new processor
+   list, and a logger cached earlier keeps the old one (0 of 1 captured; a logger created
+   afterwards, 1 of 1). One CLI test before the failing test is not enough; two are. The same
+   state made a later `--log-json` a no-op for loggers already used. *Fix:*
+   `cache_logger_on_first_use=False`. *Verified:* two new tests in `tests/test_logging.py` fail
+   without the fix and pass with it. With `pytest-randomly`, the fast suite passed under seeds
+   1, 20261012, 314159, 987654321 and 4242 (319 passed, 1 skipped each). With the fix
+   reverted, two of those five orders (314159 and 4242) reproduced the original failure in
+   `tests/eval`.
+2. **A sentence written from memory about the results was wrong.** *Found:* while checking the
+   ADR text against the data. The draft said the separate CIs of the two score sets overlap
+   "in every one of the five pairs". They overlap in four: 150M (0.358 to 0.408) and 35M (0.285
+   to 0.338) do not. *Fix:* the sentence now says four of five. *Verified:* a script compares
+   the two intervals for each pair from the summary files.
+
+**Supporting details.**
+- *Paired comparisons* (Spearman, overall, A − B, 95% paired CI, 10,000 resamples, seed 0,
+  217 assays): 150M − 35M +0.0707 [+0.0589, +0.0840]; 650M − 150M +0.0306 [+0.0225, +0.0405];
+  masked − wild-type +0.0085 [+0.0061, +0.0107] for 35M, +0.0048 [+0.0022, +0.0070] for 150M
+  and +0.0047 [+0.0007, +0.0079] for 650M. The first four are positive in all 10,000
+  resamples, the last in 99.0%.
+- *How much pairing narrows the interval:* the paired interval of 650M masked against
+  wild-type is 0.0073 wide; the unpaired intervals of the two score sets are 0.0515 and 0.0502
+  wide.
+- *Not every difference is clear.* On top-10% recall the wild-type marginal is not worse at
+  35M (−0.0032 [−0.0082, +0.0033]) or 150M (−0.0023 [−0.0045, +0.0004]). On Spearman by
+  function type, 650M against 150M is not clear for Binding (+0.028 [−0.002, +0.059], 13
+  assays), Expression or Stability. The intervals are not corrected for the number of
+  comparisons (150 rows in the file).
+- *Checked:* `mlruns/` is ignored (`/mlruns/` in `.gitignore`, no file tracked). The CI
+  pipeline job runs `make pipeline-test`, whose `test` profile sets `models = ['esm2_8m']`;
+  the fast tests load only the 8M checkpoint.
+- *Dependencies:* `pytest-randomly` 5.0.0, the latest release on PyPI, in the dev group. A
+  failing order is rerun with `-p randomly --randomly-seed=<seed>`; the seed is printed at the
+  top of every run.
+- *Tests:* 2 new in the first commit and 7 in the second (326 passing, 1 skipped without
+  Foldseek on `PATH`; `make test` about 34 s). All 6 slow tests pass in 223 s.
+- *Not done yet:* `eval compare` is a command, not a Nextflow step; it joins the pipeline with
+  the figures. One of the five seeded runs took 189 s instead of about 35 s for a reason that
+  was not looked into; the others, and every run since, took 34 to 53 s.

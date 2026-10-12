@@ -116,6 +116,21 @@ uv run mutascope eval compare-leaderboard --results results/proteingym_precomput
 the 696,311 single mutants MutaScope uses. The harness gate in `tests/test_reproduction.py` runs
 the same comparison as a test whenever the release is downloaded.
 
+### Comparing models
+
+```bash
+uv run mutascope eval compare --results-dir results \
+    --reference data/raw/proteingym_v1.3/DMS_substitutions.csv \
+    --out results/zero_shot/comparisons.parquet
+```
+
+runs a paired bootstrap for every pair in `eval.comparisons`: each resample draws one set of
+assays, applies it to both score sets and recomputes the full aggregate, so the CI is of the
+difference itself. Two models scored on the same assays share most of their assay-to-assay
+spread, so their separate CIs overlap even when one is clearly better; comparisons are read
+from this file, never from two separate intervals
+([ADR 0014](docs/adr/0014-model-sizes-wt-marginal-tracking.md)).
+
 ## Publishing the dataset
 
 The processed dataset is on the Hugging Face Hub as

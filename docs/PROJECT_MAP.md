@@ -349,3 +349,27 @@ and exclude merge commits.
   `esm2_{35m,150m,650m}` and `esm2_{35m,150m,650m}_wt`; `results/model_gate_esm2_{35m,150m}.parquet`;
   `results/data/zero_shot_run_<label>.parquet` for the five new score sets. Scores are in
   `data/processed/zero_shot/<label>/` and the MLflow store in `mlruns/` (both gitignored).
+
+## Step 14 — Order-independent tests and paired model comparisons (Phase 2, 2026-10-12)
+
+- **What this step did:** fixed the logging state that made one test depend on test order,
+  shuffled the test order from now on, and added the paired bootstrap that every model
+  comparison must use (ADR 0014, decision 13).
+- **Files created or modified:**
+
+| Path | What it does | Why it exists |
+|---|---|---|
+| `src/mutascope/utils/logging.py` | Loggers are no longer cached on first use | A cached logger ignored every later `configure_logging` call |
+| `tests/test_logging.py` | Two regression tests: a later configuration and `capture_logs` reach a logger already used | The root cause, tested without relying on test order |
+| `pyproject.toml`, `uv.lock` | `pytest-randomly` 5.0.0 (dev) | Shuffles test order on every run and prints the seed |
+| `src/mutascope/eval/aggregate.py` | `paired_bootstrap`; resampling weights and percentile interval shared with `bootstrap_ci` | One resampling scheme and one aggregation for paired and unpaired CIs |
+| `src/mutascope/eval/compare.py` | `paired_bootstrap_diff(results_a, results_b, …)` on long-format results | The only place a model comparison is computed |
+| `src/mutascope/eval/schemas.py` | `ComparisonSchema` | Validate on write |
+| `src/mutascope/cli.py` | `eval compare`; `_log_run` shared by single-model and comparison runs | Pipeline steps are CLI commands; the run is tracked |
+| `conf/eval/proteingym.yaml` | `eval.comparisons`: the five pairs | No hard-coded model names |
+| `tests/eval/test_compare.py`, `tests/eval/test_zero_shot.py` | Exact cases (constant gain, identical sets), pairing vs separate CIs, NaN handling, the command end to end | 7 new tests (one is the generic check that every command takes Hydra overrides) |
+| `CLAUDE.md`, `README.md`, `docs/adr/0014-model-sizes-wt-marginal-tracking.md`, `docs/ROADMAP.md`, `docs/BUILD_LOG.md` | Rule, usage, decision 13 and results, checklist, entry 14 | Decision record and docs |
+
+- **CLI commands added:** `mutascope eval compare` runs every pair in `eval.comparisons`.
+- **Outputs:** `results/zero_shot/comparisons.parquet` (150 rows: 5 pairs × 5 metrics ×
+  overall and 5 function types).
