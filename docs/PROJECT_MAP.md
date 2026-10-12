@@ -234,3 +234,34 @@ and exclude merge commits.
 
 - **CLI commands added:** none.
 - **Outputs:** re-staged `build/hf_dataset/` (only `README.md` and `SHA256SUMS` differ from the Hub).
+
+## Step 10 — Benchmark harness and harness gate (Phase 2, 2026-10-12, `20e2031`–`e1784f2`)
+
+- **What this step did:** implemented ProteinGym's metrics, aggregation and bootstrap CIs, and
+  the harness gate, which reproduces the published leaderboard from ProteinGym's own scores
+  (ADR 0011).
+- **Files created or modified:**
+
+| Path | What it does | Why it exists |
+|---|---|---|
+| `src/mutascope/eval/metrics.py` | Spearman, AUC, MCC, NDCG@10%, top-10% recall per assay | ProteinGym's definitions; undefined → NaN |
+| `src/mutascope/eval/aggregate.py` | (UniProt, function) → function → overall; stratified bootstrap | One weighted routine for estimate and CIs |
+| `src/mutascope/eval/benchmark.py` | Per-assay long table, summary with CIs, NaN logging, Parquet I/O | Shared by every model we benchmark |
+| `src/mutascope/eval/schemas.py` | `AssayMetricSchema`, `SummarySchema` | Results are validated on write |
+| `src/mutascope/eval/proteingym.py` | Reads precomputed scores and published leaderboard files | Inputs of the harness gate |
+| `src/mutascope/utils/seeding.py` | `seed_all` | CLAUDE.md's seeding rule; bootstrap seed |
+| `src/mutascope/data/db.py` | `literal` made public | Reused by the eval readers |
+| `src/mutascope/cli.py` | Adds `eval precomputed`, `eval compare-leaderboard` | Created in step 1, extended here |
+| `conf/eval/proteingym.yaml`, `conf/config.yaml` | Top 10%, bootstrap (10,000, 95%, seed 0), models, leaderboard paths | No hard-coded settings |
+| `pyproject.toml`, `uv.lock` | Adds `scipy`, `scikit-learn` | The same metric calls as upstream |
+| `tests/eval/*` | Metric, aggregation, benchmark, reader and CLI tests on a toy release | `proteingym_reference.py` holds upstream's code as an oracle |
+| `tests/test_reproduction.py` | Harness gate plus two diagnostics (metric, aggregation) | ADR 0010; skipped without the release |
+| `tests/test_cli.py` | Override check covers the `eval` commands | Created in step 1 |
+| `results/proteingym_precomputed_{all,single}{,_summary}.parquet` | Per-assay and aggregate results for ESM2_650M, SaProt_650M_AF2 | Committed evidence; figures read these |
+| `docs/adr/0011-benchmark-harness.md`, `README.md`, `docs/ROADMAP.md` | Decisions and evidence; usage; checklist | Decision record and docs |
+| `docs/BUILD_LOG.md` | Entry 10 | Created in step 2 |
+
+- **CLI commands added:**
+  - `mutascope eval precomputed --rows all|single` benchmarks ProteinGym's precomputed scores.
+  - `mutascope eval compare-leaderboard` prints our values next to the published ones.
+- **Outputs:** the four `results/proteingym_precomputed_*.parquet` files.
