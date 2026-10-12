@@ -3,7 +3,8 @@
 Predicts the functional effect of every single amino-acid substitution in a protein and presents it as an
 interactive mutation landscape, with an honest benchmark on ProteinGym DMS assays.
 
-Status: early development (Phase 2, zero-shot models and benchmark harness). See [docs/ROADMAP.md](docs/ROADMAP.md).
+Status: early development (Phase 3, supervised models; the zero-shot benchmark of Phase 2 is summarised in
+[ADR 0017](docs/adr/0017-phase-2-close.md)). See [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Quick start
 
