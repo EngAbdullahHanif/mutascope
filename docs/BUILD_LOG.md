@@ -684,7 +684,7 @@ the published leaderboard: 0.4137 for ESM-2 650M (published 0.414) and 0.4566 fo
 3. **One weighted aggregation for both the estimate and the bootstrap.** A bootstrap resample is
    just a vector of how many times each assay was drawn, so the point estimate is the same
    computation with every weight set to 1. The 95% CI and the reported value therefore cannot
-   follow different protocols, and 10,000 resamples take about a second. Resampling is stratified
+   follow different protocols, and 10,000 resamples take 0.08 s per model and metric. Resampling is stratified
    by function type, so every resample still averages the same five categories.
 
 **Problems encountered and how they were solved.**
