@@ -96,7 +96,10 @@ Goal: several pretrained models score every mutation; our numbers reproduce the 
 - [x] Results in `results/*.parquet` (long format) for ESM-2 35M / 150M / 650M, masked and
       wild-type marginal; MLflow tracking of every scoring, benchmark and gate run, local SQLite
       store (ADR 0014). SaProt and the ensemble add their results when they land
-- [ ] Figures: model size vs Spearman, per-function-type bars, ensemble gain, fast vs masked marginal
+- [x] Paired bootstrap for model comparisons (`mutascope eval compare`, ADR 0014): 150M vs 35M,
+      650M vs 150M, masked vs wild-type per size, in `results/zero_shot/comparisons.parquet`
+- [ ] Figures: model size vs Spearman, per-function-type bars, ensemble gain, fast vs masked marginal.
+      Any comparison between score sets uses the paired CIs from `comparisons.parquet`
 
 Done when: full landscapes for all assays from ESM-2 (3 sizes) + SaProt; harness and model gates pass; figures generated.
 

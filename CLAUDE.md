@@ -130,6 +130,9 @@ Run `make lint test` before declaring any task done.
 - Metrics per assay: Spearman (primary), AUC, MCC, NDCG@10%, top-10% recall.
 - Aggregate ProteinGym-style: per UniProt ID → per function type → overall. Never report a plain mean over assays as the headline.
 - 95% CIs by bootstrap over assays.
+- Comparing two models or methods: paired bootstrap only (`eval.compare.paired_bootstrap_diff`,
+  `mutascope eval compare` → `results/zero_shot/comparisons.parquet`; ADR 0014). Never judge a
+  difference from two separately computed CIs, in text or in a figure.
 - **Reproduction gate** (`tests/test_reproduction.py`, ADR 0010). It has two parts, and both must pass.
   If either fails, fix the bug before any new modelling work.
   - *Harness gate* (no model; needs the downloaded data): our metrics and aggregation, run on ProteinGym's precomputed `ESM2_650M`

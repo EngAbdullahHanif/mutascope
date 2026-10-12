@@ -17,6 +17,16 @@ bootstrap:
 
 results_dir: results
 
+# Paired bootstrap comparisons (`mutascope eval compare`, ADR 0014). [A, B] reports A - B with
+# the bootstrap settings above. Names are score-set labels: each needs
+# <results_dir>/zero_shot_<label>_single.parquet from `mutascope eval zero-shot`.
+comparisons:
+  - [esm2_150m, esm2_35m]
+  - [esm2_650m, esm2_150m]
+  - [esm2_35m, esm2_35m_wt]
+  - [esm2_150m, esm2_150m_wt]
+  - [esm2_650m, esm2_650m_wt]
+
 # Model gate (ADR 0010): our scores against ProteinGym's precomputed scores on single mutants.
 # Per-variant Spearman in every assay, and |our aggregate - theirs| on the same rows. Do not
 # change either value without a new ADR.

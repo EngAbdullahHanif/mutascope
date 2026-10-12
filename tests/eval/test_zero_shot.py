@@ -193,7 +193,8 @@ def test_cli_scores_with_the_real_8m_model_resumes_and_tracks_every_run(
 ) -> None:
     """``mutascope score zero-shot`` twice with one cache directory: the second invocation
     scores nothing and writes the same scores. ``--fast`` writes a separate score set. Then
-    ``eval zero-shot`` and ``eval model-gate`` on the results; every command logs one run."""
+    ``eval zero-shot``, ``eval compare`` and ``eval model-gate`` on the results; every command
+    logs one run."""
     ref_csv = tmp_path / "reference.csv"
     reference.to_csv(ref_csv, index=False)
     variants = processed_root / "processed" / "variants"
@@ -255,6 +256,36 @@ def test_cli_scores_with_the_real_8m_model_resumes_and_tracks_every_run(
     )
     assert wrong.exit_code == 1 and "holds ['esm2_8m_wt'], not esm2_8m" in wrong.output
 
+    # Paired comparison of the two score sets just benchmarked; a pair without results fails.
+    compare = ["eval", "compare", *common, "--results-dir", str(results)]
+    compare += ["--out", str(results / "zero_shot" / "comparisons.parquet")]
+    pair = "eval.comparisons=[[esm2_8m,esm2_8m_wt]]"
+    compared = CliRunner().invoke(app, [*compare, *overrides, pair])
+    assert compared.exit_code == 0, compared.output
+    assert "esm2_8m - esm2_8m_wt: Spearman" in compared.output
+    comparisons = read_results(results / "zero_shot" / "comparisons.parquet")
+    assert set(comparisons["model_a"]) == {"esm2_8m"} and set(comparisons["model_b"]) == {
+        "esm2_8m_wt"
+    }
+    headline = comparisons[
+        (comparisons["metric"] == "spearman") & (comparisons["level"] == "overall")
+    ]
+    summaries = {
+        label: read_results(results / f"zero_shot_{label}_single_summary.parquet")
+        for label in ("esm2_8m", "esm2_8m_wt")
+    }
+    spearman = {
+        label: frame[(frame["metric"] == "spearman") & (frame["level"] == "overall")][
+            "value"
+        ].item()
+        for label, frame in summaries.items()
+    }
+    assert headline["diff"].item() == pytest.approx(spearman["esm2_8m"] - spearman["esm2_8m_wt"])
+    absent = CliRunner().invoke(
+        app, [*compare, *overrides, "eval.comparisons=[[esm2_8m,esm2_35m]]"]
+    )
+    assert absent.exit_code == 1 and "no results for ['esm2_35m']" in absent.output
+
     # The gate against "ProteinGym's" scores: here our own masked scores under their column name.
     column = "ESM2_8M"
     precomputed = with_labels(a, variants).rename(columns={"score": column})
@@ -277,6 +308,7 @@ def test_cli_scores_with_the_real_8m_model_resumes_and_tracks_every_run(
     assert sorted(runs) == [
         "benchmark esm2_8m",
         "benchmark esm2_8m_wt",
+        "compare zero-shot",
         "model-gate esm2_8m",
         "score esm2_8m",
         "score esm2_8m_wt",
@@ -288,6 +320,10 @@ def test_cli_scores_with_the_real_8m_model_resumes_and_tracks_every_run(
     overall = summary[(summary["level"] == "overall") & (summary["metric"] == "spearman")]
     assert metrics["spearman"] == pytest.approx(overall["value"].item())
     assert metrics["variants"] == 6 and "spearman/Stability" in metrics
+    params, metrics, tags = runs["compare zero-shot"]
+    assert params["pairs"] == "esm2_8m - esm2_8m_wt" and params["bootstrap.n_resamples"] == "200"
+    assert metrics["spearman_diff/esm2_8m-vs-esm2_8m_wt"] == pytest.approx(headline["diff"].item())
+    assert tags["step"] == "compare" and "model.revision" not in params
     params, metrics, tags = runs["score esm2_8m"]
     assert params["method"] == "masked" and metrics["positions_computed"] == 0
     assert metrics["positions_all_runs"] == 5 and metrics["model_seconds_all_runs"] > 0

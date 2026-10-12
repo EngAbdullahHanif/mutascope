@@ -1,7 +1,7 @@
 # 0014 — ESM-2 35M and 150M, wild-type marginals, and MLflow tracking
 
 - Status: accepted
-- Date: 2026-10-12
+- Date: 2026-10-12 (decision 13 and the paired comparisons added the same day)
 - Changes: ADR 0013, decision 7 (the model-gate command no longer writes benchmark results)
 
 ## Context
@@ -75,6 +75,19 @@ Three things in the existing code stood in the way:
     1.9 GB precomputed archive that the test profile skips.
 12. **Not tracked:** `eval precomputed`. Those are ProteinGym's scores; there is no model
     revision of ours to record.
+13. **Model comparisons use a paired bootstrap.** `eval.compare.paired_bootstrap_diff(A, B)`
+    draws one set of assays per resample (stratified by function type, like the unpaired CI),
+    applies it to both score sets, recomputes the full ProteinGym aggregate of each and keeps
+    `A - B`. It reports the difference of the two aggregates, its percentile CI and the share
+    of resamples in which A is strictly better. The aggregate is a weighted mean of assays, so
+    that difference is also the aggregate of the per-assay differences. An assay counts only if
+    the metric is defined for both. The unpaired CIs answer "how well does this model do on
+    assays like these"; most of their width is the spread between assays, which two models
+    scored on the same assays share. Reading a comparison off two such intervals therefore
+    hides real differences. Every figure or sentence that compares two score sets must use the
+    paired interval. `mutascope eval compare` runs the pairs listed in `eval.comparisons` with
+    the settings of `eval.bootstrap` (10,000 resamples, 95%, seed 0), each pair from the same
+    seed, writes `results/zero_shot/comparisons.parquet` and logs one MLflow run.
 
 ## Evidence
 
@@ -106,8 +119,8 @@ bootstrap CI for Spearman). AUC and MCC are defined on 216 assays.
 | `esm2_650m_wt` | 0.4078 | 0.386–0.436 | 0.7295 | 0.3225 | 0.7557 | 0.1884 |
 
 The wild-type marginal costs 0.005 to 0.009 Spearman against the masked marginal of the same
-checkpoint. The CIs of the two methods overlap almost entirely; this ADR does not test whether
-the difference is significant.
+checkpoint. The separate CIs above overlap almost entirely, and they are the wrong tool for
+that question: see "Paired comparisons" below.
 
 **Model gate**, masked score sets against ProteinGym's precomputed columns:
 
@@ -121,6 +134,29 @@ the difference is significant.
 0.983 (35M), 0.986 (150M) and 0.985 (650M); lowest 0.930, 0.923 and 0.834
 (`UBR5_HUMAN_Tsuboyama_2023_1I2T`, 650M). The wild-type marginal has the higher Spearman
 against `DMS_score` in 52, 62 and 70 of the 217 assays.
+
+**Paired comparisons** (`results/zero_shot/comparisons.parquet`; Spearman, overall, A − B,
+95% paired bootstrap CI, 217 assays):
+
+| A | B | A − B | 95% CI | A better in |
+|---|---|---:|---|---:|
+| `esm2_150m` | `esm2_35m` | +0.0707 | +0.0589 to +0.0840 | 100% of resamples |
+| `esm2_650m` | `esm2_150m` | +0.0306 | +0.0225 to +0.0405 | 100% |
+| `esm2_35m` | `esm2_35m_wt` | +0.0085 | +0.0061 to +0.0107 | 100% |
+| `esm2_150m` | `esm2_150m_wt` | +0.0048 | +0.0022 to +0.0070 | 100% |
+| `esm2_650m` | `esm2_650m_wt` | +0.0047 | +0.0007 to +0.0079 | 99.0% |
+
+Each size step and each masked-versus-wild-type difference has a paired interval that excludes
+zero. The unpaired intervals of the two score sets overlap in four of the five pairs (all but
+150M against 35M). The paired interval of 650M masked against wild-type is 0.007 wide; the
+unpaired interval of either score set is 0.05 wide.
+
+The file also holds the other four metrics and the five function types. Not every difference
+is clear there. For top-10% recall the wild-type marginal is not worse at 35M (−0.0032, CI
+−0.0082 to +0.0033) or 150M (−0.0023, CI −0.0045 to +0.0004). By function type, 650M against
+150M on Spearman is clear for Activity and OrganismalFitness and not for Binding (+0.028, CI
+−0.002 to +0.059, 13 assays), Expression or Stability. These intervals are not corrected for
+the number of comparisons.
 
 **Labels.** ProteinGym's zero-shot score files repeat `DMS_score`, printed with different
 rounding from the DMS files: 3,297 of the 696,311 single-mutant labels differ, in 82 assays, by
@@ -147,6 +183,9 @@ with `code_version` `41bafb3`. `make mlflow` serves them.
   invocations is in the cache log and in the tracked run (`model_seconds_all_runs`).
 - The MLflow store is local and not versioned. Deleting `mlruns/` loses the run history but no
   result; rerunning the commands on the warm cache recreates the runs in minutes.
+- Task 6 figures that compare score sets read `results/zero_shot/comparisons.parquet`; a new
+  pair is added to `eval.comparisons`. The command is not a Nextflow step yet: it needs every
+  benchmark result at once, and joins the pipeline with the figures.
 - `scoring.device` is logged as configured (`auto`), not as resolved (`mps`).
 - On MPS, the 8M and 35M checkpoints made PyTorch's buffer cache grow without limit; the scorer
   now empties it after each sequence (build log entry 13). Do not run anything else on the GPU

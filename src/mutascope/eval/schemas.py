@@ -79,6 +79,34 @@ class SummarySchema(pa.DataFrameModel):
         return ((defined & both & ordered) | (~defined & none)).astype(bool)
 
 
+class ComparisonSchema(pa.DataFrameModel):
+    """Paired bootstrap comparison of two score sets on one aggregate (``A - B``; ADR 0014).
+
+    ``value_a`` and ``value_b`` are the ProteinGym aggregates over the ``n_assays`` assays
+    defined for both, ``diff`` their difference, ``ci_low`` / ``ci_high`` its percentile CI
+    and ``share_a_better`` the share of resamples with ``A > B``.
+    """
+
+    model_a: Series[str]
+    model_b: Series[str]
+    split: Series[pd.StringDtype] = pa.Field(isin=list(SPLITS), nullable=True)
+    metric: Series[str] = pa.Field(isin=list(METRICS))
+    level: Series[str] = pa.Field(isin=list(LEVELS))
+    group: Series[pd.StringDtype] = pa.Field(isin=list(FUNCTION_TYPES), nullable=True)
+    value_a: Series[float] = pa.Field(nullable=True)
+    value_b: Series[float] = pa.Field(nullable=True)
+    diff: Series[float] = pa.Field(nullable=True)
+    ci_low: Series[float] = pa.Field(nullable=True)
+    ci_high: Series[float] = pa.Field(nullable=True)
+    share_a_better: Series[float] = pa.Field(ge=0, le=1, nullable=True)
+    n_assays: Series[int] = pa.Field(ge=0)
+
+    class Config:  # pyright: ignore[reportIncompatibleVariableOverride]
+        strict = True
+        ordered = True
+        unique = ["model_a", "model_b", "split", "metric", "level", "group"]  # noqa: RUF012 — read by pandera
+
+
 class ZeroShotScoreSchema(pa.DataFrameModel):
     """One model's zero-shot score of one single mutant (``processed/zero_shot/<model>/``).
 

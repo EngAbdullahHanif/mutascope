@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Annotated
 
 import httpx
+import numpy as np
 import pandas as pd
 import typer
 from omegaconf import DictConfig, OmegaConf
@@ -44,6 +45,7 @@ from mutascope.eval.benchmark import (
     summary_metrics,
     write_results,
 )
+from mutascope.eval.compare import paired_bootstrap_diff
 from mutascope.eval.gate import GateThresholds, join_scores, model_gate
 from mutascope.eval.proteingym import (
     PRECOMPUTED_PREFIX,
@@ -54,7 +56,7 @@ from mutascope.eval.proteingym import (
     published_summary,
 )
 from mutascope.eval.region import ScoringRegionError, scoring_regions
-from mutascope.eval.schemas import AgreementSchema, ScoringRunSchema
+from mutascope.eval.schemas import AgreementSchema, ComparisonSchema, ScoringRunSchema
 from mutascope.eval.zero_shot import load_scores, run_label, score_assays, with_labels
 from mutascope.export.hub import PublishError, push_dataset, stage_dataset
 from mutascope.scoring.base import build_scorer
@@ -129,24 +131,36 @@ def _track(
     artifacts: list[Path],
     tags: dict[str, str] | None = None,
 ) -> None:
+    """Log one model's scoring or evaluation run: the model config and the method as params."""
+    model = as_str_dict(OmegaConf.to_container(cfg.model, resolve=True), "model")
+    params: dict[str, object] = {f"model.{key}": value for key, value in model.items()}
+    params |= {"method": "wt" if fast else "masked", "scoring.device": str(cfg.scoring.device)}
+    _log_run(cfg, step, label, params, metrics, artifacts, {"model": label} | (tags or {}))
+
+
+def _log_run(
+    cfg: DictConfig,
+    step: str,
+    subject: str,
+    params: dict[str, object],
+    metrics: dict[str, float],
+    artifacts: list[Path],
+    tags: dict[str, str],
+) -> None:
     """Log one command's run to the local MLflow store (``tracking`` config; ADR 0014).
 
     Called after the command has written its outputs, so a tracking failure loses no result;
     it still exits 1, because an untracked run must not look like a tracked one.
     """
-    model = as_str_dict(OmegaConf.to_container(cfg.model, resolve=True), "model")
-    params: dict[str, object] = {f"model.{key}": value for key, value in model.items()}
-    params |= {
-        "method": "wt" if fast else "masked",
-        "scoring.device": str(cfg.scoring.device),
-        "data.release.version": str(cfg.data.release.version),
-        "data.release.git_commit": str(cfg.data.release.git_commit),
-    }
     run = TrackedRun(
-        name=f"{step} {label}",
-        params=params,
+        name=f"{step} {subject}",
+        params=params
+        | {
+            "data.release.version": str(cfg.data.release.version),
+            "data.release.git_commit": str(cfg.data.release.git_commit),
+        },
         metrics=metrics,
-        tags={"step": step, "model": label} | (tags or {}),
+        tags={"step": step} | tags,
         config=as_str_dict(OmegaConf.to_container(cfg, resolve=True), "config"),
         artifacts=artifacts,
     )
@@ -840,4 +854,106 @@ def eval_zero_shot(
         },
         artifacts=list(results),
         tags={"rows": "single", "kind": "zero-shot"},
+    )
+
+
+@eval_app.command("compare")
+def eval_compare(
+    results_dir: Annotated[
+        Path,
+        typer.Option(
+            help="Directory of zero_shot_<label>_single.parquet (`mutascope eval zero-shot`).",
+            exists=True,
+            file_okay=False,
+        ),
+    ],
+    reference: Reference,
+    out: Annotated[Path, typer.Option(help="Output Parquet file, e.g. <results>/zero_shot/…")],
+    config_dir: ConfigDir = Path("conf"),
+    overrides: Overrides = None,
+) -> None:
+    """Paired bootstrap comparison of every pair in ``eval.comparisons`` (ADR 0014).
+
+    For each pair ``[A, B]`` the same resampled assays are applied to both score sets and the
+    full ProteinGym aggregate is recomputed, giving ``A - B`` with a CI and the share of
+    resamples where A is better, for every metric, overall and per function type. Every pair
+    starts from the same seed, so a pair's numbers do not depend on which other pairs are
+    listed. Writes one table (:class:`ComparisonSchema`) and logs one MLflow run.
+    """
+    cfg = load_config(config_dir, overrides)
+    pairs = [(str(a), str(b)) for a, b in cfg.eval.comparisons]
+    labels = sorted({label for pair in pairs for label in pair})
+    missing = [
+        label
+        for label in labels
+        if not (results_dir / f"zero_shot_{label}_single.parquet").exists()
+    ]
+    if not pairs or missing:
+        problem = (
+            f"no results for {missing} in {results_dir}" if pairs else "eval.comparisons is empty"
+        )
+        typer.echo(f"error: {problem}", err=True)
+        raise typer.Exit(code=1)
+    results = {
+        label: read_results(results_dir / f"zero_shot_{label}_single.parquet") for label in labels
+    }
+    table = pd.read_csv(reference)
+    bootstrap = BootstrapParams(
+        int(cfg.eval.bootstrap.n_resamples), float(cfg.eval.bootstrap.confidence)
+    )
+    seed = int(cfg.eval.bootstrap.seed)
+    seed_all(seed)
+    frames: list[pd.DataFrame] = []
+    try:
+        for a, b in pairs:
+            frames.append(
+                paired_bootstrap_diff(
+                    results[a], results[b], table, bootstrap, np.random.default_rng(seed)
+                )
+            )
+    except (ValueError, KeyError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    path = write_table(pd.concat(frames, ignore_index=True), ComparisonSchema, out)
+
+    metrics: dict[str, float] = {}
+    typer.echo(f"{len(pairs)} paired comparisons, {bootstrap.n_resamples:,} resamples, A - B:")
+    for (a, b), frame in zip(pairs, frames, strict=True):
+        headline = frame[(frame["metric"] == "spearman") & (frame["level"] == "overall")]
+        row = headline.iloc[0]
+        typer.echo(
+            f"  {a} - {b}: Spearman {row['diff']:+.4f} "
+            f"[{row['ci_low']:+.4f}, {row['ci_high']:+.4f}], "
+            f"A better in {row['share_a_better']:.1%} of resamples ({row['n_assays']} assays)"
+        )
+        overall = frame[frame["level"] == "overall"]
+        for metric, diff, low, high, share in zip(
+            overall["metric"],
+            overall["diff"],
+            overall["ci_low"],
+            overall["ci_high"],
+            overall["share_a_better"],
+            strict=True,
+        ):
+            key = f"{metric}_diff/{a}-vs-{b}"
+            metrics |= {
+                key: float(diff),
+                f"{key}/ci_low": float(low),
+                f"{key}/ci_high": float(high),
+                f"{key}/share_a_better": float(share),
+            }
+    typer.echo(f"comparisons: {path}")
+    _log_run(
+        cfg,
+        "compare",
+        "zero-shot",
+        {
+            "pairs": ", ".join(f"{a} - {b}" for a, b in pairs),
+            "bootstrap.n_resamples": bootstrap.n_resamples,
+            "bootstrap.confidence": bootstrap.confidence,
+            "bootstrap.seed": seed,
+        },
+        metrics,
+        [path],
+        {"kind": "zero-shot", "rows": "single"},
     )
