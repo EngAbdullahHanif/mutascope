@@ -110,8 +110,9 @@ agree with each other with a median per-assay Spearman of 0.80 (lowest 0.16).
 aggregates only, no CI, not written to `results/`): mean of raw scores 0.4735, mean of
 within-assay percentile ranks 0.4627, z-score mean 0.4663. The raw mean is higher than the
 z-score mean. The z-score rule was fixed before any result was seen and is kept: choosing
-among rules by their benchmark score would be tuning on the test data. Whether the raw mean's
-advantage is real needs its own paired comparison, and is open.
+among rules by their benchmark score would be tuning on the test data. The author decided
+(2026-10-13) not to run a paired comparison of the raw mean either: the z-score rule stands and
+the raw mean is not a score set of this project.
 
 **Shared summary.** SaProt's rows in `shared_summary.parquet` are identical to its own summary
 file (same assays, same seed). ESM-2 650M is 0.4144 on the 213 shared assays and 0.4125 on all

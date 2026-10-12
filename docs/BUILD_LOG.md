@@ -1329,7 +1329,7 @@ read from a results file; the drawing code computes nothing. The decisions are i
   No slow test was added or run; no model code changed.
 - *Not done yet:* the five commands (`score ensemble`, `eval zero-shot`, `eval compare`,
   `eval shared`, `eval figures`) are not Nextflow processes; the two-assay test profile cannot
-  fill a figure with five function types. The raw-mean ensemble has no paired comparison, so
-  whether it really beats the z-score mean is open. The ensemble is defined per assay and has
+  fill a figure with five function types. The raw-mean ensemble has no paired comparison, and
+  by the author's decision it will not get one: the z-score rule stands. The ensemble is defined per assay and has
   no landscape for the website. Full masked landscapes at every position (the other open
   Phase 2 item) are untouched.
