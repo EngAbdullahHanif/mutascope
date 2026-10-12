@@ -72,16 +72,18 @@ Goal: several pretrained models score every mutation; our numbers reproduce the 
 - [ ] Ensemble: per-assay z-score, then mean
 
 ### Benchmark harness
-- [ ] Metrics per assay: Spearman, AUC, MCC, NDCG@10%, top-10% recall
-- [ ] ProteinGym aggregation: per UniProt → per function type → overall
-- [ ] Bootstrap 95% CIs over assays
+- [x] Metrics per assay: Spearman, AUC, MCC, NDCG@10%, top-10% recall (ADR 0011; undefined → NaN)
+- [x] ProteinGym aggregation: per UniProt → per function type → overall
+- [x] Bootstrap 95% CIs over assays (stratified by function type)
 - [ ] Reproduction gate, split in two (ADR 0010):
-  - [ ] Harness gate: our metrics + aggregation on ProteinGym's precomputed `ESM2_650M` scores over
-        all rows (singles + multis) reproduce the published 0.414 (|Δ| ≤ 0.0005)
+  - [x] Harness gate: our metrics + aggregation on ProteinGym's precomputed `ESM2_650M` scores over
+        all rows (singles + multis) reproduce the published 0.414 (|Δ| ≤ 0.0005); also all five metrics for
+        `ESM2_650M` and `SaProt_650M_AF2` (ADR 0011)
   - [ ] Model gate (`slow`): our ESM-2 650M vs their `ESM2_650M` on single mutants, per-variant
         Spearman ≥ 0.99 in every assay, and single-mutant aggregate within ±0.01 of theirs
         computed by the same harness
 - [ ] Results in `results/*.parquet` (long format); MLflow or W&B tracking
+      (results files done for ProteinGym's precomputed scores; tracking not started)
 - [ ] Figures: model size vs Spearman, per-function-type bars, ensemble gain, fast vs masked marginal
 
 Done when: full landscapes for all assays from ESM-2 (3 sizes) + SaProt; harness and model gates pass; figures generated.
