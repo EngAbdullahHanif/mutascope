@@ -199,15 +199,17 @@ and, for the 3Di tokens, Foldseek (van Kempen et al., *Nature Biotechnology* 202
 ```python
 from datasets import load_dataset
 
-variants = load_dataset("<repo_id>", "variants", split="train")
-structure = load_dataset("<repo_id>", "structure_features", split="train")
+variants = load_dataset("engAbdullahHanif/mutascope-proteingym-v1.3", "variants", split="train")
+structure = load_dataset(
+    "engAbdullahHanif/mutascope-proteingym-v1.3", "structure_features", split="train"
+)
 ```
 
 ```sql
 -- DuckDB, straight from the Hub
 SELECT v.*, s.plddt, s.rel_sasa
-FROM 'hf://datasets/<repo_id>/data/variants.parquet' v
-LEFT JOIN 'hf://datasets/<repo_id>/data/structure_features.parquet' s
+FROM 'hf://datasets/engAbdullahHanif/mutascope-proteingym-v1.3/data/variants.parquet' v
+LEFT JOIN 'hf://datasets/engAbdullahHanif/mutascope-proteingym-v1.3/data/structure_features.parquet' s
   USING (assay_id, position);
 ```
 

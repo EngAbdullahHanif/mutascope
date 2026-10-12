@@ -118,7 +118,8 @@ def test_push_needs_a_repo_id(
     processed_root: Path, processed_overrides: list[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(processed_root)
-    code, output = publish(processed_root, processed_overrides, "--push")
+    # conf/publish/hub.yaml now names the real repo, so clear it to exercise the guard.
+    code, output = publish(processed_root, [*processed_overrides, "publish.repo_id=null"], "--push")
     assert code == 1
     assert "publish.repo_id" in output
     assert not (processed_root / "stage").exists()
