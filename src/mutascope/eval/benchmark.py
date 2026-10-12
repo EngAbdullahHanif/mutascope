@@ -143,6 +143,35 @@ def summarise(
     return SummarySchema.validate(summary, lazy=True)
 
 
+def summary_metrics(summary: pd.DataFrame, model: str) -> dict[str, float]:
+    """One model's zero-shot aggregates as flat ``name -> value`` pairs, for experiment tracking.
+
+    Names: ``<metric>``, ``<metric>_ci_low`` and ``<metric>_ci_high`` for the overall
+    aggregate, ``<metric>/<function type>`` for each function type. Values are copied from
+    ``summary``, never recomputed, so a tracked run and the results file cannot disagree.
+
+    Raises:
+        ValueError: ``summary`` has no zero-shot (null ``split``) rows for ``model``.
+    """
+    rows = summary[(summary["model"] == model) & summary["split"].isna()]
+    if rows.empty:
+        raise ValueError(f"no zero-shot summary rows for model {model!r}")
+    metrics: dict[str, float] = {}
+    overall = rows[rows["level"] == "overall"]
+    for metric, value, low, high in zip(
+        overall["metric"], overall["value"], overall["ci_low"], overall["ci_high"], strict=True
+    ):
+        metrics[str(metric)] = float(value)
+        metrics[f"{metric}_ci_low"] = float(low)
+        metrics[f"{metric}_ci_high"] = float(high)
+    by_function = rows[rows["level"] == "function"]
+    for metric, group, value in zip(
+        by_function["metric"], by_function["group"], by_function["value"], strict=True
+    ):
+        metrics[f"{metric}/{group}"] = float(value)
+    return metrics
+
+
 def write_results(
     per_assay: pd.DataFrame, summary: pd.DataFrame, out_dir: Path, name: str
 ) -> tuple[Path, Path]:

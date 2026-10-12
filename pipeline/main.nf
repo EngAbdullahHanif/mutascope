@@ -5,9 +5,10 @@
  *   DOWNLOAD -> [SUBSET] -> VALIDATE -> CLEAN ----------\
  *                                    -> STRUCT_FEATURES --> STRUCTURE_REPORT
  *                                    -> FOLDSEEK_3DI ----/
- *                                       CLEAN -> SCORE_ZERO_SHOT
+ *                                       CLEAN -> SCORE_ZERO_SHOT -> BENCHMARK_ZERO_SHOT
  *
- * SUBSET runs only when params.assays names assays (the test profile). Every command gets
+ * SCORE_ZERO_SHOT and BENCHMARK_ZERO_SHOT run once per (model, method) in params.models x
+ * params.methods. SUBSET runs only when params.assays names assays (the test profile). Every command gets
  * params.hydra_overrides appended, so one override reaches every step.
  */
 
@@ -18,18 +19,30 @@ include { CLEAN            } from './modules/clean'
 include { STRUCT_FEATURES  } from './modules/struct_features'
 include { FOLDSEEK_3DI     } from './modules/foldseek_3di'
 include { STRUCTURE_REPORT } from './modules/structure_report'
-include { SCORE_ZERO_SHOT  } from './modules/score_zero_shot'
+include { SCORE_ZERO_SHOT     } from './modules/score_zero_shot'
+include { BENCHMARK_ZERO_SHOT } from './modules/benchmark_zero_shot'
+
+// A comma-separated command-line value arrives as a string; profiles set lists.
+def as_list(value) {
+    return (value instanceof List) ? value : value?.tokenize(',')
+}
 
 workflow {
     log.info "MutaScope pipeline | profile: ${workflow.profile}"
     log.info "data cache: ${params.data_dir} | processed: ${params.processed_dir} | reports: ${params.reports_dir}"
-    log.info "zero-shot model: ${params.model}"
+    def models = as_list(params.models)
+    def methods = as_list(params.methods)
+    def unknown = methods - ['masked', 'wt']
+    if (unknown) {
+        error "params.methods: unknown ${unknown}; use masked and/or wt"
+    }
+    log.info "zero-shot models: ${models.join(', ')} | methods: ${methods.join(', ')}"
+    log.info "results: ${params.results_dir} | MLflow store: ${params.tracking_dir}"
     log.info "Hydra overrides: ${params.hydra_overrides ?: '(none)'}"
 
     DOWNLOAD()
     def inputs = DOWNLOAD.out
-    // A --assays A,B command-line value arrives as a string; the test profile sets a list.
-    def assays = params.assays instanceof List ? params.assays : params.assays?.tokenize(',')
+    def assays = as_list(params.assays)
     if (assays) {
         log.info "Assays: ${assays.join(', ')}"
         SUBSET(inputs.reference, inputs.dms_dir, inputs.structures_dir, assays)
@@ -47,5 +60,7 @@ workflow {
         STRUCT_FEATURES.out.features,
         FOLDSEEK_3DI.out.three_di,
     )
-    SCORE_ZERO_SHOT(inputs.reference, CLEAN.out.variants)
+    def runs = channel.fromList(models).combine(channel.fromList(methods))
+    SCORE_ZERO_SHOT(inputs.reference, CLEAN.out.variants, runs)
+    BENCHMARK_ZERO_SHOT(inputs.reference, CLEAN.out.variants, SCORE_ZERO_SHOT.out.scores)
 }

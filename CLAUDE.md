@@ -12,6 +12,7 @@ presents it as an interactive mutation landscape (heatmap + 3D structure) with a
 - **Supervised models:** per-assay models following the ProteinGym supervised protocol (random / modulo / contiguous 5-fold CV): augmented ridge → LightGBM → MLP head. Uncertainty via fold ensembles + conformal prediction (MAPIE).
 - **Serving:** FastAPI backend (ONNX-quantized ESM-2 35M/150M for live scoring), Next.js frontend; precomputed landscapes for all ProteinGym proteins served statically.
 - **Pipeline:** Nextflow DSL2 orchestrating the `mutascope` Python CLI.
+- **Tracking:** MLflow, local SQLite store in `mlruns/` (no server, no account).
 
 This is a public portfolio project. Code quality, reproducibility and honest evaluation matter more than
 squeezing out leaderboard points. It must not contain any thesis code or data.
@@ -23,7 +24,7 @@ mutascope/
 ├── CLAUDE.md
 ├── pyproject.toml            # uv-managed; single source of Python deps
 ├── Makefile                  # canonical commands (see below)
-├── conf/                     # Hydra configs (data/, model/, train/, eval/)
+├── conf/                     # Hydra configs (data/, model/, scoring/, tracking/, train/, eval/)
 ├── src/mutascope/
 │   ├── cli.py                # Typer entry point: `mutascope <group> <cmd>`
 │   ├── data/                 # download, parse, validate (pandera), clean, structures, 3Di
@@ -32,14 +33,15 @@ mutascope/
 │   ├── models/               # ridge, lgbm, mlp (Lightning), conformal, ensemble
 │   ├── eval/                 # metrics, ProteinGym-style aggregation, bootstrap CIs, figures
 │   ├── export/               # landscapes → JSON/Arrow, ONNX export + quantization
-│   └── utils/                # hashing, io, logging, seeding
+│   └── utils/                # hashing, io, logging, seeding, tracking (MLflow)
 ├── pipeline/                 # Nextflow: main.nf, modules/, nextflow.config (profiles: local, docker, test)
 ├── api/                      # FastAPI app (app/, tests/), Dockerfile
 ├── web/                      # Next.js + TypeScript + Tailwind + shadcn/ui
 ├── notebooks/                # marimo notebooks — exploration only
 ├── tests/                    # pytest for src/mutascope
 ├── docs/adr/                 # architecture decision records
-└── data/                     # gitignored: raw/, interim/, processed/, cache/
+├── data/                     # gitignored: raw/, interim/, processed/, cache/
+└── mlruns/                   # gitignored: local MLflow store (mlflow.db, artifacts/)
 ```
 
 ## Commands
@@ -54,6 +56,7 @@ make test         # pytest -q (uses esm2_t6_8M; must stay fast, < 2 min)
 make test-slow    # pytest -m slow (real 650M models, MPS; run locally only)
 make pipeline     # nextflow run pipeline/main.nf -profile local
 make pipeline-test# nextflow run pipeline/main.nf -profile local,test (docker,test once the image exists, Phase 4)
+make mlflow       # MLflow UI on http://127.0.0.1:5001 over mlruns/mlflow.db
 make api          # uvicorn api.app.main:app --reload --port 7860
 make web          # cd web && pnpm dev
 make types        # regenerate web/src/lib/api-types.ts from OpenAPI (openapi-typescript)
@@ -115,6 +118,9 @@ Run `make lint test` before declaring any task done.
 - Benchmark runs score only the positions an assay measures (`positions=`). A cache entry always
   has shape `(L, 20)`; a row is NaN until that residue is scored, and later requests fill in the
   missing rows. NaN never counts as a score (ADR 0013).
+- A score set is named by `mutascope.eval.zero_shot.run_label`: the model name for the masked
+  marginal, `<model>_wt` for the wild-type marginal. That label is the `model` column of scores
+  and results and the name of their directories and files; never build it anywhere else.
 - The cache is the checkpoint of a scoring run: it lives outside any output or Nextflow work
   directory, and a rerun must not recompute a finished sequence.
 - Pin every Hugging Face model by `revision` in config.
@@ -138,6 +144,10 @@ Run `make lint test` before declaring any task done.
   (nested CV). Test folds are touched exactly once per final evaluation.
 - Results go to `results/*.parquet` in long format (`model, assay_id, split, fold, metric, value`);
   figures are generated from these files only.
+- Every command that scores or evaluates one of our models logs one MLflow run: model, pinned
+  revision, method, code version, the resolved config and the metrics (ADR 0014). Tracked
+  metrics are copied from the results files, never computed separately. The model gate compares
+  masked marginals only; ProteinGym has no wild-type-marginal ESM-2 scores to compare with.
 - Never present zero-shot predictions as supervised, or either as clinical. Variants are "functional effect in DMS assays", not "pathogenic".
 
 ## API (`api/`)
