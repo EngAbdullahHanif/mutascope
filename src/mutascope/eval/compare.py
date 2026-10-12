@@ -6,6 +6,7 @@ is clear. The resampling and the aggregation are :func:`mutascope.eval.aggregate
 this module applies it to results in the long format and returns the comparison as a table.
 """
 
+from collections.abc import Collection
 from typing import Any
 
 import numpy as np
@@ -24,6 +25,7 @@ def paired_bootstrap_diff(
     reference: pd.DataFrame,
     bootstrap: BootstrapParams,
     rng: np.random.Generator,
+    may_be_absent: Collection[str] = (),
 ) -> pd.DataFrame:
     """Paired bootstrap of ``A - B`` for every metric, overall and per function type.
 
@@ -39,6 +41,10 @@ def paired_bootstrap_diff(
         reference: ProteinGym reference table (``DMS_id, UniProt_ID, coarse_selection_type``).
         bootstrap: Resampling settings (``eval.bootstrap``).
         rng: Seeded generator.
+        may_be_absent: Assays one model may lack (``data.structure_exceptions``: a
+            structure-aware model has no scores for them). If either side lacks one, it is
+            left out of both, so the comparison is on the shared assays and ``n_assays`` says
+            how many. Any other difference between the two assay sets is an error.
 
     Returns:
         :class:`ComparisonSchema` rows.
@@ -51,6 +57,9 @@ def paired_bootstrap_diff(
     name_b, b = _one_model(results_b, "results_b")
     if name_a == name_b:
         raise ValueError(f"both result sets are {name_a!r}; nothing to compare")
+    one_sided = (set(a["assay_id"]) ^ set(b["assay_id"])) & set(may_be_absent)
+    a = a[~a["assay_id"].isin(one_sided)]
+    b = b[~b["assay_id"].isin(one_sided)]
     joined = a.merge(b, on=_KEYS, how="outer", suffixes=("_a", "_b"), indicator=True)
     if (joined["_merge"] != "both").any() or len(joined) != len(a) or len(joined) != len(b):
         sides = joined["_merge"].astype(str).value_counts().to_dict()

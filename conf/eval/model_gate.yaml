@@ -1,0 +1,23 @@
+# Model gate exceptions (ADR 0015): assays where ProteinGym's precomputed scores of a model are
+# known to come from wrong inputs, so a correct scorer cannot agree with them. They are left out
+# of both gate checks for that model only; the benchmark still uses our scores for them.
+#
+# model name -> assay -> reason and evidence. The gate fails if a listed assay reaches the
+# per-variant threshold (the upstream scores were fixed: remove the entry), or is not among the
+# model's assays, the same pattern as data.structure_exceptions. Each entry's replay is a slow
+# test in tests/test_reproduction.py: feeding our scorer the erroneous inputs reproduces
+# ProteinGym's scores, which is what shows the difference is theirs and not ours.
+model_gate:
+  exceptions:
+    saprot_650m_af2:
+      POLG_HCVJF_Qi_2014: >-
+        Scored upstream with pdb_range 1981-2224 (reference file of March 2024; v1.3 has
+        1982-2225), so each residue of sequence 1981-2224 carried the 3Di token of the next
+        residue. Correct inputs: rho 0.2770 against ProteinGym's scores (1,630 variants).
+        Replaying the shifted inputs: rho 1.000000, max |diff| 2.0e-05.
+      BRCA2_HUMAN_Erwood_2022_HEK293T: >-
+        Scored upstream in three structure chunks (1-1000, 1001-2085, 2086-2832) whose
+        concatenated scores were written onto the rows in file order, which is not sorted by
+        position: every one of the 265 rows holds another variant's score. Correct inputs: rho
+        -0.0611 against ProteinGym's scores. Replaying chunks and misassignment: rho 1.000000,
+        max |diff| 2.9e-05.

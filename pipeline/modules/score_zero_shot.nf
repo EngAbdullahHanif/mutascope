@@ -8,6 +8,9 @@
  * The command names the score set itself (zero_shot/<label>/, label = model, or model_wt), so
  * the naming rule lives in one place, mutascope.eval.zero_shot.run_label. The run is logged to
  * the MLflow store in params.tracking_dir.
+ *
+ * The structure tables are passed to every model; only a structure-aware one (SaProt) reads
+ * them, and it scores the assays with a structure on the residues the structure models.
  */
 process SCORE_ZERO_SHOT {
     tag "${model} ${method}"
@@ -18,6 +21,8 @@ process SCORE_ZERO_SHOT {
     input:
     path reference
     path variants
+    path three_di
+    path structure_features
     tuple val(model), val(method)
 
     output:
@@ -28,6 +33,7 @@ process SCORE_ZERO_SHOT {
     def fast = method == 'wt' ? '--fast' : ''
     """
     mutascope score zero-shot --reference ${reference} --variants-dir ${variants} \\
+        --three-di-dir ${three_di} --structure-features-dir ${structure_features} \\
         --out-dir zero_shot --report-dir report ${fast} \\
         --config-dir "${params.conf_dir}" "data.data_dir=${params.data_dir}" \\
         "tracking.dir=${params.tracking_dir}" "model=${model}" ${params.hydra_overrides}

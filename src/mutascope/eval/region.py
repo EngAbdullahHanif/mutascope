@@ -16,6 +16,10 @@ The set of MSA-region assays is derived from the reference file and must equal t
 ``eval.scoring_region.msa_region_assays``; any difference fails, the same pattern as
 ``data.structure_exceptions``. A reference update that changes the set therefore cannot change
 benchmark numbers silently.
+
+Structure-aware models (SaProt) have their own benchmark region, :func:`structure_regions`: the
+residues the assay's structure models (``pdb_range``), which is what ProteinGym's SaProt
+baseline scores, whatever the MSA covers.
 """
 
 from collections.abc import Mapping, Sequence
@@ -26,6 +30,7 @@ import numpy as np
 import pandas as pd
 
 from mutascope.scoring.base import FloatArray, Scorer, mutant_positions, score_mutants
+from mutascope.scoring.struct_tokens import AssayStructure
 
 Mode = Literal["benchmark", "landscape"]
 MODES: tuple[Mode, ...] = ("benchmark", "landscape")
@@ -43,6 +48,8 @@ class ScoringRegion:
     start: int
     end: int
     target_length: int
+    kind: str = "msa"
+    """Why a partial region is this one: ``"msa"`` (MSA coverage) or ``"pdb"`` (structure)."""
 
     def __post_init__(self) -> None:
         if not 0 <= self.start < self.end <= self.target_length:
@@ -57,8 +64,8 @@ class ScoringRegion:
 
     @property
     def label(self) -> str:
-        """``"full"`` or ``"msa:<first>-<last>"`` (1-based, inclusive, as in the reference)."""
-        return "full" if self.is_full else f"msa:{self.start + 1}-{self.end}"
+        """``"full"`` or ``"<kind>:<first>-<last>"`` (1-based, inclusive, as in the reference)."""
+        return "full" if self.is_full else f"{self.kind}:{self.start + 1}-{self.end}"
 
     def sequence(self, target_seq: str) -> str:
         """The part of ``target_seq`` to score."""
@@ -127,6 +134,32 @@ def scoring_regions(
     return regions
 
 
+def structure_regions(
+    reference: pd.DataFrame, structures: Mapping[str, AssayStructure]
+) -> dict[str, ScoringRegion]:
+    """The benchmark region of a structure-aware model: the residues each structure models.
+
+    ProteinGym's SaProt baseline scores ``target_seq[pdb_range]`` in one pass, not the MSA
+    region and not the full target. Assays without a structure get no region.
+
+    Args:
+        reference: ProteinGym reference table (``DMS_id``, ``target_seq``).
+        structures: :func:`~mutascope.scoring.struct_tokens.load_struct_tokens` output.
+    """
+    regions: dict[str, ScoringRegion] = {}
+    for assay_id, length in zip(
+        reference["DMS_id"].astype(str),
+        reference["target_seq"].astype(str).str.len(),
+        strict=True,
+    ):
+        if assay_id in structures:
+            structure = structures[assay_id]
+            regions[assay_id] = ScoringRegion(
+                assay_id, structure.start, structure.end, length, kind="pdb"
+            )
+    return regions
+
+
 def score_assay(
     scorer: Scorer,
     target_seq: str,
@@ -134,16 +167,29 @@ def score_assay(
     mutants: Sequence[str],
     *,
     fast: bool = False,
+    struct_tokens: str | None = None,
 ) -> FloatArray:
     """Score an assay's single mutants (target coordinates) on ``region``.
 
     Only the positions ``mutants`` substitute are scored (ADR 0013); the scorer's cache entry
     still has the region's full ``(L, 20)`` shape. A mutant outside the region, or with the
     wrong wild type, fails loudly before any model runs instead of being dropped.
+
+    ``struct_tokens`` are the structure tokens of the full target (structure-aware models
+    only); the region's part of them is passed to the scorer with the region's sequence.
     """
     seq = region.sequence(target_seq)
     positions = mutant_positions(seq, mutants, offset=region.start)
-    landscape = scorer.landscape(seq, fast=fast, region=region.label, positions=positions)
+    if struct_tokens is not None:
+        if len(struct_tokens) != region.target_length:
+            raise ScoringRegionError(
+                f"{region.assay_id}: {len(struct_tokens)} structure tokens for a "
+                f"{region.target_length}-residue target"
+            )
+        struct_tokens = struct_tokens[region.start : region.end]
+    landscape = scorer.landscape(
+        seq, struct_tokens, fast=fast, region=region.label, positions=positions
+    )
     scores = score_mutants(landscape, seq, mutants, offset=region.start)
     if not np.isfinite(scores).all():
         raise RuntimeError(
