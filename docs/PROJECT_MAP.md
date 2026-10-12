@@ -290,3 +290,31 @@ and exclude merge commits.
 
 - **CLI commands added:** none yet (scoring all assays is the next step).
 - **Outputs:** none in the repository; the cache lives in `data/cache/logprobs/` (gitignored).
+
+## Step 12 — Scoring all assays with ESM-2 650M and the model gate (Phase 2, 2026-10-12)
+
+- **What this step did:** scored the 696,311 single mutants of all 217 assays at the positions
+  they measure, made the run resumable from the disk cache, and passed the model gate (ADR 0013).
+- **Files created or modified:**
+
+| Path | What it does | Why it exists |
+|---|---|---|
+| `src/mutascope/scoring/base.py`, `esm2.py` | `positions=` on the scorer; `mutant_positions`; `positions_computed` | Score only what the benchmark needs |
+| `src/mutascope/scoring/cache.py` | Entries with NaN rows, filled in incrementally; `computations.jsonl` | Checkpoint of a run; run time across resumes |
+| `src/mutascope/eval/region.py` | `score_assay` requests only mutated positions, checks mutants first | Fail before model time is spent |
+| `src/mutascope/eval/zero_shot.py` | `score_assays`: every assay → score partitions + run report | The benchmark scoring step |
+| `src/mutascope/eval/gate.py` | Model gate: per-variant agreement and aggregate check | One function for the CLI and the test |
+| `src/mutascope/eval/schemas.py`, `utils/io.py` | `ZeroShotScoreSchema`, `ScoringRunSchema`, `AgreementSchema`; `write_table` | Validate on write |
+| `src/mutascope/cli.py` | `score zero-shot`, `eval model-gate` | Pipeline steps are CLI commands |
+| `pipeline/modules/score_zero_shot.nf`, `main.nf`, `nextflow.config` | `SCORE_ZERO_SHOT`; `params.model`; 8M model in the test profile | Nextflow calls the CLI |
+| `conf/eval/proteingym.yaml`, `conf/model/esm2_*.yaml`, `conf/scoring/default.yaml` | Gate thresholds; ProteinGym column per checkpoint | No hard-coded settings |
+| `tests/scoring/*`, `tests/eval/test_{zero_shot,gate,region}.py`, `tests/test_reproduction.py` | Positions, incremental fill, crash and resume, gate verdicts, the real gate (`slow`) | 24 new fast tests |
+| `.github/workflows/ci.yml` | 8M checkpoint cache for the pipeline job | The smoke test now scores |
+| `CLAUDE.md`, `README.md`, `docs/adr/0013-benchmark-scoring-run.md`, `docs/adr/0012-esm2-scorer.md`, `docs/ROADMAP.md`, `docs/BUILD_LOG.md` | Rules, usage, decisions, checklist, entry 12 | Decision record and docs |
+
+- **CLI commands added:**
+  - `mutascope score zero-shot` scores every assay with the configured model.
+  - `mutascope eval model-gate` compares our scores with ProteinGym's and writes our results.
+- **Outputs:** `results/model_gate_esm2_650m.parquet`, `results/zero_shot_esm2_650m_single.parquet`
+  and `_summary.parquet`, `results/data/zero_shot_run_esm2_650m.parquet`. Scores are in
+  `data/processed/zero_shot/esm2_650m/` and the cache in `data/cache/logprobs/` (both gitignored).

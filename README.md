@@ -17,20 +17,48 @@ Requires [uv](https://docs.astral.sh/uv/), Nextflow (Java 17+) and Foldseek (see
 
 ## Running the pipeline
 
-`pipeline/main.nf` chains the `mutascope data` commands
+`pipeline/main.nf` chains the `mutascope` commands
 ([ADR 0007](docs/adr/0007-pipeline-wiring-and-ci.md)):
 
 ```
 DOWNLOAD -> [SUBSET] -> VALIDATE -> CLEAN, STRUCT_FEATURES, FOLDSEEK_3DI -> STRUCTURE_REPORT
+                                    CLEAN -> SCORE_ZERO_SHOT
 ```
 
 - `make pipeline` runs on all 217 assays. The release is downloaded once into `data/raw/` and
   re-verified against `data/manifest.yaml` on every run. Outputs go to
   `data/processed/{variants,structure_features,three_di}/`, and reports (validation, cleaning,
   structure) go to `results/data/`.
-- `make pipeline-test` runs the same steps on 2 small assays and skips the 1.9 GB zero-shot
-  archive. It writes only to `pipeline/results/` (gitignored), taking about 30 s from an empty
-  cache. CI runs it on every push.
+- `SCORE_ZERO_SHOT` scores every assay's single mutants with ESM-2 650M (`--model esm2_150m`
+  picks another `conf/model/` group) and writes `data/processed/zero_shot/<model>/`. It scores
+  only the positions each assay measures and is the long step: about 1.5 hours on an M4 Pro.
+  On a laptop, run it as `caffeinate -ims make pipeline` so the machine does not sleep.
+- `make pipeline-test` runs the same steps on 2 small assays, with the 30 MB `esm2_t6_8M`
+  model, and skips the 1.9 GB zero-shot archive. It writes only to `pipeline/results/`
+  (gitignored), taking about 30 s from an empty cache. CI runs it on every push.
+
+### Resuming an interrupted scoring run
+
+Run the same command again. Every scored sequence is written to `data/cache/logprobs/` as soon
+as it is finished, and that directory is outside Nextflow's work directory, so a rerun (with or
+without `-resume`) reads finished assays from disk and runs the model only for the rest. At most
+the one sequence in progress is lost, which is under 7 minutes of work. The command prints how
+many assays came from the cache, and `results/data/zero_shot_run_<model>.parquet` records
+`positions_computed` per assay (0 = read from the cache)
+([ADR 0013](docs/adr/0013-benchmark-scoring-run.md)).
+
+### The model gate
+
+```bash
+uv run mutascope eval model-gate \
+    --scores-dir data/processed/zero_shot/esm2_650m \
+    --precomputed-dir data/raw/proteingym_v1.3/zero_shot_substitutions_scores \
+    --reference data/raw/proteingym_v1.3/DMS_substitutions.csv --out-dir results
+```
+
+compares our scores with ProteinGym's precomputed `ESM2_650M` on the 696,311 single mutants
+(ADR 0010) and exits 1 if any assay has per-variant Spearman below 0.99 or the aggregate differs
+by more than 0.01. `make test-slow` runs the same check as a test.
 
 Hydra overrides reach every command through `--hydra_overrides`, for example
 `nextflow run pipeline/main.nf -profile local --hydra_overrides 'structure.foldseek.threads=8'`.
