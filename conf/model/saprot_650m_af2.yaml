@@ -1,0 +1,18 @@
+# SaProt checkpoint on the Hugging Face Hub, pinned to a commit (verified via the Hub API).
+# Structure-aware: scored only on assays with an AF2 structure, on the residues it models.
+name: saprot_650m_af2
+scorer: saprot
+hf_id: westlake-repl/SaProt_650M_AF2
+revision: d9b9ad00ef61c0990e611b2b43f2231c7de24b38
+# Masked passes per forward call, at most; fewer for long sequences (max_batch_tokens).
+batch_size: 8
+# null = never window: the official scoring runs the whole sequence in one pass, and
+# ProteinGym's SaProt scores were made that way (13 assays are longer than 1,022 residues).
+window_tokens: null
+# Cap on tokens per forward call, so a 2,832-residue sequence runs 2 masked copies at a time.
+max_batch_tokens: 8192
+# A residue with pLDDT below this gets '#' instead of its 3Di letter. Its presence marks the
+# model as structure-aware for the scoring and evaluation commands.
+plddt_threshold: ${structure.low_plddt_threshold}
+# ProteinGym's precomputed score column for this checkpoint (the model gate compares with it).
+proteingym_column: SaProt_650M_AF2

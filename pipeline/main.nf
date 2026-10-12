@@ -5,10 +5,12 @@
  *   DOWNLOAD -> [SUBSET] -> VALIDATE -> CLEAN ----------\
  *                                    -> STRUCT_FEATURES --> STRUCTURE_REPORT
  *                                    -> FOLDSEEK_3DI ----/
- *                                       CLEAN -> SCORE_ZERO_SHOT -> BENCHMARK_ZERO_SHOT
+ *            CLEAN, STRUCT_FEATURES, FOLDSEEK_3DI -> SCORE_ZERO_SHOT -> BENCHMARK_ZERO_SHOT
  *
  * SCORE_ZERO_SHOT and BENCHMARK_ZERO_SHOT run once per (model, method) in params.models x
- * params.methods. SUBSET runs only when params.assays names assays (the test profile). Every command gets
+ * params.methods, except that the models in params.masked_only_models run the masked marginal
+ * only (SaProt: the official scoring defines no wild-type marginal, and ProteinGym has no
+ * scores to check one against). SUBSET runs only when params.assays names assays (the test profile). Every command gets
  * params.hydra_overrides appended, so one override reaches every step.
  */
 
@@ -60,7 +62,15 @@ workflow {
         STRUCT_FEATURES.out.features,
         FOLDSEEK_3DI.out.three_di,
     )
+    def masked_only = as_list(params.masked_only_models) ?: []
     def runs = channel.fromList(models).combine(channel.fromList(methods))
-    SCORE_ZERO_SHOT(inputs.reference, CLEAN.out.variants, runs)
+        .filter { model, method -> method == 'masked' || !(model in masked_only) }
+    SCORE_ZERO_SHOT(
+        inputs.reference,
+        CLEAN.out.variants,
+        FOLDSEEK_3DI.out.three_di,
+        STRUCT_FEATURES.out.features,
+        runs,
+    )
     BENCHMARK_ZERO_SHOT(inputs.reference, CLEAN.out.variants, SCORE_ZERO_SHOT.out.scores)
 }

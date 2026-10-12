@@ -20,64 +20,37 @@ Follows ProteinGym's ``proteingym/baselines/esm/compute_fitness.py`` at the pinn
 Token offset: the tokenizer prepends ``<cls>``, so residue ``i`` (0-indexed) is token ``i + 1``
 (upstream: ``token_probs[0, 1 + idx, ...]``, "add 1 for BOS"). :data:`RESIDUE_OFFSET` is the only
 place this appears, and :meth:`Esm2Scorer.tokenize` checks the layout on every sequence.
+
+The cache, the two marginals and the windows are in :mod:`mutascope.scoring.masked_lm`, shared
+with SaProt; this module holds what depends on ESM-2's vocabulary.
 """
 
-import time
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
 
-import numpy as np
 import torch
 
 from mutascope.alphabet import AA_ORDER
-from mutascope.scoring.base import (
-    FloatArray,
-    ScorerConfigError,
-    check_sequence,
-    landscape_from_log_probs,
-    resolve_positions,
+from mutascope.scoring.base import ScorerConfigError, check_sequence
+from mutascope.scoring.cache import LogProbCache
+from mutascope.scoring.masked_lm import (
+    RESIDUE_OFFSET,
+    MaskedLMScorer,
+    ModelSettings,
+    token_id,
 )
-from mutascope.scoring.cache import CacheKey, LogProbCache
-from mutascope.scoring.windows import optimal_window, tiled_windows
 from mutascope.utils.device import select_device
 from mutascope.utils.logging import get_logger
 
 log = get_logger(__name__)
 
-RESIDUE_OFFSET = 1
-"""Token index of residue 0: the tokenizer puts ``<cls>`` at token 0."""
 
-
-@dataclass(frozen=True)
-class Esm2Settings:
+class Esm2Settings(ModelSettings):
     """``conf/model/esm2_*.yaml``."""
 
-    name: str
-    hf_id: str
-    revision: str
-    batch_size: int
-    window_tokens: int
 
-    @classmethod
-    def from_config(cls, cfg: Mapping[str, Any]) -> "Esm2Settings":
-        try:
-            settings = cls(
-                name=str(cfg["name"]),
-                hf_id=str(cfg["hf_id"]),
-                revision=str(cfg["revision"]),
-                batch_size=int(cfg["batch_size"]),
-                window_tokens=int(cfg["window_tokens"]),
-            )
-        except KeyError as exc:
-            raise ScorerConfigError(f"model config lacks {exc}") from exc
-        if len(settings.revision) != 40:
-            raise ScorerConfigError(f"{settings.name}: revision must be a full commit sha")
-        return settings
-
-
-class Esm2Scorer:
+class Esm2Scorer(MaskedLMScorer):
     """Masked- and wild-type-marginal landscapes from an ESM-2 masked language model.
 
     Construct with :func:`from_config` for a pinned Hub checkpoint. The constructor takes the
@@ -93,28 +66,17 @@ class Esm2Scorer:
         device: torch.device,
         cache: LogProbCache | None = None,
     ) -> None:
-        self.settings = settings
-        self.model = model.eval()
-        self.tokenizer = tokenizer  # a Hugging Face ESM tokenizer (untyped upstream)
-        self.device = device
-        self.cache = cache
-        self.cls_id = _token_id(tokenizer, "cls_token_id")
-        self.eos_id = _token_id(tokenizer, "eos_token_id")
-        self.mask_id = _token_id(tokenizer, "mask_token_id")
-        unk_id = _token_id(tokenizer, "unk_token_id")
+        super().__init__(
+            settings=settings, model=model, tokenizer=tokenizer, device=device, cache=cache
+        )
+        if settings.window_tokens is None:
+            raise ScorerConfigError(f"{settings.name}: ESM-2 needs window_tokens")
+        self.mask_id = token_id(tokenizer, "mask_token_id")
+        unk_id = token_id(tokenizer, "unk_token_id")
         self.aa_ids = [int(i) for i in tokenizer.convert_tokens_to_ids(list(AA_ORDER))]
         if unk_id in self.aa_ids:
             raise ScorerConfigError("tokenizer does not know all 20 amino acids")
         self.aa_token_ids = torch.tensor(self.aa_ids)
-        self._positions_computed = 0
-
-    @property
-    def model_id(self) -> str:
-        return self.settings.name
-
-    @property
-    def positions_computed(self) -> int:
-        return self._positions_computed
 
     def tokenize(self, seq: str) -> torch.Tensor:
         """Token ids ``<cls> residues <eos>``; fails unless residue ``i`` is token ``i + 1``."""
@@ -129,138 +91,19 @@ class Esm2Scorer:
             )
         return torch.tensor(ids)
 
-    def landscape(
-        self,
-        seq: str,
-        struct_tokens: str | None = None,
-        *,
-        fast: bool = False,
-        region: str = "full",
-        positions: Sequence[int] | None = None,
-    ) -> FloatArray:
-        """``(L, 20)`` scores; see :mod:`mutascope.scoring.base`. ESM-2 is sequence-only."""
+    def encode(self, seq: str, struct_tokens: str | None) -> torch.Tensor:
+        """:meth:`tokenize`; ESM-2 is sequence-only, so ``struct_tokens`` must be None."""
         if struct_tokens is not None:
             raise ValueError("ESM-2 is sequence-only; struct_tokens must be None")
-        log_probs = self.log_probs(seq, fast=fast, region=region, positions=positions)
-        return landscape_from_log_probs(log_probs, seq)
+        return self.tokenize(seq)
 
-    def log_probs(
-        self,
-        seq: str,
-        *,
-        fast: bool = False,
-        region: str = "full",
-        positions: Sequence[int] | None = None,
-    ) -> FloatArray:
-        """``(L, 20)`` log-probabilities in ``AA_ORDER`` (normalised over the full vocabulary).
+    def mask_ids(self, tokens: torch.Tensor) -> torch.Tensor:
+        """``<mask>`` for every token."""
+        return torch.full_like(tokens, self.mask_id)
 
-        Only the requested residues that the cache entry lacks go through the model; the entry
-        is then rewritten with those rows filled in. Rows that were never scored are NaN. The
-        wild-type marginal gets every residue from its single pass, so it ignores ``positions``.
-        """
-        check_sequence(seq)
-        key = CacheKey(
-            model_id=self.settings.hf_id,
-            revision=self.settings.revision,
-            sequence=seq,
-            struct_tokens=None,
-            method="wt" if fast else "masked",
-            region=region,
-        )
-        wanted = resolve_positions(None if fast else positions, len(seq))
-        cached = self.cache.get(key) if self.cache is not None else None
-        if cached is None:
-            cached = np.full((len(seq), len(AA_ORDER)), np.nan, dtype=np.float32)
-        missing = [p for p in wanted if np.isnan(cached[p, 0])]
-        if not missing:
-            return cached
-        start = time.monotonic()
-        tokens = self.tokenize(seq)
-        if fast:
-            result = self._wt_marginal(tokens)
-        else:
-            result = cached
-            result[missing] = self._masked_marginal(tokens, missing)
-        self._release_device_cache()
-        seconds = time.monotonic() - start
-        self._positions_computed += len(missing)
-        log.info(
-            "scored",
-            model=self.model_id,
-            method=key.method,
-            region=region,
-            length=len(seq),
-            positions=len(missing),
-            seconds=round(seconds, 2),
-        )
-        if self.cache is not None:
-            self.cache.put(key, result)
-            self.cache.record(key, positions=len(missing), seconds=seconds)
-        return result
-
-    def _release_device_cache(self) -> None:
-        """Give the MPS allocator's cached buffers back to the system after a sequence.
-
-        PyTorch keeps freed MPS buffers for reuse. Every sequence length needs buffers of new
-        sizes, and with the 8M and 35M checkpoints the kept ones were never released: driver
-        memory grew by about 1.6 GiB per 1,000 positions until the 35M benchmark run failed
-        with "MPS backend out of memory" (build log entry 13). Emptying the cache once per
-        sequence costs nothing measurable and changes no number.
-        """
-        if self.device.type == "mps":
-            torch.mps.empty_cache()
-
-    @torch.inference_mode()
-    def _masked_marginal(self, tokens: torch.Tensor, residues: Sequence[int]) -> FloatArray:
-        """Log-probabilities of ``residues`` (0-indexed), one row each, in the order given."""
-        n_tokens = tokens.numel()
-        masked_tokens = [RESIDUE_OFFSET + r for r in residues]  # never <cls> or <eos>
-        rows: list[torch.Tensor] = []
-        for batch in _chunks(masked_tokens, self.settings.batch_size):
-            inputs: list[torch.Tensor] = []
-            local: list[int] = []
-            for position in batch:
-                window = optimal_window(position, n_tokens, self.settings.window_tokens)
-                masked = tokens[window.start : window.end].clone()
-                masked[position - window.start] = self.mask_id
-                inputs.append(masked)
-                local.append(position - window.start)
-            logits = self._forward(torch.stack(inputs))
-            at_mask = logits[torch.arange(len(batch)), torch.tensor(local)]
-            rows.append(self._aa_log_probs(at_mask))
-        return torch.cat(rows).numpy()
-
-    @torch.inference_mode()
-    def _wt_marginal(self, tokens: torch.Tensor) -> FloatArray:
-        n_tokens = tokens.numel()
-        tiles, owner = tiled_windows(n_tokens, self.settings.window_tokens)
-        logits = self._forward(torch.stack([tokens[t.start : t.end] for t in tiles]))
-        positions = range(RESIDUE_OFFSET, n_tokens - 1)
-        tile = torch.tensor([owner[p] for p in positions])
-        local = torch.tensor([p - tiles[owner[p]].start for p in positions])
-        return self._aa_log_probs(logits[tile, local]).numpy()
-
-    def _forward(self, input_ids: torch.Tensor) -> torch.Tensor:
-        """Logits ``(batch, tokens, vocab)`` as float32 on the CPU."""
-        input_ids = input_ids.to(self.device)
-        output = self.model(input_ids=input_ids, attention_mask=torch.ones_like(input_ids))
-        logits: torch.Tensor = output.logits
-        return logits.float().cpu()
-
-    def _aa_log_probs(self, logits: torch.Tensor) -> torch.Tensor:
+    def aa_log_probs(self, logits: torch.Tensor) -> torch.Tensor:
         """Log-softmax over the whole vocabulary, then the 20 amino-acid columns in AA_ORDER."""
         return torch.log_softmax(logits, dim=-1)[:, self.aa_token_ids]
-
-
-def _token_id(tokenizer: Any, attribute: str) -> int:
-    value = getattr(tokenizer, attribute, None)
-    if not isinstance(value, int):
-        raise ScorerConfigError(f"tokenizer has no {attribute}")
-    return value
-
-
-def _chunks(items: Sequence[int], size: int) -> list[Sequence[int]]:
-    return [items[i : i + size] for i in range(0, len(items), size)]
 
 
 def from_config(model_cfg: Mapping[str, Any], *, device: str, cache_dir: Path | None) -> Esm2Scorer:

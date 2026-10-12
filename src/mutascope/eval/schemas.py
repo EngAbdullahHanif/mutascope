@@ -159,6 +159,9 @@ class AgreementSchema(pa.DataFrameModel):
 
     ``spearman`` and ``max_abs_diff`` compare the two score columns with each other;
     ``spearman_dms_*`` compare each with ``DMS_score`` (the inputs to the aggregate check).
+    ``passed`` is the per-variant threshold alone. ``exception`` marks an assay whose
+    ProteinGym scores are documented as wrong (``eval.model_gate.exceptions``, ADR 0015): it
+    is left out of both checks, and it is an error for it to have ``passed``.
     """
 
     assay_id: Series[str] = pa.Field(unique=True)
@@ -168,6 +171,7 @@ class AgreementSchema(pa.DataFrameModel):
     spearman_dms_ours: Series[float] = pa.Field(nullable=True)
     spearman_dms_theirs: Series[float] = pa.Field(nullable=True)
     passed: Series[bool]
+    exception: Series[bool]
 
     class Config:  # pyright: ignore[reportIncompatibleVariableOverride]
         strict = True
