@@ -318,3 +318,58 @@ and exclude merge commits.
 - **Outputs:** `results/model_gate_esm2_650m.parquet`, `results/zero_shot_esm2_650m_single.parquet`
   and `_summary.parquet`, `results/data/zero_shot_run_esm2_650m.parquet`. Scores are in
   `data/processed/zero_shot/esm2_650m/` and the cache in `data/cache/logprobs/` (both gitignored).
+
+## Step 13 — ESM-2 35M and 150M, wild-type marginals, MLflow tracking (Phase 2, 2026-10-12)
+
+- **What this step did:** scored all 217 assays with the two smaller checkpoints, added the
+  wild-type marginal for all three sizes, benchmarked the six score sets, passed the model gate
+  for all three checkpoints, and tracked every run in a local MLflow store (ADR 0014).
+- **Files created or modified:**
+
+| Path | What it does | Why it exists |
+|---|---|---|
+| `src/mutascope/utils/tracking.py` | `log_run`: one MLflow run (params, metrics, tags, config, files) in a local SQLite store; `code_version` | Record which model, revision and config produced which numbers |
+| `conf/tracking/default.yaml`, `conf/config.yaml` | `tracking.enabled`, `dir`, `experiment` | No hard-coded settings; tracking can be turned off |
+| `src/mutascope/eval/zero_shot.py` | `run_label` (`<model>` or `<model>_wt`); `with_labels` joins scores with assay labels | Two methods of one model must not share a name; labels for any score set |
+| `src/mutascope/eval/benchmark.py` | `summary_metrics`: a summary as flat metric names | Tracked metrics are copied from the results, not recomputed |
+| `src/mutascope/cli.py` | `eval zero-shot` (new); `score zero-shot` writes `<root>/<label>/`; `model-gate` writes the agreement only; all three log a run | One writer of benchmark results; pipeline steps are CLI commands |
+| `src/mutascope/scoring/esm2.py` | Empties the MPS buffer cache after each sequence | The 35M run died twice with "MPS backend out of memory" |
+| `src/mutascope/eval/proteingym.py` | Docstring: labels in the score files differ in the last digits | Found when the 650M results did not come out identical |
+| `pipeline/modules/score_zero_shot.nf`, `benchmark_zero_shot.nf`, `main.nf`, `nextflow.config` | One scoring and one benchmark task per (model, method); `params.models`, `params.methods`, `results_dir`, `tracking_dir` | Nextflow calls the CLI |
+| `pyproject.toml`, `uv.lock` | `mlflow` 3.17.0 as the optional `tracking` extra | Not installed in the serving image |
+| `Makefile` | `make mlflow` (UI on port 5001) | Canonical command for the tracking UI |
+| `tests/test_tracking.py`, `tests/eval/test_zero_shot.py`, `tests/eval/test_benchmark.py`, `tests/scoring/test_esm2.py`, `tests/test_reproduction.py` | Tracking store, labels, label join, the three commands end to end, MPS memory regression, gate for three checkpoints (`slow`) | 9 new fast tests, 2 new slow cases |
+| `CLAUDE.md`, `README.md`, `docs/adr/0014-model-sizes-wt-marginal-tracking.md`, `docs/ROADMAP.md`, `docs/BUILD_LOG.md` | Rules, usage, decisions, checklist, entry 13 | Decision record and docs |
+
+- **CLI commands added or changed:**
+  - `mutascope eval zero-shot` (new) benchmarks one score set and writes its results.
+  - `mutascope score zero-shot --out-dir` is now the root of `<label>/` directories.
+  - `mutascope eval model-gate` writes only the agreement table.
+- **Outputs:** `results/zero_shot_<label>_single.parquet` and `_summary.parquet` for
+  `esm2_{35m,150m,650m}` and `esm2_{35m,150m,650m}_wt`; `results/model_gate_esm2_{35m,150m}.parquet`;
+  `results/data/zero_shot_run_<label>.parquet` for the five new score sets. Scores are in
+  `data/processed/zero_shot/<label>/` and the MLflow store in `mlruns/` (both gitignored).
+
+## Step 14 — Order-independent tests and paired model comparisons (Phase 2, 2026-10-12)
+
+- **What this step did:** fixed the logging state that made one test depend on test order,
+  shuffled the test order from now on, and added the paired bootstrap that every model
+  comparison must use (ADR 0014, decision 13).
+- **Files created or modified:**
+
+| Path | What it does | Why it exists |
+|---|---|---|
+| `src/mutascope/utils/logging.py` | Loggers are no longer cached on first use | A cached logger ignored every later `configure_logging` call |
+| `tests/test_logging.py` | Two regression tests: a later configuration and `capture_logs` reach a logger already used | The root cause, tested without relying on test order |
+| `pyproject.toml`, `uv.lock` | `pytest-randomly` 5.0.0 (dev) | Shuffles test order on every run and prints the seed |
+| `src/mutascope/eval/aggregate.py` | `paired_bootstrap`; resampling weights and percentile interval shared with `bootstrap_ci` | One resampling scheme and one aggregation for paired and unpaired CIs |
+| `src/mutascope/eval/compare.py` | `paired_bootstrap_diff(results_a, results_b, …)` on long-format results | The only place a model comparison is computed |
+| `src/mutascope/eval/schemas.py` | `ComparisonSchema` | Validate on write |
+| `src/mutascope/cli.py` | `eval compare`; `_log_run` shared by single-model and comparison runs | Pipeline steps are CLI commands; the run is tracked |
+| `conf/eval/proteingym.yaml` | `eval.comparisons`: the five pairs | No hard-coded model names |
+| `tests/eval/test_compare.py`, `tests/eval/test_zero_shot.py` | Exact cases (constant gain, identical sets), pairing vs separate CIs, NaN handling, the command end to end | 7 new tests (one is the generic check that every command takes Hydra overrides) |
+| `CLAUDE.md`, `README.md`, `docs/adr/0014-model-sizes-wt-marginal-tracking.md`, `docs/ROADMAP.md`, `docs/BUILD_LOG.md` | Rule, usage, decision 13 and results, checklist, entry 14 | Decision record and docs |
+
+- **CLI commands added:** `mutascope eval compare` runs every pair in `eval.comparisons`.
+- **Outputs:** `results/zero_shot/comparisons.parquet` (150 rows: 5 pairs × 5 metrics ×
+  overall and 5 function types).

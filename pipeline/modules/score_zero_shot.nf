@@ -1,28 +1,35 @@
 /*
- * Zero-shot scores of every assay's single mutants with params.model (masked marginal), at the
- * positions each assay measures. One task, one model load; maxForks 1 because the Mac has one
- * GPU. The log-probability cache is under params.data_dir, outside the work dir, so a task
- * that is killed and rerun (with or without -resume) scores only what is not cached yet.
+ * Zero-shot scores of every assay's single mutants with one model and one scoring method
+ * (masked or wt = wild-type marginal), at the positions each assay measures. One task per
+ * (model, method), one model load each; maxForks 1 because the Mac has one GPU. The
+ * log-probability cache is under params.data_dir, outside the work dir, so a task that is
+ * killed and rerun (with or without -resume) scores only what is not cached yet.
+ *
+ * The command names the score set itself (zero_shot/<label>/, label = model, or model_wt), so
+ * the naming rule lives in one place, mutascope.eval.zero_shot.run_label. The run is logged to
+ * the MLflow store in params.tracking_dir.
  */
 process SCORE_ZERO_SHOT {
-    tag "${params.model}"
+    tag "${model} ${method}"
     maxForks 1
-    publishDir "${params.processed_dir}/zero_shot", mode: 'copy', pattern: "${params.model}"
+    publishDir params.processed_dir, mode: 'copy', pattern: 'zero_shot/*'
     publishDir params.reports_dir, mode: 'copy', pattern: 'report/*', saveAs: { file(it).name }
 
     input:
     path reference
     path variants
+    tuple val(model), val(method)
 
     output:
-    path "${params.model}", emit: scores
-    path 'report/*',        emit: report
+    tuple val(model), val(method), path('zero_shot/*'), emit: scores
+    path 'report/*',                                    emit: report
 
     script:
+    def fast = method == 'wt' ? '--fast' : ''
     """
     mutascope score zero-shot --reference ${reference} --variants-dir ${variants} \\
-        --out-dir "${params.model}" --report-dir report \\
+        --out-dir zero_shot --report-dir report ${fast} \\
         --config-dir "${params.conf_dir}" "data.data_dir=${params.data_dir}" \\
-        "model=${params.model}" ${params.hydra_overrides}
+        "tracking.dir=${params.tracking_dir}" "model=${model}" ${params.hydra_overrides}
     """
 }

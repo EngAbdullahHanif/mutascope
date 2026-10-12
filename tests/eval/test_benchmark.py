@@ -12,6 +12,7 @@ from mutascope.eval.benchmark import (
     assay_metrics_table,
     read_results,
     summarise,
+    summary_metrics,
     write_results,
 )
 from mutascope.eval.metrics import METRICS
@@ -88,3 +89,25 @@ def test_missing_score_column_fails(release_dir: Path) -> None:
     variants = load_precomputed_scores(release_dir / "scores", ["ESM2_650M"], "all")
     with pytest.raises(KeyError, match="SaProt_650M_AF2"):
         assay_metrics_table(variants, MODELS, top_percent=10)
+
+
+def test_summary_metrics_are_the_summary_rows_of_one_model(release_dir: Path) -> None:
+    """Flat names for experiment tracking, values copied from the summary (NaN included)."""
+    reference = pd.read_csv(release_dir / "reference.csv")
+    summary = summarise(
+        _per_assay(release_dir, "single"), reference, BOOTSTRAP, np.random.default_rng(0)
+    )
+    metrics = summary_metrics(summary, "proteingym:ESM2_650M")
+
+    suffixes = ("", "_ci_low", "_ci_high", "/Binding", "/Stability")
+    assert set(metrics) == {m + suffix for m in METRICS for suffix in suffixes}
+    mine = summary[summary["model"] == "proteingym:ESM2_650M"]
+    overall = mine[(mine["level"] == "overall") & (mine["metric"] == "spearman")]
+    assert metrics["spearman"] == overall["value"].item()
+    assert metrics["spearman_ci_low"] == overall["ci_low"].item()
+    assert metrics["spearman_ci_low"] <= metrics["spearman"] <= metrics["spearman_ci_high"]
+    stability = mine[(mine["group"] == "Stability") & (mine["metric"] == "ndcg")]
+    assert metrics["ndcg/Stability"] == stability["value"].item()
+    assert np.isnan(metrics["auc/Binding"])  # B1's single mutants all have label 1
+    with pytest.raises(ValueError, match="no zero-shot summary rows"):
+        summary_metrics(summary, "esm2_650m")
