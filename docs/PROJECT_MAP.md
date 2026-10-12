@@ -402,3 +402,29 @@ and exclude merge commits.
   `results/model_gate_saprot_650m_af2.parquet`, `results/data/zero_shot_run_saprot_650m_af2.parquet`,
   `results/zero_shot/comparisons.parquet` (180 rows: 6 pairs); the three ESM-2 gate files gained
   the `exception` column.
+
+## Step 16 — Ensemble and figures (Phase 2, 2026-10-13)
+
+- **What this step did:** built the z-score ensemble of ESM-2 650M and SaProt on the 213 shared
+  assays, compared it with both members, and drew the four Phase 2 figures from the results
+  files (ADR 0016).
+- **Files created or modified:**
+
+| Path | What it does | Why it exists |
+|---|---|---|
+| `src/mutascope/scoring/ensemble.py` | `zscore_mean`: within-assay z-score per member, then the mean | The combination rule, with no I/O |
+| `src/mutascope/eval/compare.py` | `shared_assays`, `summarise_shared` | One rule for "the assays all score sets have"; summaries that can be drawn side by side |
+| `src/mutascope/eval/figures.py` | Four figure functions and `save_figure` (SVG, PNG) | Figures from results files only; fails instead of computing |
+| `src/mutascope/eval/zero_shot.py` | `write_scores` | Writes a whole score set that no model produced assay by assay |
+| `src/mutascope/cli.py` | `score ensemble`, `eval shared`, `eval figures`; `_members`; ensembles in `_model_assays` and tracking | Pipeline steps are CLI commands |
+| `conf/model/ensemble_esm2_650m_saprot_650m_af2.yaml`, `conf/eval/figures.yaml`, `conf/eval/proteingym.yaml` | Members; what each figure shows; two new pairs and `shared_summary` | No hard-coded model names |
+| `pyproject.toml`, `uv.lock` | `figures` extra (matplotlib) | Static SVG and PNG output |
+| `tests/scoring/test_ensemble.py`, `tests/eval/test_figures.py`, `tests/eval/test_compare.py`, `tests/eval/test_zero_shot.py` | The rule on exact cases, shared summaries, figures end to end and redrawn identically, the ensemble through the CLI | 16 new fast tests |
+| `docs/adr/0016-ensemble-and-figures.md`, `CLAUDE.md`, `README.md`, `docs/ROADMAP.md`, `docs/BUILD_LOG.md` | Decisions and evidence; rules; usage; checklist; entry 16 | Decision record and docs |
+
+- **CLI commands added:** `mutascope score ensemble`, `mutascope eval shared`,
+  `mutascope eval figures`.
+- **Outputs:** `results/zero_shot_ensemble_esm2_650m_saprot_650m_af2_single{,_summary}.parquet`,
+  `results/zero_shot/shared_summary.parquet` (90 rows: 3 score sets),
+  `results/zero_shot/comparisons.parquet` (240 rows: 8 pairs), `results/figures/*.{svg,png}`
+  (4 figures).

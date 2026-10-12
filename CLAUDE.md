@@ -31,7 +31,7 @@ mutascope/
 │   ├── scoring/              # Scorer protocol, registry, masked_lm.py, esm2.py, saprot.py, struct_tokens.py, ensemble.py, cache.py
 │   ├── features/             # per-variant feature builders
 │   ├── models/               # ridge, lgbm, mlp (Lightning), conformal, ensemble
-│   ├── eval/                 # metrics, ProteinGym-style aggregation, bootstrap CIs, figures
+│   ├── eval/                 # metrics, ProteinGym-style aggregation, bootstrap CIs, figures (matplotlib)
 │   ├── export/               # landscapes → JSON/Arrow, ONNX export + quantization
 │   └── utils/                # hashing, io, logging, seeding, tracking (MLflow)
 ├── pipeline/                 # Nextflow: main.nf, modules/, nextflow.config (profiles: local, docker, test)
@@ -124,6 +124,10 @@ Run `make lint test` before declaring any task done.
 - SaProt is scored and evaluated only on assays with a structure (213 of 217; ADR 0003). Any
   SaProt result, and any comparison with a sequence-only model, states the assay count and uses
   the shared assays.
+- Ensemble (ADR 0016): mean over members of each member's within-assay z-score, built from
+  written score sets by `mutascope score ensemble`, never from a model. An ensemble is a model
+  config with `members` and exists only on the assays every member has (213 with SaProt). Do
+  not change the combination rule because another one scores higher on the benchmark.
 - Cache logits on disk keyed by
   `sha256(model_id + revision + sequence + struct_tokens + method + region)` (method = masked or
   wild-type marginal; region = full target or MSA region; ADR 0012).
@@ -164,7 +168,10 @@ Run `make lint test` before declaring any task done.
 - **No leakage:** scalers, feature selection and hyperparameter search (Optuna) are fit on training folds only
   (nested CV). Test folds are touched exactly once per final evaluation.
 - Results go to `results/*.parquet` in long format (`model, assay_id, split, fold, metric, value`);
-  figures are generated from these files only.
+  figures are generated from these files only (`mutascope eval figures` → `results/figures/`,
+  ADR 0016). Figure code computes nothing: a missing value or pair is an error. Score sets shown
+  side by side use `results/zero_shot/shared_summary.parquet` (`mutascope eval shared`), and a
+  score set's own CI is never drawn as if it compared two score sets.
 - Every command that scores or evaluates one of our models logs one MLflow run: model, pinned
   revision, method, code version, the resolved config and the metrics (ADR 0014). Tracked
   metrics are copied from the results files, never computed separately. The model gate compares
