@@ -47,15 +47,20 @@ the processed data (run `make pipeline` first). All of its tables and charts com
 
 ## Publishing the dataset
 
-`uv run mutascope data publish` stages the Hugging Face Hub copy in `build/hf_dataset/`
-(Parquet tables, reports, card, `provenance.json`, `SHA256SUMS`) without uploading anything.
-To upload it, with a write token in `HF_TOKEN`:
+The processed dataset is on the Hugging Face Hub as
+[`engAbdullahHanif/mutascope-proteingym-v1.3`](https://huggingface.co/datasets/engAbdullahHanif/mutascope-proteingym-v1.3)
+(`publish.repo_id` in `conf/publish/hub.yaml`).
+
+`uv run mutascope data publish` stages the Hub copy in `build/hf_dataset/` (Parquet tables,
+reports, card, `provenance.json`, `SHA256SUMS`) without uploading anything. To upload it, with a
+write token in `HF_TOKEN`:
 
 ```bash
-uv run mutascope data publish --push publish.repo_id=<user>/<name>
+uv run mutascope data publish --push
 ```
 
-A new repo is created private ([ADR 0008](docs/adr/0008-eda-and-hub-publication.md)).
+A new repo is created private; an existing one keeps its visibility
+([ADR 0008](docs/adr/0008-eda-and-hub-publication.md)).
 
 ## Installing Foldseek
 
