@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Annotated
 
 import httpx
+import pandas as pd
 import typer
 from omegaconf import DictConfig, OmegaConf
 
@@ -34,9 +35,25 @@ from mutascope.data.structure_report import (
 from mutascope.data.structures import StructureCheck, StructureMappingError, map_structures
 from mutascope.data.three_di import FoldseekConfig, FoldseekError, build_three_di, check_foldseek
 from mutascope.data.validate import VariantValidationError, check_assays
+from mutascope.eval.benchmark import (
+    BootstrapParams,
+    assay_metrics_table,
+    read_results,
+    summarise,
+    write_results,
+)
+from mutascope.eval.proteingym import (
+    PRECOMPUTED_PREFIX,
+    RowSet,
+    compare_with_published,
+    load_precomputed_scores,
+    published_assay_level,
+    published_summary,
+)
 from mutascope.export.hub import PublishError, push_dataset, stage_dataset
 from mutascope.utils.config import as_str_dict, load_config
 from mutascope.utils.logging import configure_logging
+from mutascope.utils.seeding import seed_all
 
 app = typer.Typer(
     name="mutascope",
@@ -45,6 +62,8 @@ app = typer.Typer(
 )
 data_app = typer.Typer(help="Acquire and validate ProteinGym data.", no_args_is_help=True)
 app.add_typer(data_app, name="data")
+eval_app = typer.Typer(help="Benchmark predictions against DMS assays.", no_args_is_help=True)
+app.add_typer(eval_app, name="eval")
 
 ConfigDir = Annotated[
     Path,
@@ -421,3 +440,91 @@ def data_publish(
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(f"pushed -> {url}")
+
+
+@eval_app.command("precomputed")
+def eval_precomputed(
+    scores_dir: Annotated[
+        Path,
+        typer.Option(help="ProteinGym zero-shot score partitions.", exists=True, file_okay=False),
+    ],
+    reference: Reference,
+    rows: Annotated[
+        str, typer.Option(help="'all' (singles + multi-mutants, as the leaderboard) or 'single'.")
+    ],
+    out_dir: Annotated[Path, typer.Option(help="Results directory.")],
+    config_dir: ConfigDir = Path("conf"),
+    overrides: Overrides = None,
+) -> None:
+    """Benchmark ProteinGym's precomputed scores for ``eval.precomputed_models``.
+
+    Writes ``proteingym_precomputed_<rows>.parquet`` (per assay, long format) and
+    ``..._summary.parquet`` (aggregates with bootstrap CIs) to ``out_dir``. Models are named
+    ``proteingym:<score column>`` so they are never mistaken for MutaScope's own scores.
+    """
+    if rows not in ("all", "single"):
+        typer.echo(f"error: --rows must be 'all' or 'single', got {rows!r}", err=True)
+        raise typer.Exit(code=1)
+    row_set: RowSet = "all" if rows == "all" else "single"
+    cfg = load_config(config_dir, overrides).eval
+    columns = [str(c) for c in cfg.precomputed_models]
+    variants = load_precomputed_scores(scores_dir, columns, row_set)
+    names = {c: PRECOMPUTED_PREFIX + c for c in columns}
+    per_assay = assay_metrics_table(variants, names, float(cfg.top_percent))
+    bootstrap = BootstrapParams(int(cfg.bootstrap.n_resamples), float(cfg.bootstrap.confidence))
+    summary = summarise(
+        per_assay, pd.read_csv(reference), bootstrap, seed_all(int(cfg.bootstrap.seed))
+    )
+    paths = write_results(per_assay, summary, out_dir, f"proteingym_precomputed_{rows}")
+    typer.echo(
+        f"{variants['assay_id'].nunique()} assays, {len(variants):,} rows, {len(columns)} models"
+    )
+    overall = summary[summary["level"] == "overall"]
+    for record in overall.itertuples(index=False):
+        typer.echo(
+            f"  {record.model:<28} {record.metric:<10} {record.value:.4f} "
+            f"[{record.ci_low:.4f}, {record.ci_high:.4f}] ({record.n_assays} assays)"
+        )
+    typer.echo(f"results: {paths[0]}, {paths[1]}")
+
+
+@eval_app.command("compare-leaderboard")
+def eval_compare_leaderboard(
+    results: Annotated[
+        Path,
+        typer.Option(
+            help="Per-assay results of `eval precomputed --rows all`.",
+            exists=True,
+            dir_okay=False,
+        ),
+    ],
+    config_dir: ConfigDir = Path("conf"),
+    overrides: Overrides = None,
+) -> None:
+    """Print our Spearman aggregates and per-assay values next to the published leaderboard.
+
+    Reads ``<results>`` and the matching ``_summary.parquet``. This is a report; the pass/fail
+    gate is ``tests/test_reproduction.py``.
+    """
+    cfg = load_config(config_dir, overrides).eval
+    names = {str(k): str(v) for k, v in cfg.precomputed_models.items()}
+    summary = read_results(results.with_name(results.stem + "_summary.parquet"))
+    ours = summary[(summary["metric"] == "spearman") & summary["split"].isna()]
+    table = compare_with_published(ours, published_summary(Path(cfg.published.summary), names))
+    for record in table.itertuples(index=False):
+        group = "" if pd.isna(record.group) else record.group
+        typer.echo(
+            f"  {record.model:<16} {record.level:<8} {group:<18} ours {record.ours:.4f}  "
+            f"published {record.published:.3f}  delta {record.delta:+.4f}"
+        )
+    per_assay = read_results(results)
+    per_assay = per_assay[per_assay["metric"] == "spearman"].assign(
+        model=lambda f: f["model"].str.removeprefix(PRECOMPUTED_PREFIX)
+    )
+    published = published_assay_level(Path(cfg.published.assay_level), names)
+    joined = published.merge(per_assay, on=["model", "assay_id"], suffixes=("_pub", ""))
+    for model, rows in joined.groupby("model"):
+        gap = (rows["value"] - rows["value_pub"]).abs()
+        typer.echo(
+            f"  {model}: {len(rows)} assays, max |ours - published| per assay {gap.max():.5f}"
+        )
