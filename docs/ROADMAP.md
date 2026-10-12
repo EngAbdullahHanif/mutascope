@@ -61,7 +61,7 @@ Goal: several pretrained models score every mutation; our numbers reproduce the 
 ### Scorers
 - [x] `Scorer` protocol (`scoring/base.py`) returning `(L, 20)` landscapes in `AA_ORDER`; registry
 - [x] ESM-2 35M / 150M / 650M via Hugging Face `transformers`, pinned revisions (ADR 0012;
-      full landscapes for all assays not yet computed)
+      650M scored on all 217 assays at measured positions, ADR 0013; 35M and 150M not yet run)
 - [ ] SaProt 650M (AF2): combined AA + 3Di tokens, `#` where pLDDT < 70; scoring ported from the official repo
 - [ ] [stretch] ESM-1v ensemble; ESM C 300M (check licence first)
 
@@ -72,22 +72,25 @@ Goal: several pretrained models score every mutation; our numbers reproduce the 
 - [x] Disk cache keyed by `sha256(model_id + revision + sequence + struct_tokens + method + region)`
 - [x] Benchmark scoring region: MSA region where it is not the full target (5 assays, derived and
       checked against `conf/eval/scoring_region.yaml`); website landscapes use the full target (ADR 0012)
-- [ ] Full masked landscapes at every position for all 187 distinct targets (650M about 4 h on MPS)
+- [x] Benchmark run: `mutascope score zero-shot` + Nextflow `SCORE_ZERO_SHOT`, measured positions
+      only, resumable from the cache (ADR 0013; 650M: 37,753 positions in 1 h 41 min on MPS)
+- [ ] Full masked landscapes at every position (the remaining 24,918 residues of the benchmark
+      entries, plus the full targets of the five MSA-region assays); fills the same cache entries
 - [ ] Ensemble: per-assay z-score, then mean
 
 ### Benchmark harness
 - [x] Metrics per assay: Spearman, AUC, MCC, NDCG@10%, top-10% recall (ADR 0011; undefined → NaN)
 - [x] ProteinGym aggregation: per UniProt → per function type → overall
 - [x] Bootstrap 95% CIs over assays (stratified by function type)
-- [ ] Reproduction gate, split in two (ADR 0010):
+- [x] Reproduction gate, split in two (ADR 0010):
   - [x] Harness gate: our metrics + aggregation on ProteinGym's precomputed `ESM2_650M` scores over
         all rows (singles + multis) reproduce the published 0.414 (|Δ| ≤ 0.0005); also all five metrics for
         `ESM2_650M` and `SaProt_650M_AF2` (ADR 0011)
-  - [ ] Model gate (`slow`): our ESM-2 650M vs their `ESM2_650M` on single mutants, per-variant
+  - [x] Model gate (`slow`): our ESM-2 650M vs their `ESM2_650M` on single mutants, per-variant
         Spearman ≥ 0.99 in every assay, and single-mutant aggregate within ±0.01 of theirs
-        computed by the same harness
+        computed by the same harness (passed: lowest assay 0.99999996, aggregate 0.4125 vs 0.4125)
 - [ ] Results in `results/*.parquet` (long format); MLflow or W&B tracking
-      (results files done for ProteinGym's precomputed scores; tracking not started)
+      (results files done for ProteinGym's precomputed scores and our ESM-2 650M; tracking not started)
 - [ ] Figures: model size vs Spearman, per-function-type bars, ensemble gain, fast vs masked marginal
 
 Done when: full landscapes for all assays from ESM-2 (3 sizes) + SaProt; harness and model gates pass; figures generated.

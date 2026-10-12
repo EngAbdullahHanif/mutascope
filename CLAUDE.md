@@ -112,6 +112,11 @@ Run `make lint test` before declaring any task done.
 - Cache logits on disk keyed by
   `sha256(model_id + revision + sequence + struct_tokens + method + region)` (method = masked or
   wild-type marginal; region = full target or MSA region; ADR 0012).
+- Benchmark runs score only the positions an assay measures (`positions=`). A cache entry always
+  has shape `(L, 20)`; a row is NaN until that residue is scored, and later requests fill in the
+  missing rows. NaN never counts as a score (ADR 0013).
+- The cache is the checkpoint of a scoring run: it lives outside any output or Nextflow work
+  directory, and a rerun must not recompute a finished sequence.
 - Pin every Hugging Face model by `revision` in config.
 
 ## Evaluation rules (non-negotiable)
