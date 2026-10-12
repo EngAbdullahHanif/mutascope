@@ -665,8 +665,10 @@ experiments. If a number cannot be computed for an experiment (for example AUC w
 variant is labelled "functional"), it is recorded as missing and counted in the log, never as 0.
 To prove the harness is right, we ran it on ProteinGym's own published model scores and got back
 the published leaderboard: 0.4137 for ESM-2 650M (published 0.414) and 0.4566 for SaProt 650M
-(published 0.457). This check is now a test, the *harness gate* of ADR 0010. Code in
-`20e2031`, gate and results in `e1784f2`; decisions in ADR 0011.
+(published 0.457). The other four metrics match too. This check is now a test, the *harness
+gate* of ADR 0010, covering all five metrics for both models against leaderboard files that are
+part of the pinned, checksummed download. Code in `20e2031`, gate and results in `e1784f2`;
+decisions in ADR 0011.
 
 **The 3 most important design choices.**
 
@@ -679,13 +681,14 @@ the published leaderboard: 0.4137 for ESM-2 650M (published 0.414) and 0.4566 fo
    per-assay values within rounding, for both models and all 217 assays.
 2. **Undefined means NaN, not 0, even where ProteinGym says 0.** sklearn returns 0 for MCC when
    only one label class exists, and ProteinGym records it. A 0 reads as "no better than chance",
-   which is a claim the data cannot support. The deviation is small and measured (below), and it
-   does not touch the gate: on all rows no metric is undefined.
+   which is a claim the data cannot support. The deviation is deliberate, measured (below) and
+   recorded in ADR 0011, and it does not touch the gate: on all rows no metric is undefined.
 3. **One weighted aggregation for both the estimate and the bootstrap.** A bootstrap resample is
    just a vector of how many times each assay was drawn, so the point estimate is the same
    computation with every weight set to 1. The 95% CI and the reported value therefore cannot
-   follow different protocols, and 10,000 resamples take 0.08 s per model and metric. Resampling is stratified
-   by function type, so every resample still averages the same five categories.
+   follow different protocols, and 10,000 resamples take 0.08 s per model and metric.
+   Resampling is stratified by function type, so every resample still averages the same five
+   categories. The unit is the assay, as CLAUDE.md specifies and the author confirmed.
 
 **Problems encountered and how they were solved.**
 
@@ -698,9 +701,12 @@ the published leaderboard: 0.4137 for ESM-2 650M (published 0.414) and 0.4566 fo
    function-level check (our addition, not part of ADR 0010's gate) allows 0.001, with the reason
    in the test. A separate test feeds ProteinGym's own rounded per-assay values to our
    aggregation and requires the published aggregates exactly. The overall tolerance stays 0.0005.
-   *Verified:* the gate passes (ESM-2 Δ −0.0003, SaProt Δ −0.0004 overall). In a scratch run over
-   all five metrics, our aggregation of the published per-assay values reproduces all 60 published
-   aggregates exactly (5 metrics × 2 models × overall and 5 function types).
+   *Verified:* the gate passes (ESM-2 Δ −0.0003, SaProt Δ −0.0004 overall). Once all five
+   metrics were in the gate, the same effect showed up in 3 of the 50 function-level values:
+   SaProt Binding Spearman (+0.00053), ESM-2 Activity MCC (−0.00056) and ESM-2 Binding top-10%
+   recall (+0.00056), all under 0.001. All 10 overall values are within 0.00044. Our aggregation
+   of the published per-assay values reproduces all 60 published aggregates exactly (5 metrics ×
+   2 models × overall and 5 function types).
 2. **A rounding-mode mismatch made a correct aggregation look wrong.** *Found:* the first version
    of that exact check matched 9 of 10 metric–model pairs; the odd one out was SaProt Spearman.
    *Cause:* the check used Python's `round`, which rounds the exact binary value of 0.3785
@@ -714,10 +720,19 @@ the published leaderboard: 0.4137 for ESM-2 650M (published 0.414) and 0.4566 fo
    cutoff is the median over all rows. *Fix:* nothing in the code; the harness also runs on single
    mutants (`--rows single`), where the NaN path does fire, and the toy test release has an assay
    built the same way. *Verified:* the single-mutant run logs exactly 4 undefined values: AUC and
-   MCC of `F7YBW8_MESOW_Aakre_2015`, for each model. Had MCC been recorded as 0, as ProteinGym
-   does, that protein's MCC would halve (0.16 → 0.08, averaged with `F7YBW8_MESOW_Ding_2023`).
-   ESM-2's OrganismalFitness MCC would drop from 0.2820 to 0.2808, and its overall from 0.3253
-   to 0.3251.
+   MCC of `F7YBW8_MESOW_Aakre_2015`, for each model. ProteinGym would record that assay's MCC
+   as 0. Its protein, `F7YBW8_MESOW`, would then have MCC 0.0801 (the mean with
+   `F7YBW8_MESOW_Ding_2023`'s 0.1601) instead of our 0.1601. ESM-2's overall single-mutant MCC
+   would be 0.3251 instead of 0.3253 (OrganismalFitness 0.2808 instead of 0.2820); SaProt's
+   0.3544 instead of 0.3547.
+4. **A Hydra dict override merged instead of replacing, so a test read real data.** *Found:*
+   after `eval.published` became one entry per metric, the CLI test overrode it with a
+   Spearman-only dict pointing at the toy release, and passed. Checking the composed config
+   showed all five keys still present: Hydra merges a dict override into the existing one. The
+   test had read the real AUC, MCC, NDCG and top-recall files on this machine, and would have
+   failed in CI, where they are absent. *Fix:* the test sets the Spearman paths and deletes the
+   other four with `~eval.published.<metric>`. *Verified:* the test now asserts that no `auc:`
+   block is printed, and the composed config has only `spearman`.
 
 **Supporting details.**
 - *Results* (ProteinGym's precomputed scores, ProteinGym-style aggregate, 95% CI):
@@ -732,17 +747,18 @@ the published leaderboard: 0.4137 for ESM-2 650M (published 0.414) and 0.4566 fo
   The single-mutant ESM-2 aggregate, 0.4125, is the model gate's reference (ADR 0010). The
   precomputed single-mutant rows are exactly our 696,311 processed variants: same keys and
   labels, with `DMS_score` differing by at most 3.7e-9 (float formatting in the CSVs).
-- *Published values for the other metrics* were checked against files fetched from the pinned
-  commit into a scratch directory. Only the Spearman files are in the pinned download, so the
-  test gate covers Spearman. Adding the other four leaderboard files to
-  `conf/data/proteingym.yaml` would let the test cover all five; that file needs the author's
-  approval to change.
+- *Leaderboard files:* the AUC, MCC, NDCG and top-recall summary and DMS-level files (8 files,
+  about 0.7 MB) were added to `conf/data/proteingym.yaml` with the author's approval, at the
+  same pinned commit. `benchmarks_url` now ends at `substitutions/`, and each file names its
+  metric directory, so the two Spearman URLs are unchanged. No upstream md5 exists. `mutascope
+  data download` recorded their sha256 in `data/manifest.yaml`, and the files are
+  byte-identical to the ones used for the first check.
 - *Not comparable:* the leaderboard's `Bootstrap_standard_error` is the standard error of each
   model's difference from the top model, not a CI of its own score (ADR 0011).
 - *Dependencies:* `scipy` and `scikit-learn`, the libraries ProteinGym calls; both are needed
   again in Phase 3.
-- *Tests:* 40 new (225 passing, 1 skipped without Foldseek); `make test` takes about 24 s with
-  coverage, the harness gate about 5 s of it. `mutascope eval precomputed --rows all` takes
-  about 9 s.
+- *Tests:* 53 new (238 passing, 1 skipped without Foldseek). The harness gate is 16 tests
+  (3 checks × 5 metrics, plus one config check) and takes about 4 s; without the release they
+  skip, as in CI. `mutascope eval precomputed --rows all` takes about 9 s.
 - *Not done yet:* the model gate (needs our scorers), MLflow/W&B tracking, figures, and a
   Nextflow step for evaluation.

@@ -77,7 +77,8 @@ Goal: several pretrained models score every mutation; our numbers reproduce the 
 - [x] Bootstrap 95% CIs over assays (stratified by function type)
 - [ ] Reproduction gate, split in two (ADR 0010):
   - [x] Harness gate: our metrics + aggregation on ProteinGym's precomputed `ESM2_650M` scores over
-        all rows (singles + multis) reproduce the published 0.414 (|Δ| ≤ 0.0005)
+        all rows (singles + multis) reproduce the published 0.414 (|Δ| ≤ 0.0005); also all five metrics for
+        `ESM2_650M` and `SaProt_650M_AF2` (ADR 0011)
   - [ ] Model gate (`slow`): our ESM-2 650M vs their `ESM2_650M` on single mutants, per-variant
         Spearman ≥ 0.99 in every assay, and single-mutant aggregate within ±0.01 of theirs
         computed by the same harness

@@ -235,7 +235,7 @@ and exclude merge commits.
 - **CLI commands added:** none.
 - **Outputs:** re-staged `build/hf_dataset/` (only `README.md` and `SHA256SUMS` differ from the Hub).
 
-## Step 10 — Benchmark harness and harness gate (Phase 2, 2026-10-12, `20e2031`–`e1784f2`)
+## Step 10 — Benchmark harness and harness gate (Phase 2, 2026-10-12)
 
 - **What this step did:** implemented ProteinGym's metrics, aggregation and bootstrap CIs, and
   the harness gate, which reproduces the published leaderboard from ProteinGym's own scores
@@ -253,9 +253,10 @@ and exclude merge commits.
 | `src/mutascope/data/db.py` | `literal` made public | Reused by the eval readers |
 | `src/mutascope/cli.py` | Adds `eval precomputed`, `eval compare-leaderboard` | Created in step 1, extended here |
 | `conf/eval/proteingym.yaml`, `conf/config.yaml` | Top 10%, bootstrap (10,000, 95%, seed 0), models, leaderboard paths | No hard-coded settings |
+| `conf/data/proteingym.yaml`, `data/manifest.yaml` | Adds the AUC, MCC, NDCG and top-recall leaderboard files at the pinned commit, with sha256 | Gate covers all five metrics; author-approved, pins unchanged |
 | `pyproject.toml`, `uv.lock` | Adds `scipy`, `scikit-learn` | The same metric calls as upstream |
 | `tests/eval/*` | Metric, aggregation, benchmark, reader and CLI tests on a toy release | `proteingym_reference.py` holds upstream's code as an oracle |
-| `tests/test_reproduction.py` | Harness gate plus two diagnostics (metric, aggregation) | ADR 0010; skipped without the release |
+| `tests/test_reproduction.py` | Harness gate plus two diagnostics (metric, aggregation), for all five metrics | ADR 0010; skipped without the release |
 | `tests/test_cli.py` | Override check covers the `eval` commands | Created in step 1 |
 | `results/proteingym_precomputed_{all,single}{,_summary}.parquet` | Per-assay and aggregate results for ESM2_650M, SaProt_650M_AF2 | Committed evidence; figures read these |
 | `docs/adr/0011-benchmark-harness.md`, `README.md`, `docs/ROADMAP.md` | Decisions and evidence; usage; checklist | Decision record and docs |
