@@ -266,3 +266,26 @@ and exclude merge commits.
   - `mutascope eval precomputed --rows all|single` benchmarks ProteinGym's precomputed scores.
   - `mutascope eval compare-leaderboard` prints our values next to the published ones.
 - **Outputs:** the four `results/proteingym_precomputed_*.parquet` files.
+
+## Step 11 — Scorer protocol, cache and ESM-2 scorer (Phase 2, 2026-10-12, `e1994ba`–`08a3f61`)
+
+- **What this step did:** the `Scorer` protocol and registry, the log-probability cache, device
+  selection, and an ESM-2 scorer that reproduces ProteinGym's precomputed scores (ADR 0012).
+- **Files created or modified:**
+
+| Path | What it does | Why it exists |
+|---|---|---|
+| `src/mutascope/scoring/base.py` | `Scorer` protocol, registry, landscape and mutant-lookup helpers | One interface for every zero-shot model |
+| `src/mutascope/scoring/esm2.py` | Masked and wild-type marginals via `transformers` | ProteinGym's strategy, batched |
+| `src/mutascope/scoring/windows.py` | `optimal_window` (ProteinGym port) and tiles for long sequences | > 1022 residues; reused by SaProt |
+| `src/mutascope/scoring/cache.py` | `(L, 20)` log-probs on disk, sha256 keys, atomic writes | Score each sequence once per model |
+| `src/mutascope/utils/device.py` | MPS when available, else CPU | CLAUDE.md environment rules |
+| `conf/model/esm2_{8m,35m,150m,650m}.yaml`, `conf/scoring/default.yaml`, `conf/config.yaml` | Pinned Hub revisions, batch size, window; device and cache dir | No hard-coded models or paths |
+| `pyproject.toml`, `uv.lock` | Adds `torch` (CPU-only index on Linux), `transformers` | Model runtime |
+| `tests/scoring/*`, `tests/test_device.py` | Stand-in models, real `esm2_t6_8M`, ProteinGym window oracle | Offset, windows, cache, agreement |
+| `.github/workflows/ci.yml` | Caches the pinned 8M checkpoint | Tests download it from the Hub |
+| `CLAUDE.md` | Cache key includes the scoring method | Masked and fast results differ |
+| `docs/adr/0012-esm2-scorer.md`, `docs/ROADMAP.md`, `docs/BUILD_LOG.md` | Decisions and evidence; checklist; entry 11 | Decision record and docs |
+
+- **CLI commands added:** none yet (scoring all assays is the next step).
+- **Outputs:** none in the repository; the cache lives in `data/cache/logprobs/` (gitignored).
