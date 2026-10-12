@@ -54,3 +54,24 @@ def test_wrong_shape_is_refused(tmp_path: Path) -> None:
     np.save(path, np.zeros((4, 20), dtype=np.float32))
     with pytest.raises(CacheError, match="expected float32"):
         cache.get(KEY)
+
+
+def test_a_partly_scored_entry_round_trips_with_its_nan_rows(tmp_path: Path) -> None:
+    cache = LogProbCache(tmp_path)
+    array = np.full((3, 20), np.nan, dtype=np.float32)
+    array[1] = 0.5
+    cache.put(KEY, array)
+    hit = cache.get(KEY)
+    assert hit is not None
+    np.testing.assert_array_equal(hit, array)  # NaN == NaN here
+
+
+def test_computation_log_accumulates_across_cache_objects(tmp_path: Path) -> None:
+    """The log is what lets a resumed run report the time an interrupted run already spent."""
+    assert LogProbCache(tmp_path).computations() == []
+    LogProbCache(tmp_path).record(KEY, positions=2, seconds=1.25)
+    LogProbCache(tmp_path).record(replace(KEY, region="msa:2-3"), positions=1, seconds=0.5)
+    first, second = LogProbCache(tmp_path).computations()
+    assert (first["digest"], first["positions"], first["seconds"]) == (KEY.digest(), 2, 1.25)
+    assert (first["model_id"], first["revision"], first["length"]) == (KEY.model_id, "c" * 40, 3)
+    assert (second["region"], second["method"]) == ("msa:2-3", "masked")

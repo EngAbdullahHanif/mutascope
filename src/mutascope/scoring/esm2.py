@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+import numpy as np
 import torch
 
 from mutascope.alphabet import AA_ORDER
@@ -36,6 +37,7 @@ from mutascope.scoring.base import (
     ScorerConfigError,
     check_sequence,
     landscape_from_log_probs,
+    resolve_positions,
 )
 from mutascope.scoring.cache import CacheKey, LogProbCache
 from mutascope.scoring.windows import optimal_window, tiled_windows
@@ -104,10 +106,15 @@ class Esm2Scorer:
         if unk_id in self.aa_ids:
             raise ScorerConfigError("tokenizer does not know all 20 amino acids")
         self.aa_token_ids = torch.tensor(self.aa_ids)
+        self._positions_computed = 0
 
     @property
     def model_id(self) -> str:
         return self.settings.name
+
+    @property
+    def positions_computed(self) -> int:
+        return self._positions_computed
 
     def tokenize(self, seq: str) -> torch.Tensor:
         """Token ids ``<cls> residues <eos>``; fails unless residue ``i`` is token ``i + 1``."""
@@ -129,17 +136,29 @@ class Esm2Scorer:
         *,
         fast: bool = False,
         region: str = "full",
+        positions: Sequence[int] | None = None,
     ) -> FloatArray:
         """``(L, 20)`` scores; see :mod:`mutascope.scoring.base`. ESM-2 is sequence-only."""
         if struct_tokens is not None:
             raise ValueError("ESM-2 is sequence-only; struct_tokens must be None")
-        return landscape_from_log_probs(self.log_probs(seq, fast=fast, region=region), seq)
+        log_probs = self.log_probs(seq, fast=fast, region=region, positions=positions)
+        return landscape_from_log_probs(log_probs, seq)
 
-    def log_probs(self, seq: str, *, fast: bool = False, region: str = "full") -> FloatArray:
+    def log_probs(
+        self,
+        seq: str,
+        *,
+        fast: bool = False,
+        region: str = "full",
+        positions: Sequence[int] | None = None,
+    ) -> FloatArray:
         """``(L, 20)`` log-probabilities in ``AA_ORDER`` (normalised over the full vocabulary).
 
-        Read from the cache when present; computed and stored otherwise.
+        Only the requested residues that the cache entry lacks go through the model; the entry
+        is then rewritten with those rows filled in. Rows that were never scored are NaN. The
+        wild-type marginal gets every residue from its single pass, so it ignores ``positions``.
         """
+        check_sequence(seq)
         key = CacheKey(
             model_id=self.settings.hf_id,
             revision=self.settings.revision,
@@ -148,28 +167,43 @@ class Esm2Scorer:
             method="wt" if fast else "masked",
             region=region,
         )
-        if self.cache is not None and (hit := self.cache.get(key)) is not None:
-            return hit
+        wanted = resolve_positions(None if fast else positions, len(seq))
+        cached = self.cache.get(key) if self.cache is not None else None
+        if cached is None:
+            cached = np.full((len(seq), len(AA_ORDER)), np.nan, dtype=np.float32)
+        missing = [p for p in wanted if np.isnan(cached[p, 0])]
+        if not missing:
+            return cached
         start = time.monotonic()
         tokens = self.tokenize(seq)
-        result = self._wt_marginal(tokens) if fast else self._masked_marginal(tokens)
+        if fast:
+            result = self._wt_marginal(tokens)
+        else:
+            result = cached
+            result[missing] = self._masked_marginal(tokens, missing)
+        seconds = time.monotonic() - start
+        self._positions_computed += len(missing)
         log.info(
             "scored",
             model=self.model_id,
             method=key.method,
+            region=region,
             length=len(seq),
-            seconds=round(time.monotonic() - start, 2),
+            positions=len(missing),
+            seconds=round(seconds, 2),
         )
         if self.cache is not None:
             self.cache.put(key, result)
+            self.cache.record(key, positions=len(missing), seconds=seconds)
         return result
 
     @torch.inference_mode()
-    def _masked_marginal(self, tokens: torch.Tensor) -> FloatArray:
+    def _masked_marginal(self, tokens: torch.Tensor, residues: Sequence[int]) -> FloatArray:
+        """Log-probabilities of ``residues`` (0-indexed), one row each, in the order given."""
         n_tokens = tokens.numel()
-        residues = range(RESIDUE_OFFSET, n_tokens - 1)  # every token but <cls> and <eos>
+        masked_tokens = [RESIDUE_OFFSET + r for r in residues]  # never <cls> or <eos>
         rows: list[torch.Tensor] = []
-        for batch in _chunks(list(residues), self.settings.batch_size):
+        for batch in _chunks(masked_tokens, self.settings.batch_size):
             inputs: list[torch.Tensor] = []
             local: list[int] = []
             for position in batch:

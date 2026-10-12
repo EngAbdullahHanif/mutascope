@@ -11,6 +11,11 @@ is 0 by construction. Higher means "predicted fitter", the same direction as ``D
 see :mod:`mutascope.eval.region`). The scorer scores ``seq`` as given; the label only enters
 the cache key, so landscapes of different regions can never be confused on disk.
 
+``positions`` limits the work to some residues (0-indexed in ``seq``): the benchmark needs only
+the positions an assay measured. The landscape keeps its ``(L, 20)`` shape, and a row that was
+neither requested nor scored earlier is NaN, wild-type column included, so "not scored" can
+never be read as a score. ``None`` scores every residue.
+
 The registry maps a scorer name (``model.scorer`` in the config) to the module that implements
 it. Modules are imported only when a scorer is built, so commands that never score never pay for
 importing torch.
@@ -41,6 +46,15 @@ class Scorer(Protocol):
         """Short name used in results, e.g. ``esm2_650m``."""
         ...
 
+    @property
+    def positions_computed(self) -> int:
+        """Residues run through the model so far (cache hits excluded).
+
+        Lets a caller tell a computation from a cache hit, e.g. to report what a resumed run
+        still had to do.
+        """
+        ...
+
     def landscape(
         self,
         seq: str,
@@ -48,6 +62,7 @@ class Scorer(Protocol):
         *,
         fast: bool = False,
         region: str = "full",
+        positions: Sequence[int] | None = None,
     ) -> FloatArray:
         """``(L, 20)`` scores in ``AA_ORDER``; see the module docstring."""
         ...
@@ -86,12 +101,38 @@ def check_sequence(seq: str) -> None:
         raise ValueError(f"sequence must be non-empty canonical amino acids; found {bad}")
 
 
+def resolve_positions(positions: Sequence[int] | None, length: int) -> list[int]:
+    """The residues to score, sorted and without duplicates; every residue for ``None``.
+
+    Raises:
+        ValueError: A position is outside ``0..length - 1``.
+    """
+    if positions is None:
+        return list(range(length))
+    wanted = sorted(set(positions))
+    if wanted and not 0 <= wanted[0] <= wanted[-1] < length:
+        raise ValueError(f"positions must be within 0..{length - 1}, got {wanted[0]}..{wanted[-1]}")
+    return wanted
+
+
 def landscape_from_log_probs(log_probs: FloatArray, seq: str) -> FloatArray:
-    """``log P(a) - log P(wt)`` per position, from ``(L, 20)`` log-probabilities in AA_ORDER."""
+    """``log P(a) - log P(wt)`` per position, from ``(L, 20)`` log-probabilities in AA_ORDER.
+
+    A NaN row (a residue not scored) stays NaN.
+    """
     if log_probs.shape != (len(seq), len(AA_ORDER)):
         raise ValueError(f"log_probs shape {log_probs.shape} does not match length {len(seq)}")
     wt = np.array([_AA_INDEX[aa] for aa in seq])
     return (log_probs - log_probs[np.arange(len(seq)), wt][:, None]).astype(np.float32)
+
+
+def mutant_positions(seq: str, mutants: Sequence[str], *, offset: int = 0) -> list[int]:
+    """The distinct residues of ``seq`` (0-indexed, sorted) that ``mutants`` substitute.
+
+    Same arguments and checks as :func:`score_mutants`; call it before scoring so that only
+    these residues are scored and a bad mutant fails before any model runs.
+    """
+    return sorted({local for local, _ in _locate(seq, mutants, offset)})
 
 
 def score_mutants(
@@ -111,12 +152,20 @@ def score_mutants(
     Raises:
         ValueError: A wild type does not match ``seq``, or a position is outside ``seq``.
     """
-    scores = np.empty(len(mutants), dtype=np.float32)
+    located = _locate(seq, mutants, offset)
+    rows = np.array([local for local, _ in located], dtype=np.intp)
+    columns = np.array([column for _, column in located], dtype=np.intp)
+    return landscape[rows, columns].astype(np.float32)
+
+
+def _locate(seq: str, mutants: Sequence[str], offset: int) -> list[tuple[int, int]]:
+    """``(row, column)`` of each mutant in a landscape of ``seq``, wild types checked."""
+    located: list[tuple[int, int]] = []
     for row, text in enumerate(mutants):
         sub = parse_mutation(text)
         local = sub.position - offset
         if not 0 <= local < len(seq) or seq[local] != sub.wt:
             found = seq[local] if 0 <= local < len(seq) else "no residue there"
             raise ValueError(f"row {row}: {text} but the scored sequence has {found}")
-        scores[row] = landscape[local, _AA_INDEX[sub.mt]]
-    return scores
+        located.append((local, _AA_INDEX[sub.mt]))
+    return located

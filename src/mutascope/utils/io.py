@@ -5,6 +5,7 @@ from pathlib import Path
 
 import duckdb
 import pandas as pd
+import pandera.pandas as pa
 
 PARTITION_FILE = "data.parquet"
 
@@ -36,3 +37,12 @@ def write_partition(con: duckdb.DuckDBPyConnection, frame: pd.DataFrame, part_di
     """
     part_dir.mkdir()
     con.from_df(frame.drop(columns="assay_id")).write_parquet(str(part_dir / PARTITION_FILE))
+
+
+def write_table(frame: pd.DataFrame, schema: type[pa.DataFrameModel], path: Path) -> Path:
+    """Validate ``frame`` against ``schema`` and write it to one Parquet file; returns ``path``."""
+    validated = schema.validate(frame, lazy=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with duckdb.connect() as con:
+        con.from_df(validated).write_parquet(str(path))
+    return path
