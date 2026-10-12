@@ -667,8 +667,8 @@ To prove the harness is right, we ran it on ProteinGym's own published model sco
 the published leaderboard: 0.4137 for ESM-2 650M (published 0.414) and 0.4566 for SaProt 650M
 (published 0.457). The other four metrics match too. This check is now a test, the *harness
 gate* of ADR 0010, covering all five metrics for both models against leaderboard files that are
-part of the pinned, checksummed download. Code in `20e2031`, gate and results in `e1784f2`;
-decisions in ADR 0011.
+part of the pinned, checksummed download. Code in `20e2031`, gate and results in `e1784f2`,
+all-metric gate in `61b90f0` and `afe82ed`; decisions in ADR 0011.
 
 **The 3 most important design choices.**
 
