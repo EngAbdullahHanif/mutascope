@@ -35,6 +35,9 @@ notebooks = [
 tracking = [
     "mlflow>=3.17.0",
 ]
+figures = [
+    "matplotlib>=3.11",
+]
 
 [project.scripts]
 mutascope = "mutascope.cli:app"

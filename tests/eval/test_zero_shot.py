@@ -442,3 +442,70 @@ def test_cli_scores_with_the_real_8m_model_resumes_and_tracks_every_run(
     _, metrics, tags = runs["model-gate esm2_8m"]
     assert tags["gate_passed"] == "true" and metrics["min_assay_spearman"] == pytest.approx(1.0)
     assert metrics["max_abs_diff"] == 0 and metrics["aggregate_delta"] == 0
+
+
+def test_cli_builds_and_benchmarks_an_ensemble_on_the_assays_all_members_have(
+    processed_root: Path, reference: pd.DataFrame, tmp_path: Path
+) -> None:
+    """ESM-2 has scores for A and B, SaProt for A only (B has no structure and is a documented
+    exception): the ensemble exists on A. It is benchmarked like any score set, and its
+    tracked runs name both members' pinned revisions."""
+    ensemble = "ensemble_esm2_650m_saprot_650m_af2"
+    variants = processed_root / "processed" / "variants"
+    members = {
+        "esm2_650m": {"A": [4.0, 1.0, 2.0, 3.0], "B": [1.0, 2.0]},
+        "saprot_650m_af2": {"A": [30.0, 10.0, 20.0, 50.0]},
+    }
+    mutants = {"A": ["A4C", "K2C", "M1A", "V3G"], "B": ["M1A", "R5W"]}
+    for label, by_assay in members.items():
+        for assay_id, scores in by_assay.items():
+            part = tmp_path / "scores" / label / f"assay_id={assay_id}"
+            part.mkdir(parents=True)
+            pd.DataFrame({"mutant": mutants[assay_id], "model": label, "score": scores}).to_parquet(
+                part / "data.parquet"
+            )
+    ref_csv = tmp_path / "reference.csv"
+    reference.to_csv(ref_csv, index=False)
+    common = [
+        "--config-dir", str(CONF), "--reference", str(ref_csv),
+        f"model={ensemble}", f"tracking.dir={tmp_path / 'mlruns'}",
+        "eval.bootstrap.n_resamples=50",
+    ]  # fmt: skip
+    documented = "+data.structure_exceptions.B=undocumented"
+    build = ["score", "ensemble", "--scores-root", str(tmp_path / "scores")]
+    build += ["--out-dir", str(tmp_path / "scores"), *common]
+
+    undocumented = CliRunner().invoke(app, [*build, "data.structure_exceptions={}"])
+    assert undocumented.exit_code == 1
+    assert "saprot_650m_af2 has no values for ['B']" in undocumented.output
+    assert not (tmp_path / "scores" / ensemble).exists()
+
+    built = CliRunner().invoke(app, [*build, documented])
+    assert built.exit_code == 0, built.output
+    assert "1 assays, 4 variants" in built.output
+    assert "esm2_650m: 2 assays, 1 not shared" in built.output
+    scores = load_scores(tmp_path / "scores" / ensemble)
+    assert set(scores["assay_id"]) == {"A"} and set(scores["model"]) == {ensemble}
+    # A4C: ESM-2 z = (4 - 2.5) / sd(1..4), SaProt z = (30 - 27.5) / sd(10, 20, 30, 50).
+    expected = (1.5 / np.std([1.0, 2.0, 3.0, 4.0]) + 2.5 / np.std([10.0, 20.0, 30.0, 50.0])) / 2
+    assert scores.set_index("mutant")["score"]["A4C"] == pytest.approx(expected)
+
+    evaluate = ["eval", "zero-shot", "--scores-dir", str(tmp_path / "scores" / ensemble)]
+    evaluate += ["--variants-dir", str(variants), "--out-dir", str(tmp_path / "results"), *common]
+    fast = CliRunner().invoke(app, [*evaluate, documented, "--fast"])
+    assert fast.exit_code == 1 and "--fast does not apply to an ensemble" in fast.output
+    done = CliRunner().invoke(app, [*evaluate, documented])
+    assert done.exit_code == 0, done.output
+    assert f"{ensemble}: 1 assays, 4 single mutants" in done.output
+    results = read_results(tmp_path / "results" / f"zero_shot_{ensemble}_single.parquet")
+    assert set(results["model"]) == {ensemble} and set(results["assay_id"]) == {"A"}
+
+    runs = _tracked(tmp_path / "mlruns")
+    for name in (f"score {ensemble}", f"benchmark {ensemble}"):
+        params = runs[name][0]
+        assert params["method"] == "zscore_mean"
+        assert params["member.esm2_650m.revision"] and params["member.saprot_650m_af2.revision"]
+        assert params["member.saprot_650m_af2.hf_id"] == "westlake-repl/SaProt_650M_AF2"
+
+    single = CliRunner().invoke(app, [*build[:-3], *common[:4], "model=esm2_8m"])
+    assert single.exit_code == 1 and "is not an ensemble" in single.output

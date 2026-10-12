@@ -4,19 +4,90 @@ Any statement that one model is better than another must come from here, not fro
 separately computed CIs: those overlap for strongly correlated models even when the difference
 is clear. The resampling and the aggregation are :func:`mutascope.eval.aggregate.paired_bootstrap`;
 this module applies it to results in the long format and returns the comparison as a table.
+
+A structure-aware model has no scores for the assays without a structure, so anything that puts
+it next to a sequence-only model must use the assays both have. :func:`shared_assays` is that
+rule, and :func:`summarise_shared` gives each score set's aggregate and CI on those assays, for
+a figure that shows several score sets side by side.
 """
 
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
 from mutascope.eval.aggregate import AssayGroups, Difference, paired_bootstrap
-from mutascope.eval.benchmark import BootstrapParams
-from mutascope.eval.schemas import ComparisonSchema
+from mutascope.eval.benchmark import BootstrapParams, summarise
+from mutascope.eval.schemas import ComparisonSchema, SummarySchema
 
 _KEYS = ["split", "assay_id", "metric"]
+
+
+def shared_assays(
+    assays_by_set: Mapping[str, Collection[str]], may_be_absent: Collection[str]
+) -> list[str]:
+    """The assays every score set has, sorted.
+
+    Args:
+        assays_by_set: Score-set label -> the assays it has.
+        may_be_absent: Assays a score set is allowed to lack (``data.structure_exceptions``: a
+            structure-aware model has no scores for them). They are left out for every set.
+
+    Raises:
+        ValueError: A score set lacks an assay that is not in ``may_be_absent``. Nothing else
+            is ever dropped to make the sets match.
+    """
+    if not assays_by_set:
+        raise ValueError("no score sets given")
+    present = [set(assays) for assays in assays_by_set.values()]
+    everything, allowed = set[str]().union(*present), set(may_be_absent)
+    for label, assays in assays_by_set.items():
+        unexplained = sorted(everything - set(assays) - allowed)
+        if unexplained:
+            raise ValueError(f"{label} has no values for {unexplained}")
+    return sorted(set[str].intersection(*present))
+
+
+def summarise_shared(
+    results: Mapping[str, pd.DataFrame],
+    reference: pd.DataFrame,
+    bootstrap: BootstrapParams,
+    seed: int,
+    may_be_absent: Collection[str] = (),
+) -> pd.DataFrame:
+    """Each score set's ProteinGym aggregate and bootstrap CI on the assays all of them have.
+
+    Every score set is resampled from the same seed. A score set that already covers exactly
+    the shared assays therefore gets the numbers of its own summary file.
+
+    The CIs are still one per score set: they say how well each does on assays like these and
+    do not test a difference between two of them (:func:`paired_bootstrap_diff` does).
+
+    Args:
+        results: Score-set label -> its per-assay results (:class:`AssayMetricSchema`).
+        reference: ProteinGym reference table (``DMS_id, UniProt_ID, coarse_selection_type``).
+        bootstrap: Resampling settings (``eval.bootstrap``).
+        seed: Seed of every score set's resampling.
+        may_be_absent: See :func:`shared_assays`.
+
+    Returns:
+        :class:`SummarySchema` rows for every score set, in the order given.
+    """
+    assays = shared_assays({k: set(v["assay_id"]) for k, v in results.items()}, may_be_absent)
+    frames: list[pd.DataFrame] = []
+    for label, frame in results.items():
+        own = _one_set(frame, label)
+        on_shared = own[own["assay_id"].isin(assays)]
+        frames.append(summarise(on_shared, reference, bootstrap, np.random.default_rng(seed)))
+    return SummarySchema.validate(pd.concat(frames, ignore_index=True), lazy=True)
+
+
+def _one_set(results: pd.DataFrame, label: str) -> pd.DataFrame:
+    models = sorted(set(results["model"]))
+    if models != [label]:
+        raise ValueError(f"results of {label!r} hold {models}")
+    return results
 
 
 def paired_bootstrap_diff(
