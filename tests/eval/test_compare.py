@@ -7,8 +7,8 @@ import pandas as pd
 import pytest
 
 from mutascope.eval.aggregate import AssayGroups, aggregate, bootstrap_ci, paired_bootstrap
-from mutascope.eval.benchmark import BootstrapParams
-from mutascope.eval.compare import paired_bootstrap_diff
+from mutascope.eval.benchmark import BootstrapParams, summarise
+from mutascope.eval.compare import paired_bootstrap_diff, shared_assays, summarise_shared
 from mutascope.eval.metrics import METRICS
 
 BOOTSTRAP = BootstrapParams(n_resamples=2000, confidence=0.95)
@@ -193,3 +193,44 @@ def test_assays_one_model_may_lack_are_left_out_of_both() -> None:
         may_be_absent=["A00", "A07"],
     )  # fmt: skip
     assert both[both["level"] == "overall"]["n_assays"].eq(60).all()
+
+
+def test_shared_assays_drops_only_documented_absences() -> None:
+    sets = {"seq": ["A", "B", "C"], "struct": ["A", "C"]}
+    assert shared_assays(sets, may_be_absent=["B"]) == ["A", "C"]
+    with pytest.raises(ValueError, match=r"struct has no values for \['B'\]"):
+        shared_assays(sets, may_be_absent=[])
+    with pytest.raises(ValueError, match="no score sets"):
+        shared_assays({}, may_be_absent=[])
+
+
+def test_shared_summary_puts_every_score_set_on_the_same_assays() -> None:
+    """The structure-aware set covers 58 assays. On the shared assays it keeps the numbers of
+    its own summary; the sequence-only set is summarised again without the two it alone has."""
+    reference = _reference()
+    a, b = _correlated(np.random.default_rng(7), gain=0.02)
+    full = _results("seq", reference, b)
+    partial = _results("struct", reference, a)
+    partial = partial[~partial["assay_id"].isin(["A00", "A07"])]
+    shared = summarise_shared(
+        {"seq": full, "struct": partial}, reference, BOOTSTRAP, seed=0, may_be_absent=["A00", "A07"]
+    )
+    overall = shared[shared["level"] == "overall"]
+    assert set(overall["n_assays"]) == {58}
+    assert list(dict.fromkeys(shared["model"])) == ["seq", "struct"]
+    own = summarise(partial, reference, BOOTSTRAP, np.random.default_rng(0))
+    pd.testing.assert_frame_equal(
+        shared[shared["model"] == "struct"].reset_index(drop=True), own.reset_index(drop=True)
+    )
+    all_assays = summarise(full, reference, BOOTSTRAP, np.random.default_rng(0))
+    seq = shared[(shared["model"] == "seq") & (shared["level"] == "overall")]
+    assert set(all_assays[all_assays["level"] == "overall"]["n_assays"]) == {60}
+    assert not np.allclose(
+        seq["value"].to_numpy(), all_assays[all_assays["level"] == "overall"]["value"].to_numpy()
+    )
+    with pytest.raises(ValueError, match="struct has no values"):
+        summarise_shared({"seq": full, "struct": partial}, reference, BOOTSTRAP, seed=0)
+    with pytest.raises(ValueError, match="hold"):
+        summarise_shared(
+            {"other": full, "struct": partial}, reference, BOOTSTRAP, 0, ["A00", "A07"]
+        )

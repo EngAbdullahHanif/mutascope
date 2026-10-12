@@ -142,6 +142,54 @@ spread, so their separate CIs overlap even when one is clearly better; compariso
 from this file, never from two separate intervals
 ([ADR 0014](docs/adr/0014-model-sizes-wt-marginal-tracking.md)).
 
+### Ensemble
+
+```bash
+E=ensemble_esm2_650m_saprot_650m_af2
+uv run mutascope score ensemble --scores-root data/processed/zero_shot \
+    --reference data/raw/proteingym_v1.3/DMS_substitutions.csv \
+    --out-dir data/processed/zero_shot model=$E
+uv run mutascope eval zero-shot --scores-dir data/processed/zero_shot/$E \
+    --variants-dir data/processed/variants \
+    --reference data/raw/proteingym_v1.3/DMS_substitutions.csv --out-dir results model=$E
+```
+
+builds the ensemble of ESM-2 650M and SaProt from their written scores: each member's scores
+are z-scored within an assay, then averaged ([ADR 0016](docs/adr/0016-ensemble-and-figures.md)).
+No model runs. It covers the 213 assays both members have. On those assays its Spearman is
+0.4663, against 0.4600 for SaProt and 0.4144 for ESM-2 650M. The paired difference is +0.0519
+(95% CI +0.0419 to +0.0615) over ESM-2 650M and +0.0063 (−0.0018 to +0.0145) over SaProt: the
+ensemble is clearly better than ESM-2, and not shown to be better than SaProt.
+
+### Figures
+
+```bash
+uv run mutascope eval shared --results-dir results \
+    --reference data/raw/proteingym_v1.3/DMS_substitutions.csv \
+    --out results/zero_shot/shared_summary.parquet
+uv run mutascope eval figures --results-dir results \
+    --comparisons results/zero_shot/comparisons.parquet \
+    --shared-summary results/zero_shot/shared_summary.parquet --out-dir results/figures
+```
+
+`eval shared` summarises the score sets in `eval.shared_summary` again on the assays all of
+them have, so they can be drawn side by side. `eval figures` then draws four figures as SVG and
+PNG, reading results files only (`conf/eval/figures.yaml` says what each shows):
+
+| Figure | Shows |
+|---|---|
+| [`model_size_vs_spearman`](results/figures/model_size_vs_spearman.svg) | ESM-2 35M, 150M and 650M on 217 assays, with the paired difference of each size step |
+| [`function_type_spearman`](results/figures/function_type_spearman.svg) | ESM-2 650M, SaProt and the ensemble per function type, on the 213 shared assays |
+| [`ensemble_gain`](results/figures/ensemble_gain.svg) | Ensemble minus each member, with paired CIs |
+| [`fast_vs_masked`](results/figures/fast_vs_masked.svg) | Masked minus wild-type marginal for the three ESM-2 sizes, with paired CIs |
+
+Grey whiskers are a score set's own CI and do not compare two score sets; coloured intervals
+are paired-bootstrap CIs of a difference. Zero-shot results on DMS assays: they describe
+functional effect in those assays, not pathogenicity. matplotlib is the `figures` extra, which
+`make setup` installs.
+
+![Zero-shot Spearman by function type](results/figures/function_type_spearman.png)
+
 ## Publishing the dataset
 
 The processed dataset is on the Hugging Face Hub as

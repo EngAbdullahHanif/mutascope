@@ -3,9 +3,11 @@
 
 # scoring_region.yaml: which assays are scored on their MSA region in benchmark mode (ADR 0012).
 # model_gate.yaml: documented exceptions to the model gate (ADR 0015).
+# figures.yaml: what the benchmark figures show (ADR 0016).
 defaults:
   - scoring_region
   - model_gate
+  - figures
   - _self_
 
 # Top fraction, in %, for NDCG and top-10% recall (ProteinGym's default).
@@ -31,6 +33,17 @@ comparisons:
   # On the 213 assays with a structure: the four of data.structure_exceptions are left out of
   # both sides (ADR 0003, ADR 0015).
   - [saprot_650m_af2, esm2_650m]
+  # The ensemble against each of its members, on the same 213 assays (ADR 0016).
+  - [ensemble_esm2_650m_saprot_650m_af2, saprot_650m_af2]
+  - [ensemble_esm2_650m_saprot_650m_af2, esm2_650m]
+
+# Score sets summarised again on the assays all of them have (`mutascope eval shared`, ADR 0016),
+# for figures that show them side by side: a structure-aware model's own summary covers 213
+# assays, a sequence-only model's 217. Same bootstrap settings and seed as above.
+shared_summary:
+  - esm2_650m
+  - saprot_650m_af2
+  - ensemble_esm2_650m_saprot_650m_af2
 
 # Model gate (ADR 0010): our scores against ProteinGym's precomputed scores on single mutants.
 # Per-variant Spearman in every assay, and |our aggregate - theirs| on the same rows. Do not

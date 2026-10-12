@@ -80,7 +80,9 @@ Goal: several pretrained models score every mutation; our numbers reproduce the 
       150M 29 min, 35M 19 min), once per model and method, then `BENCHMARK_ZERO_SHOT` (ADR 0014)
 - [ ] Full masked landscapes at every position (the remaining 24,918 residues of the benchmark
       entries, plus the full targets of the five MSA-region assays); fills the same cache entries
-- [ ] Ensemble: per-assay z-score, then mean
+- [x] Ensemble: per-assay z-score, then mean (ADR 0016: ESM-2 650M + SaProt on the 213 shared
+      assays, Spearman 0.4663; +0.0519 over ESM-2 650M, +0.0063 over SaProt with a paired CI
+      that includes zero)
 
 ### Benchmark harness
 - [x] Metrics per assay: Spearman, AUC, MCC, NDCG@10%, top-10% recall (ADR 0011; undefined → NaN)
@@ -100,8 +102,9 @@ Goal: several pretrained models score every mutation; our numbers reproduce the 
       store (ADR 0014). SaProt and the ensemble add their results when they land
 - [x] Paired bootstrap for model comparisons (`mutascope eval compare`, ADR 0014): 150M vs 35M,
       650M vs 150M, masked vs wild-type per size, in `results/zero_shot/comparisons.parquet`
-- [ ] Figures: model size vs Spearman, per-function-type bars, ensemble gain, fast vs masked marginal.
+- [x] Figures: model size vs Spearman, per-function-type bars, ensemble gain, fast vs masked marginal.
       Any comparison between score sets uses the paired CIs from `comparisons.parquet`
+      (`mutascope eval figures`, SVG + PNG in `results/figures/`; ADR 0016)
 
 Done when: full landscapes for all assays from ESM-2 (3 sizes) + SaProt; harness and model gates pass; figures generated.
 
