@@ -3,7 +3,7 @@
 Predicts the functional effect of every single amino-acid substitution in a protein and presents it as an
 interactive mutation landscape, with an honest benchmark on ProteinGym DMS assays.
 
-Status: early development (Phase 1, foundations). See [docs/ROADMAP.md](docs/ROADMAP.md).
+Status: early development (Phase 2, zero-shot models and benchmark harness). See [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Quick start
 
@@ -44,6 +44,25 @@ uv run marimo edit notebooks/eda.py
 The notebook shows assay sizes, function types, score distributions and sequence lengths for
 the processed data (run `make pipeline` first). All of its tables and charts come from
 `mutascope.eda`. [docs/DATA_CARD.md](docs/DATA_CARD.md) describes the dataset.
+
+## Benchmark harness
+
+`mutascope eval` scores predictions per assay (Spearman, AUC, MCC, NDCG@10%, top-10% recall)
+and aggregates them as ProteinGym does: per UniProt ID and function type, then per function type,
+then overall, with bootstrap 95% CIs over assays
+([ADR 0011](docs/adr/0011-benchmark-harness.md)). Run it on ProteinGym's own precomputed scores
+to check the harness against the published leaderboard:
+
+```bash
+R=data/raw/proteingym_v1.3
+uv run mutascope eval precomputed --scores-dir $R/zero_shot_substitutions_scores \
+    --reference $R/DMS_substitutions.csv --rows all --out-dir results
+uv run mutascope eval compare-leaderboard --results results/proteingym_precomputed_all.parquet
+```
+
+`--rows all` scores single and multi-mutants, as the leaderboard does; `--rows single` scores
+the 696,311 single mutants MutaScope uses. The harness gate in `tests/test_reproduction.py` runs
+the same comparison as a test whenever the release is downloaded.
 
 ## Publishing the dataset
 
