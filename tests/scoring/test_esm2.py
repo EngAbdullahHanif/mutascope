@@ -89,7 +89,9 @@ def test_masked_marginal_reads_residue_i_at_token_i_plus_1(
     """The stand-in predicts each masked token from its left neighbour, so residue i's row must
     show residue i - 1. Reading token i (forgetting ``<cls>``) or token i + 2, or taking the
     wrong slot in a window, breaks the equality. With ``window=32`` a 300-residue sequence runs
-    through left-edge, centred and right-edge windows."""
+    through left-edge, centred and right-edge windows. A shape check alone would not catch an
+    off-by-one: reading the neighbouring token still gives an ``(L, 20)`` array of plausible
+    log-probabilities, so only the values show which residue each row belongs to."""
     seq = _random_sequence(300, seed=1)
     log_probs = _scorer(tokenizer, shift=1, window=window).log_probs(seq)
     predicted = _argmax_residues(log_probs)

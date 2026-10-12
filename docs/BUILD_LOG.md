@@ -765,7 +765,7 @@ all-metric gate in `61b90f0` and `afe82ed`; decisions in ADR 0011.
 
 ---
 
-## Entry 11 — Scorer protocol, cache and ESM-2 scorer (Phase 2, 2026-10-12)
+## Entry 11 — Scorer protocol, cache, ESM-2 scorer and scoring region (Phase 2, 2026-10-12)
 
 **Plain-language summary.** MutaScope can now ask a protein language model, ESM-2, how much it
 "likes" every possible single amino-acid change in a protein. The model reads the sequence with
@@ -777,8 +777,10 @@ zero-shot model will implement the same small interface (`Scorer`), results are 
 so each protein is scored once per model, and the code runs on the Mac's GPU (MPS) or on the CPU.
 The method was copied from ProteinGym's own scoring script, and the results match ProteinGym's
 published scores to about five decimal places, both for short proteins and for long ones that
-must be read in pieces. Code in `e1994ba`, tests in `1baa0ed`, CI cache in `08a3f61`; decisions
-in ADR 0012.
+must be read in pieces. For five experiments, ProteinGym scored only the part of the protein its
+evolutionary alignment covers, so every benchmark number now does the same for those five, while
+the website shows landscapes of the whole protein. Code in `e1994ba`, tests in `1baa0ed`, CI cache
+in `08a3f61`, scoring region in the `feat(eval)` commit that follows; decisions in ADR 0012.
 
 **The 3 most important design choices.**
 
@@ -793,10 +795,13 @@ in ADR 0012.
    must reproduce the sequence shifted by exactly one, through windows too; reading token i
    instead of i + 1 cannot pass. And the real 8M model's unmasked pass recovers 72 of 76
    ubiquitin residues when aligned and 3 of 75 when shifted by one.
-3. **A neutral scorer behind a lazy registry.** The scorer scores whatever sequence it is given
-   and knows nothing about assays, so decisions such as which part of a protein to score live in
-   the pipeline, where they are visible. The registry imports a model's module only when a scorer
-   is built, so data commands never load torch.
+3. **A neutral scorer, and a derived scoring-region rule outside it.** The scorer scores whatever
+   sequence it is given. Which part of a protein to score is decided in `eval/region.py`: in
+   benchmark mode, the MSA region wherever it is not the full target; in landscape mode, always
+   the full target. The set of MSA-region assays is derived from the reference file and must
+   equal the five ids in `conf/eval/scoring_region.yaml`, so a changed reference cannot shift
+   benchmark numbers silently. The region is part of the cache key, so the two kinds of
+   landscape are never confused on disk.
 
 **Problems encountered and how they were solved.**
 
@@ -806,12 +811,15 @@ in ADR 0012.
    assays whose MSA covers only part of the target, and ProteinGym's precomputed scores for them
    were computed on that MSA-covered region, not the full target. The script at the pinned commit
    crops only for MSA Transformer, so these columns were not produced by the script published
-   with them. *Fix:* none in the scorer, which is correct. ADR 0012 records the finding, and the
-   choice of sequence goes to the author with the model gate. *Verified:* all five assays with a
-   partial MSA range reproduce ProteinGym when scored on the cropped region (Spearman 1.0000, max
-   difference ≤ 2.7e-05). On the full target they give 0.36–0.99. Three further long assays with
-   a full-range MSA (UBE4B, ERBB2, BRCA2) match exactly on the full target. Left as it was, this
-   would have failed the model gate's "≥ 0.99 in every assay" on KCNH2 and SCN5A.
+   with them. *Fix:* none in the scorer, which is correct. The author decided that every
+   benchmark number (model gate, zero-shot results, Phase 3 features) uses the MSA region for
+   these assays, while website landscapes use the full target and label the five. `eval/region.py`
+   derives the set from the reference file and fails if it differs from the configured list.
+   *Verified:* through `score_assay` in benchmark mode, all five reproduce ProteinGym (Spearman
+   1.000000, max difference ≤ 2.7e-05) and two full-target controls stay exact. On the full
+   target the five give 0.36–0.99; three further long assays with a full-range MSA (UBE4B, ERBB2,
+   BRCA2) match exactly on the full target. Left as it was, this would have failed the model
+   gate's "≥ 0.99 in every assay" on KCNH2 and SCN5A.
 2. **The cache key in CLAUDE.md would have mixed up two results.** *Found:* while writing the
    cache. The rule keyed entries by model, revision, sequence and structure tokens. Masked and
    wild-type marginals of the same sequence are different arrays, so a fast result could be
@@ -834,7 +842,12 @@ in ADR 0012.
 - *Dependencies:* `torch` 2.14.1 (from PyTorch's CPU-only index on Linux, so CI and Docker do not
   pull CUDA; from PyPI on macOS) and `transformers` 5.19.0. Hub revisions were read from the Hub
   API: 8M `c731040`, 35M `6fbf070`, 150M `a695f60`, 650M `08e4846`.
-- *Tests:* 36 new (274 passing, 1 skipped without Foldseek; `make test` 24 s). Three `slow` tests
-  cover the long-sequence windows in about 3.5 minutes.
-- *Not done yet:* scoring all 217 assays and the model gate (which needs the cropping decision),
-  the CLI command and Nextflow step for scoring, SaProt, and the ensemble.
+- *Tests:* 46 new (284 passing, 1 skipped without Foldseek; `make test` about 24 s). Three `slow`
+  tests cover the long-sequence windows in about 3.5 minutes.
+- *Scoring every position:* the website needs masked marginals at every residue, so the scoring
+  step computes full landscapes; benchmark metrics read only the measured variants. Estimated
+  650M cost on MPS: about 4 hours for the 187 distinct targets (72,933 residues; the 13 longer
+  than 1,022 residues take about half), plus about 5 minutes for the five MSA regions. A
+  full-target benchmark landscape and the website landscape are the same cache entry.
+- *Not done yet:* scoring all 217 assays and the model gate, the CLI command and Nextflow step for
+  scoring, SaProt, and the ensemble.

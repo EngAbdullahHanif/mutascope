@@ -1,9 +1,11 @@
 """On-disk cache of per-residue log-probabilities, so a landscape is computed once per model.
 
 An entry is keyed by ``sha256`` of the model id, its pinned revision, the sequence, the
-structure tokens and the scoring method (CLAUDE.md, "Scoring rules"). The method is part of the
-key because masked and wild-type marginals of the same sequence differ; without it a fast
-result could be served for a masked request. The key fields are JSON-encoded before hashing so
+structure tokens, the scoring method and the scoring region (CLAUDE.md, "Scoring rules"). The
+method is part of the key because masked and wild-type marginals of the same sequence differ;
+without it a fast result could be served for a masked request. The region (``"full"`` or
+``"msa:<a>-<b>"``, ADR 0012) is part of it so that benchmark and website landscapes are
+separate, labelled entries. The key fields are JSON-encoded before hashing so
 that no two different tuples can concatenate to the same string.
 
 Each entry is one ``.npy`` file of shape ``(L, 20)``, float32, columns in ``AA_ORDER``. Writes go
@@ -36,11 +38,20 @@ class CacheKey:
     struct_tokens: str | None
     method: str
     """``"masked"`` or ``"wt"`` (wild-type marginal)."""
+    region: str
+    """Which part of the target ``sequence`` is: ``"full"`` or ``"msa:<a>-<b>"``."""
 
     def digest(self) -> str:
         """Hex sha256 of the JSON-encoded fields."""
         payload = json.dumps(
-            [self.model_id, self.revision, self.sequence, self.struct_tokens, self.method]
+            [
+                self.model_id,
+                self.revision,
+                self.sequence,
+                self.struct_tokens,
+                self.method,
+                self.region,
+            ]
         )
         return hashlib.sha256(payload.encode()).hexdigest()
 

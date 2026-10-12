@@ -123,14 +123,19 @@ class Esm2Scorer:
         return torch.tensor(ids)
 
     def landscape(
-        self, seq: str, struct_tokens: str | None = None, *, fast: bool = False
+        self,
+        seq: str,
+        struct_tokens: str | None = None,
+        *,
+        fast: bool = False,
+        region: str = "full",
     ) -> FloatArray:
-        """``(L, 20)`` scores; see :mod:`mutascope.scoring.base`. ESM-2 ignores structure."""
+        """``(L, 20)`` scores; see :mod:`mutascope.scoring.base`. ESM-2 is sequence-only."""
         if struct_tokens is not None:
             raise ValueError("ESM-2 is sequence-only; struct_tokens must be None")
-        return landscape_from_log_probs(self.log_probs(seq, fast=fast), seq)
+        return landscape_from_log_probs(self.log_probs(seq, fast=fast, region=region), seq)
 
-    def log_probs(self, seq: str, *, fast: bool = False) -> FloatArray:
+    def log_probs(self, seq: str, *, fast: bool = False, region: str = "full") -> FloatArray:
         """``(L, 20)`` log-probabilities in ``AA_ORDER`` (normalised over the full vocabulary).
 
         Read from the cache when present; computed and stored otherwise.
@@ -141,6 +146,7 @@ class Esm2Scorer:
             sequence=seq,
             struct_tokens=None,
             method="wt" if fast else "masked",
+            region=region,
         )
         if self.cache is not None and (hit := self.cache.get(key)) is not None:
             return hit

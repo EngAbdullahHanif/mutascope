@@ -267,7 +267,7 @@ and exclude merge commits.
   - `mutascope eval compare-leaderboard` prints our values next to the published ones.
 - **Outputs:** the four `results/proteingym_precomputed_*.parquet` files.
 
-## Step 11 — Scorer protocol, cache and ESM-2 scorer (Phase 2, 2026-10-12, `e1994ba`–`08a3f61`)
+## Step 11 — Scorer protocol, cache, ESM-2 scorer and scoring region (Phase 2, 2026-10-12)
 
 - **What this step did:** the `Scorer` protocol and registry, the log-probability cache, device
   selection, and an ESM-2 scorer that reproduces ProteinGym's precomputed scores (ADR 0012).
@@ -280,11 +280,12 @@ and exclude merge commits.
 | `src/mutascope/scoring/windows.py` | `optimal_window` (ProteinGym port) and tiles for long sequences | > 1022 residues; reused by SaProt |
 | `src/mutascope/scoring/cache.py` | `(L, 20)` log-probs on disk, sha256 keys, atomic writes | Score each sequence once per model |
 | `src/mutascope/utils/device.py` | MPS when available, else CPU | CLAUDE.md environment rules |
+| `src/mutascope/eval/region.py`, `conf/eval/scoring_region.yaml`, `conf/eval/proteingym.yaml` | Benchmark scoring region: derived MSA-region set checked against config; `score_assay` | Comparable with the leaderboard; website uses full targets |
 | `conf/model/esm2_{8m,35m,150m,650m}.yaml`, `conf/scoring/default.yaml`, `conf/config.yaml` | Pinned Hub revisions, batch size, window; device and cache dir | No hard-coded models or paths |
 | `pyproject.toml`, `uv.lock` | Adds `torch` (CPU-only index on Linux), `transformers` | Model runtime |
-| `tests/scoring/*`, `tests/test_device.py` | Stand-in models, real `esm2_t6_8M`, ProteinGym window oracle | Offset, windows, cache, agreement |
+| `tests/scoring/*`, `tests/test_device.py`, `tests/eval/test_region.py` | Stand-in models, real `esm2_t6_8M`, ProteinGym window oracle, region rule | Offset, windows, cache, agreement, region |
 | `.github/workflows/ci.yml` | Caches the pinned 8M checkpoint | Tests download it from the Hub |
-| `CLAUDE.md` | Cache key includes the scoring method | Masked and fast results differ |
+| `CLAUDE.md` | Cache key includes the scoring method and region | Masked and fast results differ; regions stay separate |
 | `docs/adr/0012-esm2-scorer.md`, `docs/ROADMAP.md`, `docs/BUILD_LOG.md` | Decisions and evidence; checklist; entry 11 | Decision record and docs |
 
 - **CLI commands added:** none yet (scoring all assays is the next step).

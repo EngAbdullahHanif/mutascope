@@ -7,6 +7,10 @@ position ``i`` masked (masked marginal, ProteinGym's strategy); with ``fast=True
 unmasked sequence, one forward pass for all positions (wild-type marginal). The wild-type column
 is 0 by construction. Higher means "predicted fitter", the same direction as ``DMS_score``.
 
+``region`` labels which part of the assay's target ``seq`` is (``"full"`` or ``"msa:<a>-<b>"``,
+see :mod:`mutascope.eval.region`). The scorer scores ``seq`` as given; the label only enters
+the cache key, so landscapes of different regions can never be confused on disk.
+
 The registry maps a scorer name (``model.scorer`` in the config) to the module that implements
 it. Modules are imported only when a scorer is built, so commands that never score never pay for
 importing torch.
@@ -38,7 +42,12 @@ class Scorer(Protocol):
         ...
 
     def landscape(
-        self, seq: str, struct_tokens: str | None = None, *, fast: bool = False
+        self,
+        seq: str,
+        struct_tokens: str | None = None,
+        *,
+        fast: bool = False,
+        region: str = "full",
     ) -> FloatArray:
         """``(L, 20)`` scores in ``AA_ORDER``; see the module docstring."""
         ...
@@ -85,20 +94,29 @@ def landscape_from_log_probs(log_probs: FloatArray, seq: str) -> FloatArray:
     return (log_probs - log_probs[np.arange(len(seq)), wt][:, None]).astype(np.float32)
 
 
-def score_mutants(landscape: FloatArray, seq: str, mutants: Sequence[str]) -> FloatArray:
+def score_mutants(
+    landscape: FloatArray, seq: str, mutants: Sequence[str], *, offset: int = 0
+) -> FloatArray:
     """Look up single substitutions (``"A123G"``, 1-indexed) in a landscape.
 
     Positions are converted by :func:`~mutascope.data.parse.parse_mutation`, the only place
     that does it, and each wild type is checked against ``seq``.
 
+    Args:
+        landscape: ``(len(seq), 20)`` scores.
+        seq: The scored sequence.
+        mutants: Mutations in target coordinates.
+        offset: Target position (0-based) of ``seq[0]``; non-zero when ``seq`` is a region.
+
     Raises:
-        ValueError: A wild type does not match ``seq``, or a position is out of range.
+        ValueError: A wild type does not match ``seq``, or a position is outside ``seq``.
     """
     scores = np.empty(len(mutants), dtype=np.float32)
     for row, text in enumerate(mutants):
         sub = parse_mutation(text)
-        if sub.position >= len(seq) or seq[sub.position] != sub.wt:
-            found = seq[sub.position] if sub.position < len(seq) else "out of range"
-            raise ValueError(f"row {row}: {text} but the sequence has {found}")
-        scores[row] = landscape[sub.position, _AA_INDEX[sub.mt]]
+        local = sub.position - offset
+        if not 0 <= local < len(seq) or seq[local] != sub.wt:
+            found = seq[local] if 0 <= local < len(seq) else "no residue there"
+            raise ValueError(f"row {row}: {text} but the scored sequence has {found}")
+        scores[row] = landscape[local, _AA_INDEX[sub.mt]]
     return scores
