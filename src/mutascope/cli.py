@@ -55,12 +55,18 @@ from mutascope.eval.proteingym import (
     published_assay_level,
     published_summary,
 )
-from mutascope.eval.region import ScoringRegionError, scoring_regions
+from mutascope.eval.region import (
+    ScoringRegion,
+    ScoringRegionError,
+    scoring_regions,
+    structure_regions,
+)
 from mutascope.eval.schemas import AgreementSchema, ComparisonSchema, ScoringRunSchema
 from mutascope.eval.zero_shot import load_scores, run_label, score_assays, with_labels
 from mutascope.export.hub import PublishError, push_dataset, stage_dataset
 from mutascope.scoring.base import build_scorer
 from mutascope.scoring.cache import LogProbCache
+from mutascope.scoring.struct_tokens import AssayStructure, StructTokenError, load_struct_tokens
 from mutascope.utils.config import as_str_dict, load_config
 from mutascope.utils.io import write_table
 from mutascope.utils.logging import configure_logging
@@ -602,6 +608,54 @@ def eval_compare_leaderboard(
             )
 
 
+def _model_assays(cfg: DictConfig, reference: pd.DataFrame) -> list[str]:
+    """The assays the configured model is scored and evaluated on.
+
+    Every assay of the reference for a sequence-only model. A structure-aware model (its
+    config has ``plddt_threshold``) leaves out ``data.structure_exceptions``, the assays
+    without a usable structure (ADR 0003). Every command derives the set here, so scoring, the
+    model gate and the benchmark cannot disagree on it, and none of them accepts any other set.
+    """
+    assays = reference["DMS_id"].astype(str).tolist()
+    exceptions = cfg.data.structure_exceptions  # null on a subset (the test profile)
+    if cfg.model.get("plddt_threshold") is None or exceptions is None:
+        return assays
+    excluded = {str(a) for a in exceptions}
+    return [a for a in assays if a not in excluded]
+
+
+def _structure_inputs(
+    cfg: DictConfig,
+    reference: pd.DataFrame,
+    three_di_dir: Path | None,
+    structure_features_dir: Path | None,
+) -> tuple[dict[str, AssayStructure], dict[str, ScoringRegion]]:
+    """Structure tokens and scoring regions of a structure-aware model's assays.
+
+    Raises:
+        ValueError: A directory is missing, the tables are inconsistent, or the assays with a
+            structure are not exactly :func:`_model_assays`.
+    """
+    if three_di_dir is None or structure_features_dir is None:
+        raise ValueError(
+            f"{cfg.model.name} is structure-aware: pass --three-di-dir and --structure-features-dir"
+        )
+    targets = dict(
+        zip(reference["DMS_id"].astype(str), reference["target_seq"].astype(str), strict=True)
+    )
+    structures = load_struct_tokens(
+        three_di_dir, structure_features_dir, targets, float(cfg.model.plddt_threshold)
+    )
+    expected = set(_model_assays(cfg, reference))
+    if set(structures) != expected:
+        raise ValueError(
+            f"assays with a structure differ from the reference minus "
+            f"data.structure_exceptions: no structure for {sorted(expected - set(structures))}, "
+            f"unexpected structure for {sorted(set(structures) - expected)}"
+        )
+    return structures, structure_regions(reference, structures)
+
+
 @score_app.command("zero-shot")
 def score_zero_shot(
     reference: Reference,
@@ -615,6 +669,17 @@ def score_zero_shot(
     fast: Annotated[
         bool, typer.Option("--fast", help="Wild-type marginal instead of the masked marginal.")
     ] = False,
+    three_di_dir: Annotated[
+        Path | None,
+        typer.Option(help="Processed 3Di partitions (structure-aware models).", file_okay=False),
+    ] = None,
+    structure_features_dir: Annotated[
+        Path | None,
+        typer.Option(
+            help="Processed structure-feature partitions (structure-aware models).",
+            file_okay=False,
+        ),
+    ] = None,
     config_dir: ConfigDir = Path("conf"),
     overrides: Overrides = None,
 ) -> None:
@@ -624,18 +689,28 @@ def score_zero_shot(
     run is resumable: every finished sequence is in ``scoring.cache_dir``, so a rerun after a
     crash scores only what is missing and reports ``positions_computed = 0`` for the rest.
 
+    A structure-aware model (SaProt) also reads the processed 3Di and structure-feature
+    tables. It scores only the assays with a structure, on the residues the structure models,
+    and the 3Di letter of a residue below ``model.plddt_threshold`` is replaced by ``#``.
+
     The label of a score set is the model name, plus ``_wt`` with ``--fast``
     (:func:`~mutascope.eval.zero_shot.run_label`): the two methods of one model go to
     different directories and report files. The run is logged to MLflow (``tracking``).
     """
     cfg = load_config(config_dir, overrides)
     table = pd.read_csv(reference)
+    structures: dict[str, AssayStructure] | None = None
     try:
-        # null on a subset of assays (the pipeline's test profile), like structure_exceptions.
-        configured = cfg.eval.scoring_region.msa_region_assays
-        expected = [] if configured is None else [str(a) for a in configured]
-        regions = scoring_regions(table, "benchmark", expected)
-    except ScoringRegionError as exc:
+        if cfg.model.get("plddt_threshold") is None:
+            # null on a subset of assays (the pipeline's test profile), like structure_exceptions.
+            configured = cfg.eval.scoring_region.msa_region_assays
+            expected = [] if configured is None else [str(a) for a in configured]
+            regions = scoring_regions(table, "benchmark", expected)
+        else:
+            structures, regions = _structure_inputs(
+                cfg, table, three_di_dir, structure_features_dir
+            )
+    except (ScoringRegionError, StructTokenError, ValueError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     cache_dir = Path(cfg.scoring.cache_dir)
@@ -646,7 +721,9 @@ def score_zero_shot(
     )
     started = time.monotonic()
     label = run_label(scorer.model_id, fast=fast)
-    report = score_assays(scorer, table, variants_dir, regions, out_dir / label, fast=fast)
+    report = score_assays(
+        scorer, table, variants_dir, regions, out_dir / label, fast=fast, structures=structures
+    )
     wall = time.monotonic() - started
     path = write_table(report, ScoringRunSchema, report_dir / f"zero_shot_run_{label}.parquet")
     computed = report[report["positions_computed"] > 0]
@@ -654,6 +731,8 @@ def score_zero_shot(
         f"{label}: {len(report)} assays, {int(report['variants'].sum()):,} variants "
         f"-> {out_dir / label}"
     )
+    if len(report) < len(table):
+        typer.echo(f"not scored (no structure): {len(table) - len(report)} assays")
     typer.echo(
         f"this run: {wall:.0f} s; {int(report['positions_computed'].sum()):,} positions scored "
         f"in {len(computed)} assays, {len(report) - len(computed)} assays read from the cache"
@@ -716,6 +795,14 @@ def eval_model_gate(
     marginals only: ProteinGym's ``ESM2_*`` columns are masked marginals, so a wild-type
     score set has nothing to be compared with. Benchmark results are written by
     ``mutascope eval zero-shot``.
+
+    The comparison covers the model's assays (:func:`_model_assays`): all of the reference,
+    or for a structure-aware model those with a structure. Our scores must hold exactly the
+    single mutants ProteinGym has for those assays.
+
+    Assays in ``eval.model_gate.exceptions.<model>`` (ADR 0015: ProteinGym's scores for them
+    come from wrong inputs) are compared and written out but left out of both checks. The
+    gate also fails if such an assay reaches the threshold, so the list cannot go stale.
     """
     cfg = load_config(config_dir, overrides)
     column, name = str(cfg.model.proteingym_column), str(cfg.model.name)
@@ -723,25 +810,33 @@ def eval_model_gate(
     if set(ours["model"]) != {name}:
         typer.echo(f"error: {scores_dir} holds {sorted(set(ours['model']))}, not {name}", err=True)
         raise typer.Exit(code=1)
+    table = pd.read_csv(reference)
+    theirs = load_precomputed_scores(precomputed_dir, [column], "single")
+    theirs = theirs[theirs["assay_id"].isin(_model_assays(cfg, table))]
     try:
-        joined = join_scores(
-            ours, load_precomputed_scores(precomputed_dir, [column], "single"), column
-        )
+        joined = join_scores(ours, theirs, column)
     except ValueError as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
-    table = pd.read_csv(reference)
     thresholds = GateThresholds(
         float(cfg.eval.model_gate.min_assay_spearman),
         float(cfg.eval.model_gate.aggregate_tolerance),
     )
-    gate = model_gate(joined, table, thresholds)
+    documented = cfg.eval.model_gate.exceptions.get(name)  # none for most models
+    exceptions = [] if documented is None else [str(a) for a in documented]
+    try:
+        gate = model_gate(joined, table, thresholds, exceptions)
+    except ValueError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
     agreement = write_table(gate.per_assay, AgreementSchema, out_dir / f"model_gate_{name}.parquet")
+    gated = gate.per_assay[~gate.per_assay["exception"]]
 
-    rho, diff = gate.per_assay["spearman"], gate.per_assay["max_abs_diff"]
+    rho, diff = gated["spearman"], gated["max_abs_diff"]
     typer.echo(
         f"{name} vs proteingym:{column}: {len(gate.per_assay)} assays, "
-        f"{len(joined):,} single mutants"
+        f"{len(joined):,} single mutants; gated: {len(gated)} assays, "
+        f"{int(gated['variants'].sum()):,} single mutants"
     )
     typer.echo(
         f"  per-variant Spearman: min {rho.min():.6f}, median {rho.median():.6f}; "
@@ -757,6 +852,17 @@ def eval_model_gate(
             f"    {record.assay_id}: Spearman {record.spearman:.4f}, "
             f"max |diff| {record.max_abs_diff:.3g}, {record.variants} variants"
         )
+    if len(gate.exceptions):
+        typer.echo(
+            f"  documented exceptions (not gated): {len(gate.exceptions)}; aggregate with them "
+            f"included: ours {gate.ours_all:.4f}, theirs {gate.theirs_all:.4f}"
+        )
+        for record in gate.exceptions.itertuples(index=False):
+            stale = " STALE: reaches the threshold, remove the entry" if record.passed else ""
+            typer.echo(
+                f"    {record.assay_id}: Spearman {record.spearman:.4f}, "
+                f"{record.variants} variants{stale}"
+            )
     typer.echo(f"agreement: {agreement}")
     _track(
         cfg,
@@ -772,6 +878,11 @@ def eval_model_gate(
             "aggregate_spearman_ours": gate.ours,
             "aggregate_spearman_theirs": gate.theirs,
             "aggregate_delta": gate.aggregate_delta,
+            "assays_gated": float(len(gated)),
+            "exceptions": float(len(gate.exceptions)),
+            "exceptions_stale": float(len(gate.stale)),
+            "aggregate_spearman_ours_all_assays": gate.ours_all,
+            "aggregate_spearman_theirs_all_assays": gate.theirs_all,
         },
         artifacts=[agreement],
         tags={"gate_passed": str(gate.passed).lower(), "proteingym_column": column},
@@ -810,6 +921,9 @@ def eval_zero_shot(
     and logs the aggregates to MLflow. The labels come from the processed variants, and the
     scores must cover exactly those variants. Exits 1 if the score set is not the one the
     config and ``--fast`` name, so results can never be tracked under the wrong revision.
+
+    A structure-aware model is benchmarked on its assays with a structure (213 of 217 on the
+    pinned release); the assay count is printed and is ``n_assays`` in the summary.
     """
     cfg = load_config(config_dir, overrides)
     label = run_label(str(cfg.model.name), fast=fast)
@@ -819,8 +933,9 @@ def eval_zero_shot(
             f"error: {scores_dir} holds {sorted(set(scores['model']))}, not {label}", err=True
         )
         raise typer.Exit(code=1)
+    table = pd.read_csv(reference)
     try:
-        variants = with_labels(scores, variants_dir)
+        variants = with_labels(scores, variants_dir, _model_assays(cfg, table))
     except ValueError as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -828,9 +943,7 @@ def eval_zero_shot(
     bootstrap = BootstrapParams(
         int(cfg.eval.bootstrap.n_resamples), float(cfg.eval.bootstrap.confidence)
     )
-    summary = summarise(
-        per_assay, pd.read_csv(reference), bootstrap, seed_all(int(cfg.eval.bootstrap.seed))
-    )
+    summary = summarise(per_assay, table, bootstrap, seed_all(int(cfg.eval.bootstrap.seed)))
     results = write_results(per_assay, summary, out_dir, f"zero_shot_{label}_single")
     typer.echo(
         f"{label}: {variants['assay_id'].nunique()} assays, {len(variants):,} single mutants"
@@ -879,6 +992,9 @@ def eval_compare(
     resamples where A is better, for every metric, overall and per function type. Every pair
     starts from the same seed, so a pair's numbers do not depend on which other pairs are
     listed. Writes one table (:class:`ComparisonSchema`) and logs one MLflow run.
+
+    A structure-aware model has no scores for ``data.structure_exceptions``; a pair with one
+    is compared on the assays both have (ADR 0003), and the count is printed and stored.
     """
     cfg = load_config(config_dir, overrides)
     pairs = [(str(a), str(b)) for a, b in cfg.eval.comparisons]
@@ -903,12 +1019,19 @@ def eval_compare(
     )
     seed = int(cfg.eval.bootstrap.seed)
     seed_all(seed)
+    exceptions = cfg.data.structure_exceptions  # null on a subset (the test profile)
+    no_structure = [] if exceptions is None else [str(a) for a in exceptions]
     frames: list[pd.DataFrame] = []
     try:
         for a, b in pairs:
             frames.append(
                 paired_bootstrap_diff(
-                    results[a], results[b], table, bootstrap, np.random.default_rng(seed)
+                    results[a],
+                    results[b],
+                    table,
+                    bootstrap,
+                    np.random.default_rng(seed),
+                    may_be_absent=no_structure,
                 )
             )
     except (ValueError, KeyError) as exc:

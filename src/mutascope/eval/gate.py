@@ -11,8 +11,16 @@ Two checks, both required:
   multi-mutants.
 
 An assay whose agreement is undefined (constant scores) fails: an unknown is not a pass.
+
+Exceptions (ADR 0015): for a few assays ProteinGym's precomputed scores were made from wrong
+inputs, so a correct scorer cannot agree with them. They are listed per model in
+``eval.model_gate.exceptions`` with the evidence, and left out of both checks. The list must
+describe the data exactly, like ``data.structure_exceptions``: the gate fails if a listed assay
+reaches the threshold after all (a stale entry), and refuses a list naming an assay that was
+not compared.
 """
 
+from collections.abc import Collection
 from dataclasses import dataclass
 
 import numpy as np
@@ -38,17 +46,32 @@ class ModelGate:
     """Outcome of the model gate."""
 
     per_assay: pd.DataFrame
-    """:class:`AgreementSchema`, one row per assay."""
+    """:class:`AgreementSchema`, one row per assay, exceptions included."""
     ours: float
-    """Our aggregate Spearman against ``DMS_score`` (single mutants)."""
+    """Our aggregate Spearman against ``DMS_score`` (single mutants, exceptions left out)."""
     theirs: float
     """The same aggregate from ProteinGym's precomputed scores on the same rows."""
+    ours_all: float
+    """Our aggregate over every compared assay, exceptions included."""
+    theirs_all: float
+    """ProteinGym's aggregate over every compared assay, wrong scores included."""
     thresholds: GateThresholds
 
     @property
     def failing(self) -> pd.DataFrame:
-        """Assays below the per-variant threshold (or undefined), worst first."""
-        return self.per_assay[~self.per_assay["passed"]].sort_values("spearman")
+        """Gated assays below the per-variant threshold (or undefined), worst first."""
+        rows = self.per_assay[~self.per_assay["passed"] & ~self.per_assay["exception"]]
+        return rows.sort_values("spearman")
+
+    @property
+    def exceptions(self) -> pd.DataFrame:
+        """The documented exceptions, worst first."""
+        return self.per_assay[self.per_assay["exception"]].sort_values("spearman")
+
+    @property
+    def stale(self) -> pd.DataFrame:
+        """Exceptions that reach the threshold: the entry no longer describes the data."""
+        return self.per_assay[self.per_assay["passed"] & self.per_assay["exception"]]
 
     @property
     def aggregate_delta(self) -> float:
@@ -57,7 +80,7 @@ class ModelGate:
     @property
     def passed(self) -> bool:
         within = abs(self.aggregate_delta) <= self.thresholds.aggregate_tolerance
-        return self.failing.empty and within
+        return self.failing.empty and self.stale.empty and within
 
 
 def join_scores(ours: pd.DataFrame, theirs: pd.DataFrame, column: str) -> pd.DataFrame:
@@ -93,7 +116,10 @@ def join_scores(ours: pd.DataFrame, theirs: pd.DataFrame, column: str) -> pd.Dat
 
 
 def model_gate(
-    joined: pd.DataFrame, reference: pd.DataFrame, thresholds: GateThresholds
+    joined: pd.DataFrame,
+    reference: pd.DataFrame,
+    thresholds: GateThresholds,
+    exceptions: Collection[str] = (),
 ) -> ModelGate:
     """Run both checks on :func:`join_scores` output.
 
@@ -101,7 +127,14 @@ def model_gate(
         joined: Paired scores with the assay labels.
         reference: ProteinGym reference table (``DMS_id, UniProt_ID, coarse_selection_type``).
         thresholds: The gate's two limits.
+        exceptions: Assays left out of both checks (``eval.model_gate.exceptions``).
+
+    Raises:
+        ValueError: An exception names an assay that is not in ``joined``.
     """
+    unknown = sorted(set(exceptions) - set(joined["assay_id"]))
+    if unknown:
+        raise ValueError(f"model gate exceptions name assays that were not compared: {unknown}")
     records: list[dict[str, object]] = []
     for assay_id, rows in joined.groupby("assay_id", sort=True):
         ours = rows[OURS].to_numpy(np.float64)
@@ -117,13 +150,22 @@ def model_gate(
                 "spearman_dms_ours": spearman(dms, ours),
                 "spearman_dms_theirs": spearman(dms, theirs),
                 "passed": bool(rho >= thresholds.min_assay_spearman),  # NaN compares False
+                "exception": str(assay_id) in exceptions,
             }
         )
     per_assay = AgreementSchema.validate(pd.DataFrame.from_records(records), lazy=True)
-    groups = AssayGroups.from_reference(reference, per_assay["assay_id"].tolist())
+    gated = per_assay[~per_assay["exception"]]
     return ModelGate(
         per_assay=per_assay,
-        ours=aggregate(per_assay["spearman_dms_ours"].to_numpy(np.float64), groups).overall,
-        theirs=aggregate(per_assay["spearman_dms_theirs"].to_numpy(np.float64), groups).overall,
+        ours=_aggregate(gated, "spearman_dms_ours", reference),
+        theirs=_aggregate(gated, "spearman_dms_theirs", reference),
+        ours_all=_aggregate(per_assay, "spearman_dms_ours", reference),
+        theirs_all=_aggregate(per_assay, "spearman_dms_theirs", reference),
         thresholds=thresholds,
     )
+
+
+def _aggregate(per_assay: pd.DataFrame, column: str, reference: pd.DataFrame) -> float:
+    """ProteinGym-style overall aggregate of one per-assay column."""
+    groups = AssayGroups.from_reference(reference, per_assay["assay_id"].tolist())
+    return aggregate(per_assay[column].to_numpy(np.float64), groups).overall

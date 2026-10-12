@@ -17,9 +17,10 @@ from typer.testing import CliRunner
 from mutascope.alphabet import AA_ORDER
 from mutascope.cli import app
 from mutascope.eval.benchmark import read_results
-from mutascope.eval.region import scoring_regions
+from mutascope.eval.region import scoring_regions, structure_regions
 from mutascope.eval.zero_shot import load_scores, run_label, score_assays, with_labels
 from mutascope.scoring.base import FloatArray, landscape_from_log_probs, resolve_positions
+from mutascope.scoring.struct_tokens import load_struct_tokens
 from mutascope.utils.tracking import TrackingSettings
 
 CONF = Path(__file__).parents[2] / "conf"
@@ -36,6 +37,7 @@ class _CachingScorer:
         self.dies_after = dies_after
         """Number of computations after which the next call "crashes"."""
         self.computed: list[tuple[str, str, list[int]]] = []
+        self.struct_tokens: list[str | None] = []
 
     @property
     def model_id(self) -> str:
@@ -56,6 +58,7 @@ class _CachingScorer:
     ) -> FloatArray:
         if self.dies_after is not None and len(self.computed) >= self.dies_after:
             raise KeyboardInterrupt
+        self.struct_tokens.append(struct_tokens)
         entry = self.cache.setdefault(
             (seq, region), np.full((len(seq), 20), np.nan, dtype=np.float32)
         )
@@ -175,6 +178,114 @@ def test_scores_are_paired_with_labels_and_must_cover_the_same_variants(
     extra = scores.iloc[[0]].assign(mutant="K2W")
     with pytest.raises(ValueError, match="right_only"):
         with_labels(pd.concat([scores, extra], ignore_index=True), variants)
+
+
+def test_a_structure_aware_run_scores_only_assays_with_a_structure(
+    processed_root: Path, reference: pd.DataFrame, tmp_path: Path
+) -> None:
+    """Assay A has a structure (3Di DDVVL, pLDDT 90, 85, 60, 95, 50), B has none: only A is
+    scored, written and reported, with the two low-pLDDT residues as ``#``."""
+    processed = processed_root / "processed"
+    targets = dict(zip(reference["DMS_id"], reference["target_seq"], strict=True))
+    structures = load_struct_tokens(
+        processed / "three_di", processed / "structure_features", targets, 70.0
+    )
+    scorer = _CachingScorer({})
+    report = score_assays(
+        scorer,
+        reference,
+        processed / "variants",
+        structure_regions(reference, structures),
+        tmp_path / "scores",
+        structures=structures,
+    )
+    assert report["assay_id"].tolist() == ["A"] and report["variants"].tolist() == [4]
+    assert scorer.struct_tokens == ["dd#v#"]
+    scores = load_scores(tmp_path / "scores")
+    assert set(scores["assay_id"]) == {"A"} and len(scores) == 4
+    assert not (tmp_path / "scores" / "assay_id=B").exists()
+
+
+def _saprot_cli(processed_root: Path, tmp_path: Path, *extra: str) -> list[str]:
+    processed = processed_root / "processed"
+    return [
+        "score", "zero-shot", "--config-dir", str(CONF),
+        "--reference", str(processed_root / "DMS_substitutions.csv"),
+        "--variants-dir", str(processed / "variants"),
+        "--out-dir", str(tmp_path / "out"), "--report-dir", str(tmp_path / "report"),
+        *extra,
+        "model=saprot_650m_af2", f"tracking.dir={tmp_path / 'mlruns'}",
+    ]  # fmt: skip
+
+
+def test_cli_refuses_a_structure_aware_model_without_its_inputs(
+    processed_root: Path, tmp_path: Path
+) -> None:
+    """Both failures happen before the checkpoint is loaded: no structure tables given, and
+    structure tables that do not cover exactly the reference minus the documented exceptions
+    (here B has no structure and is not listed as an exception)."""
+    processed = processed_root / "processed"
+    missing = CliRunner().invoke(app, _saprot_cli(processed_root, tmp_path))
+    assert missing.exit_code == 1
+    assert "structure-aware: pass --three-di-dir and --structure-features-dir" in missing.output
+    dirs = ["--three-di-dir", str(processed / "three_di")]
+    dirs += ["--structure-features-dir", str(processed / "structure_features")]
+    undocumented = CliRunner().invoke(
+        app, [*_saprot_cli(processed_root, tmp_path, *dirs), "data.structure_exceptions={}"]
+    )
+    assert undocumented.exit_code == 1
+    assert "no structure for ['B']" in undocumented.output
+
+
+def test_cli_gate_of_a_structure_aware_model_covers_only_its_assays(
+    processed_root: Path, reference: pd.DataFrame, tmp_path: Path
+) -> None:
+    """ProteinGym has scores for A and B; B is a documented structure exception, so the gate
+    compares A only. Without the exception the same inputs are a mismatch, not a pass."""
+    variants = processed_root / "processed" / "variants"
+    labels = with_labels(
+        pd.DataFrame(
+            {"assay_id": ["A"] * 4 + ["B"] * 2, "score": [1.0, 2.0, 3.0, 4.0, 1.0, 2.0]}
+        ).assign(mutant=["A4C", "K2C", "M1A", "V3G", "M1A", "R5W"]),
+        variants,
+    )
+    for assay_id, rows in labels.rename(columns={"score": "SaProt_650M_AF2"}).groupby("assay_id"):
+        part = tmp_path / "precomputed" / f"assay_id={assay_id}"
+        part.mkdir(parents=True)
+        rows.drop(columns="assay_id").to_parquet(part / "data.parquet")
+    ours = labels[labels["assay_id"] == "A"][["mutant", "score"]].assign(model="saprot_650m_af2")
+    part = tmp_path / "scores" / "assay_id=A"
+    part.mkdir(parents=True)
+    ours[["mutant", "model", "score"]].to_parquet(part / "data.parquet")
+    ref_csv = tmp_path / "reference.csv"
+    reference.to_csv(ref_csv, index=False)
+    gate = [
+        "eval", "model-gate", "--config-dir", str(CONF), "--reference", str(ref_csv),
+        "--precomputed-dir", str(tmp_path / "precomputed"),
+        "--scores-dir", str(tmp_path / "scores"), "--out-dir", str(tmp_path / "results"),
+        "model=saprot_650m_af2", f"tracking.dir={tmp_path / 'mlruns'}",
+    ]  # fmt: skip
+    documented = "+data.structure_exceptions.B=undocumented"
+    none = "eval.model_gate.exceptions.saprot_650m_af2=null"
+    passed = CliRunner().invoke(app, [*gate, documented, none])
+    assert passed.exit_code == 0, passed.output
+    assert "saprot_650m_af2 vs proteingym:SaProt_650M_AF2: 1 assays, 4 single mutants" in (
+        passed.output
+    )
+    strict = CliRunner().invoke(app, [*gate, "data.structure_exceptions={}", none])
+    assert strict.exit_code == 1 and "score tables differ" in strict.output
+
+    # The real exception list names two assays that are not in this toy reference: refused.
+    unknown = CliRunner().invoke(app, [*gate, documented])
+    assert unknown.exit_code == 1
+    assert "exceptions name assays that were not compared" in unknown.output
+    # A listed assay that agrees is a stale entry, and fails the gate.
+    listed = "eval.model_gate.exceptions={saprot_650m_af2: {A: listed although it agrees}}"
+    stale = CliRunner().invoke(
+        app, [*gate, documented, "~eval.model_gate.exceptions.saprot_650m_af2", "+" + listed]
+    )
+    assert stale.exit_code == 1, stale.output
+    assert "STALE" in stale.output and "model gate FAILED" in stale.output
 
 
 def _tracked(store: Path) -> dict[str, tuple[dict[str, str], dict[str, float], dict[str, str]]]:

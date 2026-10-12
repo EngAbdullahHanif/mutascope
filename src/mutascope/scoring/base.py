@@ -72,7 +72,10 @@ class ScorerConfigError(ValueError):
     """The model config names an unknown scorer or lacks a field."""
 
 
-SCORERS: Mapping[str, str] = {"esm2": "mutascope.scoring.esm2"}
+SCORERS: Mapping[str, str] = {
+    "esm2": "mutascope.scoring.esm2",
+    "saprot": "mutascope.scoring.saprot",
+}
 """Scorer name -> module exposing ``from_config(model_cfg, *, device, cache_dir)``."""
 
 
