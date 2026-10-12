@@ -31,10 +31,19 @@ def test_score_mutants_is_one_indexed_and_checks_the_wild_type() -> None:
     landscape = np.zeros((3, 20), dtype=np.float32)
     landscape[1, AA_ORDER.index("A")] = 2.5  # residue 2 (K) -> A
     assert score_mutants(landscape, "MKV", ["K2A"]).tolist() == [2.5]
-    with pytest.raises(ValueError, match="row 0: M2A but the sequence has K"):
+    with pytest.raises(ValueError, match="row 0: M2A but the scored sequence has K"):
         score_mutants(landscape, "MKV", ["M2A"])
-    with pytest.raises(ValueError, match="out of range"):
+    with pytest.raises(ValueError, match="no residue there"):
         score_mutants(landscape, "MKV", ["M9A"])
+
+
+def test_score_mutants_with_an_offset_reads_region_coordinates() -> None:
+    """A region starting at target residue 11 (offset 10): K12A is row 1 of the region."""
+    landscape = np.zeros((3, 20), dtype=np.float32)
+    landscape[1, AA_ORDER.index("A")] = 2.5
+    assert score_mutants(landscape, "MKV", ["K12A"], offset=10).tolist() == [2.5]
+    with pytest.raises(ValueError, match="no residue there"):
+        score_mutants(landscape, "MKV", ["K2A"], offset=10)
 
 
 @pytest.mark.parametrize("seq", ["", "MKX", "mkv"])

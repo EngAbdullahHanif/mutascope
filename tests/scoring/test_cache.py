@@ -8,7 +8,7 @@ import pytest
 
 from mutascope.scoring.cache import CacheError, CacheKey, LogProbCache
 
-KEY = CacheKey("facebook/esm2_t6_8M_UR50D", "c" * 40, "MKV", None, "masked")
+KEY = CacheKey("facebook/esm2_t6_8M_UR50D", "c" * 40, "MKV", None, "masked", "full")
 
 
 def test_round_trip(tmp_path: Path) -> None:
@@ -30,6 +30,7 @@ def test_round_trip(tmp_path: Path) -> None:
         {"sequence": "MKA"},
         {"struct_tokens": "abc"},
         {"method": "wt"},
+        {"region": "msa:2-3"},
     ],
     ids=lambda c: next(iter(c)),
 )
@@ -39,8 +40,8 @@ def test_every_field_changes_the_key(changed: dict[str, str]) -> None:
 
 def test_fields_cannot_run_together() -> None:
     """Plain concatenation would make these two keys equal."""
-    a = CacheKey("model", "rev", "MK", None, "masked")
-    b = CacheKey("model", "revM", "K", None, "masked")
+    a = CacheKey("model", "rev", "MK", None, "masked", "full")
+    b = CacheKey("model", "revM", "K", None, "masked", "full")
     assert a.digest() != b.digest()
 
 

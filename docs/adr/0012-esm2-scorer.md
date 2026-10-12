@@ -1,6 +1,6 @@
 # 0012 — Scorer protocol and the ESM-2 scorer
 
-- Status: accepted
+- Status: accepted (benchmark scoring region decided by the author, 2026-10-12)
 - Date: 2026-10-12
 
 ## Context
@@ -50,13 +50,27 @@ that decide the numbers:
    one token per residue and `<eos>`, or raises. Tests pin it two ways: a stand-in model whose
    logits copy a known neighbour (exact, includes windows), and the real 8M model, whose
    unmasked argmax matches 72 of 76 ubiquitin residues aligned and 3 of 75 shifted by one.
-6. **Cache key includes the method.** CLAUDE.md keyed the cache by model, revision, sequence and
-   structure tokens. Masked and wild-type marginals of the same sequence differ, so the scoring
-   method is part of the key (CLAUDE.md updated). The fields are JSON-encoded before hashing, so
-   two different tuples cannot concatenate to the same string. An entry is the `(L, 20)`
-   log-probabilities, not the landscape, so Phase 3 can reuse them as features.
+6. **Cache key includes the method and the region.** CLAUDE.md keyed the cache by model,
+   revision, sequence and structure tokens. Masked and wild-type marginals of the same sequence
+   differ, so the scoring method is part of the key. So is the scoring region (`"full"` or
+   `"msa:<a>-<b>"`, decision 8), so benchmark and website landscapes are separate, labelled
+   entries (CLAUDE.md updated). The fields are JSON-encoded before hashing, so two different
+   tuples cannot concatenate to the same string. An entry is the `(L, 20)` log-probabilities,
+   not the landscape, so Phase 3 can reuse them as features.
 7. **Device**: MPS when available, else CPU; never CUDA (`utils/device.py`). torch comes from
    PyTorch's CPU-only index on Linux (CI, Docker) and from PyPI on macOS (MPS).
+8. **Benchmark scoring region** (`eval/region.py`, `conf/eval/scoring_region.yaml`). Every
+   benchmark number scores an assay on the region its MSA covers (`MSA_start`..`MSA_end`) when
+   that region is not the full target. This covers the model gate, the zero-shot benchmark
+   results and the Phase 3 features, so our results stay comparable with ProteinGym's
+   leaderboard. Website landscapes use the full target for every assay, and the five affected
+   proteins are labelled there. The set is derived from the reference file. The expected
+   assay ids are kept in config, and any difference between the two fails loudly, in either
+   direction (the `structure_exceptions` pattern). A variant outside the scored region raises
+   instead of being dropped; on the pinned release every variant of the five lies inside it.
+9. **Score every position.** Website landscapes need masked marginals at every residue, not
+   only at measured variants, so the scoring step computes the full `(L, 20)` landscape for
+   every scored sequence. Benchmark metrics then read only the measured variants from it.
 
 ## Evidence
 
@@ -73,33 +87,48 @@ Our masked marginals against ProteinGym's precomputed scores, same checkpoint:
 
 CPU and MPS agree with each other to 4.4e-05 on the first two assays.
 
-## Finding: five precomputed score sets were computed on MSA-cropped sequences
+## The five MSA-region assays
 
 Scoring the full target disagreed with ProteinGym on three long assays (8M: KCNH2 ρ = 0.36,
-POLG_HCVJF 0.91, ZIKV 0.96). These are exactly the assays whose MSA covers only part of the target
-(`MSA_start`/`MSA_end` in the reference file). Five assays are like that. Scoring the
-MSA-covered region instead, with positions shifted, reproduces ProteinGym for all five:
+POLG_HCVJF 0.91, ZIKV 0.96). These are among the five assays whose MSA covers only part of the
+target. For all five, ProteinGym's published scores were computed on the MSA region. **This is an
+upstream inconsistency:** the scoring script at the pinned commit (`compute_fitness.py`) crops to
+the MSA only for MSA Transformer, so these published scores do not follow the script published
+with them. Evidence below: esm2_t6_8M masked marginals against ProteinGym's `ESM2_8M`, Spearman on
+the full target vs the MSA region (max abs. difference on the region).
 
-| Assay | Target | MSA range | Full target: ρ | Cropped: ρ, max abs. diff. |
-|---|---:|---|---:|---|
-| A0A140D2T1_ZIKV_Sourisseau_2019 | 3,423 | 281–804 | 0.9603 | 1.0000, 2.7e-05 |
-| KCNH2_HUMAN_Kozek_2020 | 1,159 | 535–565 | 0.3613 | 1.0000, 4.3e-06 |
-| POLG_CXB3N_Mattenberger_2021 | 2,185 | 1–861 | 0.9917 | 1.0000, 8.8e-06 |
-| POLG_HCVJF_Qi_2014 | 3,033 | 1984–2089 | 0.9111 | 1.0000, 8.1e-06 |
-| SCN5A_HUMAN_Glazer_2019 | 2,016 | 1611–1642 | 0.3901 | 1.0000, 8.5e-06 |
+- `A0A140D2T1_ZIKV_Sourisseau_2019` (MSA 281–804 of 3,423 residues): ρ 0.9603 on the full
+  target; exact on the MSA region (ρ 1.0000, 2.7e-05).
+- `KCNH2_HUMAN_Kozek_2020` (MSA 535–565 of 1,159): ρ 0.36 (0.3613) on the full target; exact on
+  the MSA region (ρ 1.0000, 4.3e-06).
+- `POLG_CXB3N_Mattenberger_2021` (MSA 1–861 of 2,185): ρ 0.9917 on the full target; exact on the
+  MSA region (ρ 1.0000, 8.8e-06).
+- `POLG_HCVJF_Qi_2014` (MSA 1984–2089 of 3,033): ρ 0.9111 on the full target; exact on the MSA
+  region (ρ 1.0000, 8.1e-06).
+- `SCN5A_HUMAN_Glazer_2019` (MSA 1611–1642 of 2,016): ρ 0.39 (0.3901) on the full target; exact
+  on the MSA region (ρ 1.0000, 8.5e-06).
 
-The script at the pinned commit crops only for MSA Transformer, so these precomputed columns
-were not produced by the script published with them. The scorer stays neutral: it scores the
-sequence it is given. Which sequence the pipeline gives it is a decision for the model gate and
-the landscape export (next step). The gate must compare like with like, which here means the
-cropped region for these five assays. The website's landscapes could reasonably use the full
-target. Either choice needs the author's decision and is recorded when made.
+On the full target, KCNH2 and SCN5A would fail the model gate's "≥ 0.99 in every assay". Through
+`eval.region.score_assay` in benchmark mode, all five reproduce ProteinGym with the numbers above,
+and two full-target controls (GCN4, SPG1) stay exact.
+
+## Plan for scoring all positions
+
+Estimate for 650M masked marginals on MPS, from the two measured runs (about 2.9e-4 s per token
+per pass, batch 16): about 4 hours for full landscapes of the 187 distinct target sequences
+(72,933 residues). The 13 targets longer than 1,022 residues take about half of that. The five MSA
+regions add about 5 minutes. Landscapes are computed once per distinct sequence and region and
+cached. A full-target benchmark landscape and the website landscape are the same cache entry
+(region `full`), so the benchmark adds only the five regions. The run is resumable because
+every finished sequence is already on disk.
 
 ## Consequences
 
 - `make test` loads `esm2_t6_8M` from the Hub (cached in CI). Two tests compare it with
-  ProteinGym when the release is present. Three `slow` tests cover the long-sequence windows
-  (about 3.5 minutes on MPS).
+  ProteinGym when the release is present. Region tests check the rule on a toy reference and,
+  when the release is present, that the five use their MSA region in benchmark mode, the other
+  212 the full target, and landscape mode the full target for all 217. Three `slow` tests
+  cover the long-sequence windows (about 3.5 minutes on MPS).
 - Throughput, 650M masked marginal on MPS (M4 Pro): 22.5 s for 281 residues, 58.9 s for 448.
   The wild-type marginal takes 0.1–0.2 s for the same sequences.
 - SaProt will implement the same protocol and reuse `windows.py` and the cache.
