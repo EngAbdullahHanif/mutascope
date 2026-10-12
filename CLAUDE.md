@@ -109,7 +109,9 @@ Run `make lint test` before declaring any task done.
 - Sequences > 1022 residues: overlapping windows; each position is scored from the window where it is most central.
 - SaProt: combined tokens (uppercase AA + lowercase 3Di); 3Di replaced by `#` where pLDDT < 70.
   Port the scoring logic from the official SaProt repository and cite it in the docstring.
-- Cache logits on disk keyed by `sha256(model_id + revision + sequence + struct_tokens)`.
+- Cache logits on disk keyed by
+  `sha256(model_id + revision + sequence + struct_tokens + method + region)` (method = masked or
+  wild-type marginal; region = full target or MSA region; ADR 0012).
 - Pin every Hugging Face model by `revision` in config.
 
 ## Evaluation rules (non-negotiable)

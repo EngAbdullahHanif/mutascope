@@ -1,6 +1,11 @@
 # Benchmark harness (ADR 0011). Metric definitions follow ProteinGym's
 # performance_DMS_benchmarks.py at the pinned commit; see mutascope.eval.metrics.
 
+# scoring_region.yaml: which assays are scored on their MSA region in benchmark mode (ADR 0012).
+defaults:
+  - scoring_region
+  - _self_
+
 # Top fraction, in %, for NDCG and top-10% recall (ProteinGym's default).
 top_percent: 10
 

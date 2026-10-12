@@ -762,3 +762,92 @@ all-metric gate in `61b90f0` and `afe82ed`; decisions in ADR 0011.
   skip, as in CI. `mutascope eval precomputed --rows all` takes about 9 s.
 - *Not done yet:* the model gate (needs our scorers), MLflow/W&B tracking, figures, and a
   Nextflow step for evaluation.
+
+---
+
+## Entry 11 — Scorer protocol, cache, ESM-2 scorer and scoring region (Phase 2, 2026-10-12)
+
+**Plain-language summary.** MutaScope can now ask a protein language model, ESM-2, how much it
+"likes" every possible single amino-acid change in a protein. The model reads the sequence with
+one position hidden (masked) and says how probable each of the 20 amino acids is there. The score
+of a change is how much more or less probable the new amino acid is than the original. Doing this
+for every position gives a landscape: a table of positions by amino acids. A faster mode reads
+the sequence once without hiding anything; it is about 200 times quicker but less faithful. Every
+zero-shot model will implement the same small interface (`Scorer`), results are cached on disk
+so each protein is scored once per model, and the code runs on the Mac's GPU (MPS) or on the CPU.
+The method was copied from ProteinGym's own scoring script, and the results match ProteinGym's
+published scores to about five decimal places, both for short proteins and for long ones that
+must be read in pieces. For five experiments, ProteinGym scored only the part of the protein its
+evolutionary alignment covers, so every benchmark number now does the same for those five, while
+the website shows landscapes of the whole protein. Code in `e1994ba`, tests in `1baa0ed`, CI cache
+in `08a3f61`, scoring region in the `feat(eval)` commit that follows; decisions in ADR 0012.
+
+**The 3 most important design choices.**
+
+1. **Match ProteinGym's script, then prove it on their numbers.** The masked marginal, the
+   "+1 for `<cls>`" token offset and the long-sequence window (`get_optimal_window`, ported
+   verbatim) follow `compute_fitness.py`. The proof is agreement with their precomputed scores
+   from the same checkpoints: max difference ≤ 3.4e-05 on six assays with the 8M model,
+   including four longer than 1,022 residues whose mutations fall in left-edge, centred and
+   right-edge windows, and ≤ 2.3e-05 on two assays with the 650M model.
+2. **Pin the token offset three ways.** `tokenize` refuses any layout other than `<cls>`, one
+   token per residue, `<eos>`. A stand-in model that predicts each token from its left neighbour
+   must reproduce the sequence shifted by exactly one, through windows too; reading token i
+   instead of i + 1 cannot pass. And the real 8M model's unmasked pass recovers 72 of 76
+   ubiquitin residues when aligned and 3 of 75 when shifted by one.
+3. **A neutral scorer, and a derived scoring-region rule outside it.** The scorer scores whatever
+   sequence it is given. Which part of a protein to score is decided in `eval/region.py`: in
+   benchmark mode, the MSA region wherever it is not the full target; in landscape mode, always
+   the full target. The set of MSA-region assays is derived from the reference file and must
+   equal the five ids in `conf/eval/scoring_region.yaml`, so a changed reference cannot shift
+   benchmark numbers silently. The region is part of the cache key, so the two kinds of
+   landscape are never confused on disk.
+
+**Problems encountered and how they were solved.**
+
+1. **Three long proteins disagreed with ProteinGym, for a reason outside the scorer.** *Found:*
+   comparing our 8M scores with ProteinGym's on long targets. BRCA1 (1,863 residues) matched
+   exactly, but KCNH2 gave Spearman 0.36, POLG_HCVJF 0.91 and ZIKV 0.96. *Cause:* these are
+   assays whose MSA covers only part of the target, and ProteinGym's precomputed scores for them
+   were computed on that MSA-covered region, not the full target. The script at the pinned commit
+   crops only for MSA Transformer, so these columns were not produced by the script published
+   with them. *Fix:* none in the scorer, which is correct. The author decided that every
+   benchmark number (model gate, zero-shot results, Phase 3 features) uses the MSA region for
+   these assays, while website landscapes use the full target and label the five. `eval/region.py`
+   derives the set from the reference file and fails if it differs from the configured list.
+   *Verified:* through `score_assay` in benchmark mode, all five reproduce ProteinGym (Spearman
+   1.000000, max difference ≤ 2.7e-05) and two full-target controls stay exact. On the full
+   target the five give 0.36–0.99; three further long assays with a full-range MSA (UBE4B, ERBB2,
+   BRCA2) match exactly on the full target. Left as it was, this would have failed the model
+   gate's "≥ 0.99 in every assay" on KCNH2 and SCN5A.
+2. **The cache key in CLAUDE.md would have mixed up two results.** *Found:* while writing the
+   cache. The rule keyed entries by model, revision, sequence and structure tokens. Masked and
+   wild-type marginals of the same sequence are different arrays, so a fast result could be
+   served for a masked request. *Fix:* the scoring method is part of the key, the fields are
+   JSON-encoded before hashing (so `"rev" + "MK"` and `"revM" + "K"` cannot collide), and
+   CLAUDE.md's rule now names the method. *Verified:* a test changes each of the five fields and
+   requires a different key; another checks that a fast call after a masked one runs the model.
+3. **Two new tests were wrong, not the code.** *Found:* their first run. A window property test
+   required every window to be exactly 1,024 tokens long, but for an odd window upstream's
+   centred window `[p − w//2, p + w//2)` is one token short; ours matches it, as the oracle test
+   shows. The real-model offset test required 95% aligned agreement, and ubiquitin gives 72/76 =
+   94.7%. *Fix:* the property applies to even windows (ESM-2's is 1,024), and the threshold is
+   90%, still far from the 4% (3/75) seen when shifted. *Verified:* 36 scoring tests pass.
+
+**Supporting details.**
+- *Throughput* (M4 Pro, MPS): with the 650M model, masked marginals take 22.5 s for 281 residues
+  and 58.9 s for 448; the wild-type marginal takes 0.1–0.2 s for the same proteins and agrees with
+  ProteinGym's masked scores at Spearman 0.96–0.97. With the 8M model, CPU and MPS agree with
+  each other to 4.4e-05 and take about the same time; the 3,418-residue BRCA2 takes 111 s.
+- *Dependencies:* `torch` 2.14.1 (from PyTorch's CPU-only index on Linux, so CI and Docker do not
+  pull CUDA; from PyPI on macOS) and `transformers` 5.19.0. Hub revisions were read from the Hub
+  API: 8M `c731040`, 35M `6fbf070`, 150M `a695f60`, 650M `08e4846`.
+- *Tests:* 46 new (284 passing, 1 skipped without Foldseek; `make test` about 24 s). Three `slow`
+  tests cover the long-sequence windows in about 3.5 minutes.
+- *Scoring every position:* the website needs masked marginals at every residue, so the scoring
+  step computes full landscapes; benchmark metrics read only the measured variants. Estimated
+  650M cost on MPS: about 4 hours for the 187 distinct targets (72,933 residues; the 13 longer
+  than 1,022 residues take about half), plus about 5 minutes for the five MSA regions. A
+  full-target benchmark landscape and the website landscape are the same cache entry.
+- *Not done yet:* scoring all 217 assays and the model gate, the CLI command and Nextflow step for
+  scoring, SaProt, and the ensemble.
