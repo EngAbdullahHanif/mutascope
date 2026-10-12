@@ -4,6 +4,7 @@ Every pipeline step is a command here; Nextflow only ever calls these commands.
 """
 
 import csv
+import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated
@@ -42,6 +43,7 @@ from mutascope.eval.benchmark import (
     summarise,
     write_results,
 )
+from mutascope.eval.gate import GateThresholds, join_scores, model_gate
 from mutascope.eval.proteingym import (
     PRECOMPUTED_PREFIX,
     RowSet,
@@ -50,8 +52,14 @@ from mutascope.eval.proteingym import (
     published_assay_level,
     published_summary,
 )
+from mutascope.eval.region import ScoringRegionError, scoring_regions
+from mutascope.eval.schemas import AgreementSchema, ScoringRunSchema
+from mutascope.eval.zero_shot import load_scores, score_assays
 from mutascope.export.hub import PublishError, push_dataset, stage_dataset
+from mutascope.scoring.base import build_scorer
+from mutascope.scoring.cache import LogProbCache
 from mutascope.utils.config import as_str_dict, load_config
+from mutascope.utils.io import write_table
 from mutascope.utils.logging import configure_logging
 from mutascope.utils.seeding import seed_all
 
@@ -64,6 +72,8 @@ data_app = typer.Typer(help="Acquire and validate ProteinGym data.", no_args_is_
 app.add_typer(data_app, name="data")
 eval_app = typer.Typer(help="Benchmark predictions against DMS assays.", no_args_is_help=True)
 app.add_typer(eval_app, name="eval")
+score_app = typer.Typer(help="Score variants with zero-shot models.", no_args_is_help=True)
+app.add_typer(score_app, name="score")
 
 ConfigDir = Annotated[
     Path,
@@ -531,3 +541,145 @@ def eval_compare_leaderboard(
             typer.echo(
                 f"  {model}: {len(rows)} assays, max |ours - published| per assay {gap.max():.5f}"
             )
+
+
+@score_app.command("zero-shot")
+def score_zero_shot(
+    reference: Reference,
+    variants_dir: Annotated[
+        Path, typer.Option(help="Processed variant partitions.", exists=True, file_okay=False)
+    ],
+    out_dir: Annotated[Path, typer.Option(help="Output dir for assay_id=<id>/ partitions.")],
+    report_dir: Annotated[Path, typer.Option(help="Directory for zero_shot_run_<model>.parquet.")],
+    fast: Annotated[
+        bool, typer.Option("--fast", help="Wild-type marginal instead of the masked marginal.")
+    ] = False,
+    config_dir: ConfigDir = Path("conf"),
+    overrides: Overrides = None,
+) -> None:
+    """Score every assay's single mutants with the configured model (``model=<name>``).
+
+    Only the positions an assay measures are scored, on its benchmark scoring region. The
+    run is resumable: every finished sequence is in ``scoring.cache_dir``, so a rerun after a
+    crash scores only what is missing and reports ``positions_computed = 0`` for the rest.
+    """
+    cfg = load_config(config_dir, overrides)
+    table = pd.read_csv(reference)
+    try:
+        # null on a subset of assays (the pipeline's test profile), like structure_exceptions.
+        configured = cfg.eval.scoring_region.msa_region_assays
+        expected = [] if configured is None else [str(a) for a in configured]
+        regions = scoring_regions(table, "benchmark", expected)
+    except ScoringRegionError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    cache_dir = Path(cfg.scoring.cache_dir)
+    scorer = build_scorer(
+        as_str_dict(OmegaConf.to_container(cfg.model, resolve=True), "model"),
+        device=str(cfg.scoring.device),
+        cache_dir=cache_dir,
+    )
+    started = time.monotonic()
+    report = score_assays(scorer, table, variants_dir, regions, out_dir, fast=fast)
+    wall = time.monotonic() - started
+    path = write_table(
+        report, ScoringRunSchema, report_dir / f"zero_shot_run_{scorer.model_id}.parquet"
+    )
+    computed = report[report["positions_computed"] > 0]
+    typer.echo(
+        f"{scorer.model_id}: {len(report)} assays, {int(report['variants'].sum()):,} variants "
+        f"-> {out_dir}"
+    )
+    typer.echo(
+        f"this run: {wall:.0f} s; {int(report['positions_computed'].sum()):,} positions scored "
+        f"in {len(computed)} assays, {len(report) - len(computed)} assays read from the cache"
+    )
+    logged = [
+        c
+        for c in LogProbCache(cache_dir).computations()
+        if c["model_id"] == str(cfg.model.hf_id) and c["revision"] == str(cfg.model.revision)
+    ]
+    typer.echo(
+        f"all runs (cache log): {sum(c['seconds'] for c in logged):.0f} s of model time, "
+        f"{sum(c['positions'] for c in logged):,} positions"
+    )
+    typer.echo(f"report: {path}")
+
+
+@eval_app.command("model-gate")
+def eval_model_gate(
+    scores_dir: Annotated[
+        Path,
+        typer.Option(
+            help="Our scores (`mutascope score zero-shot`).", exists=True, file_okay=False
+        ),
+    ],
+    precomputed_dir: Annotated[
+        Path,
+        typer.Option(help="ProteinGym zero-shot score partitions.", exists=True, file_okay=False),
+    ],
+    reference: Reference,
+    out_dir: Annotated[Path, typer.Option(help="Results directory.")],
+    config_dir: ConfigDir = Path("conf"),
+    overrides: Overrides = None,
+) -> None:
+    """Model gate (ADR 0010): our scores against ProteinGym's precomputed ones, single mutants.
+
+    Writes ``model_gate_<model>.parquet`` (per-assay agreement) and our benchmark results,
+    ``zero_shot_<model>_single.parquet`` and ``..._summary.parquet``, to ``out_dir``. Exits 1
+    if any assay is below ``eval.model_gate.min_assay_spearman`` or the aggregate differs by
+    more than ``eval.model_gate.aggregate_tolerance``.
+    """
+    cfg = load_config(config_dir, overrides)
+    column, name = str(cfg.model.proteingym_column), str(cfg.model.name)
+    ours = load_scores(scores_dir)
+    if set(ours["model"]) != {name}:
+        typer.echo(f"error: {scores_dir} holds {sorted(set(ours['model']))}, not {name}", err=True)
+        raise typer.Exit(code=1)
+    try:
+        joined = join_scores(
+            ours, load_precomputed_scores(precomputed_dir, [column], "single"), column
+        )
+    except ValueError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    table = pd.read_csv(reference)
+    thresholds = GateThresholds(
+        float(cfg.eval.model_gate.min_assay_spearman),
+        float(cfg.eval.model_gate.aggregate_tolerance),
+    )
+    gate = model_gate(joined, table, thresholds)
+    agreement = write_table(gate.per_assay, AgreementSchema, out_dir / f"model_gate_{name}.parquet")
+
+    per_assay = assay_metrics_table(joined, {"ours": name}, float(cfg.eval.top_percent))
+    bootstrap = BootstrapParams(
+        int(cfg.eval.bootstrap.n_resamples), float(cfg.eval.bootstrap.confidence)
+    )
+    summary = summarise(per_assay, table, bootstrap, seed_all(int(cfg.eval.bootstrap.seed)))
+    results = write_results(per_assay, summary, out_dir, f"zero_shot_{name}_single")
+
+    rho, diff = gate.per_assay["spearman"], gate.per_assay["max_abs_diff"]
+    typer.echo(
+        f"{name} vs proteingym:{column}: {len(gate.per_assay)} assays, "
+        f"{len(joined):,} single mutants"
+    )
+    typer.echo(
+        f"  per-variant Spearman: min {rho.min():.6f}, median {rho.median():.6f}; "
+        f"max |ours - theirs| {diff.max():.2e}"
+    )
+    typer.echo(
+        f"  aggregate Spearman vs DMS_score: ours {gate.ours:.4f}, theirs {gate.theirs:.4f}, "
+        f"delta {gate.aggregate_delta:+.4f} (tolerance {thresholds.aggregate_tolerance})"
+    )
+    typer.echo(f"  assays below {thresholds.min_assay_spearman}: {len(gate.failing)}")
+    for record in gate.failing.itertuples(index=False):
+        typer.echo(
+            f"    {record.assay_id}: Spearman {record.spearman:.4f}, "
+            f"max |diff| {record.max_abs_diff:.3g}, {record.variants} variants"
+        )
+    typer.echo(f"agreement: {agreement}")
+    typer.echo(f"results: {results[0]}, {results[1]}")
+    if not gate.passed:
+        typer.echo("error: model gate FAILED", err=True)
+        raise typer.Exit(code=1)
+    typer.echo("model gate passed")

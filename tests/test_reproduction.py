@@ -11,7 +11,10 @@ aggregation). They need the downloaded release and are skipped without it, as in
 
 Model gate: on single mutants, our ESM-2 650M scores have Spearman >= 0.99 with ProteinGym's
 precomputed scores in every assay, and our aggregate is within ±0.01 of the aggregate the same
-harness computes from their scores on the same rows. Implemented with the zero-shot scorers.
+harness computes from their scores on the same rows. It scores all 217 assays through the same
+function as ``mutascope score zero-shot``, with the configured cache: after ``make pipeline``
+every sequence is a cache hit and the test takes about a minute; on an empty cache it runs the
+650M model for hours.
 """
 
 from pathlib import Path
@@ -19,17 +22,22 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+from omegaconf import OmegaConf
 
 from mutascope.data.release import load_release
 from mutascope.eval.aggregate import AssayGroups, aggregate
 from mutascope.eval.benchmark import assay_metrics_table
+from mutascope.eval.gate import GateThresholds, join_scores, model_gate
 from mutascope.eval.proteingym import (
     PRECOMPUTED_PREFIX,
     load_precomputed_scores,
     published_assay_level,
     published_summary,
 )
-from mutascope.utils.config import load_config
+from mutascope.eval.region import scoring_regions
+from mutascope.eval.zero_shot import load_scores, score_assays
+from mutascope.scoring.base import build_scorer
+from mutascope.utils.config import as_str_dict, load_config
 
 CONF = Path(__file__).parents[1] / "conf"
 TOLERANCE = 0.0005
@@ -146,6 +154,42 @@ def test_aggregation_of_published_values_is_exact(metric: str, reference: pd.Dat
             )
 
 
+VARIANTS_DIR = Path(_cfg.data.processed_dir) / "variants"
+
+
 @pytest.mark.slow
-def test_esm2_650m_matches_proteingym_scores_on_single_mutants() -> None:
-    pytest.skip("Model gate is implemented in Phase 2 (zero-shot scorers).")
+@needs_release
+@pytest.mark.skipif(
+    not VARIANTS_DIR.is_dir(), reason="needs the processed variants (`make pipeline`)"
+)
+def test_esm2_650m_matches_proteingym_scores_on_single_mutants(
+    reference: pd.DataFrame, tmp_path: Path
+) -> None:
+    """The model gate (ADR 0010), on all 696,311 single mutants of the 217 assays."""
+    assert str(_cfg.model.name) == "esm2_650m"
+    column = str(_cfg.model.proteingym_column)
+    assert column == "ESM2_650M"
+    scorer = build_scorer(
+        as_str_dict(OmegaConf.to_container(_cfg.model, resolve=True), "model"),
+        device=str(_cfg.scoring.device),
+        cache_dir=Path(_cfg.scoring.cache_dir),
+    )
+    regions = scoring_regions(
+        reference, "benchmark", [str(a) for a in _cfg.eval.scoring_region.msa_region_assays]
+    )
+    score_assays(scorer, reference, VARIANTS_DIR, regions, tmp_path / "scores")
+    theirs = load_precomputed_scores(SCORES_DIR, [column], "single")
+    joined = join_scores(load_scores(tmp_path / "scores"), theirs, column)
+    thresholds = GateThresholds(
+        float(_cfg.eval.model_gate.min_assay_spearman),
+        float(_cfg.eval.model_gate.aggregate_tolerance),
+    )
+    assert (thresholds.min_assay_spearman, thresholds.aggregate_tolerance) == (0.99, 0.01)
+    gate = model_gate(joined, reference, thresholds)
+
+    assert len(gate.per_assay) == 217 and len(joined) == 696_311
+    failing = gate.failing[["assay_id", "spearman", "max_abs_diff"]]
+    assert failing.empty, f"assays below 0.99 per-variant Spearman:\n{failing.to_string()}"
+    assert abs(gate.aggregate_delta) <= thresholds.aggregate_tolerance, (
+        f"aggregate Spearman: ours {gate.ours:.4f}, theirs {gate.theirs:.4f}"
+    )
