@@ -22,9 +22,10 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
+import numpy as np
 import pandas as pd
 
-from mutascope.scoring.base import FloatArray, Scorer, score_mutants
+from mutascope.scoring.base import FloatArray, Scorer, mutant_positions, score_mutants
 
 Mode = Literal["benchmark", "landscape"]
 MODES: tuple[Mode, ...] = ("benchmark", "landscape")
@@ -136,9 +137,16 @@ def score_assay(
 ) -> FloatArray:
     """Score an assay's single mutants (target coordinates) on ``region``.
 
-    The landscape covers every position of the region; only ``mutants`` are looked up. A mutant
-    outside the region fails loudly instead of being dropped.
+    Only the positions ``mutants`` substitute are scored (ADR 0013); the scorer's cache entry
+    still has the region's full ``(L, 20)`` shape. A mutant outside the region, or with the
+    wrong wild type, fails loudly before any model runs instead of being dropped.
     """
     seq = region.sequence(target_seq)
-    landscape = scorer.landscape(seq, fast=fast, region=region.label)
-    return score_mutants(landscape, seq, mutants, offset=region.start)
+    positions = mutant_positions(seq, mutants, offset=region.start)
+    landscape = scorer.landscape(seq, fast=fast, region=region.label, positions=positions)
+    scores = score_mutants(landscape, seq, mutants, offset=region.start)
+    if not np.isfinite(scores).all():
+        raise RuntimeError(
+            f"{region.assay_id}: {scorer.model_id} left requested positions unscored"
+        )
+    return scores

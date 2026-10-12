@@ -17,6 +17,13 @@ bootstrap:
 
 results_dir: results
 
+# Model gate (ADR 0010): our scores against ProteinGym's precomputed scores on single mutants.
+# Per-variant Spearman in every assay, and |our aggregate - theirs| on the same rows. Do not
+# change either value without a new ADR.
+model_gate:
+  min_assay_spearman: 0.99
+  aggregate_tolerance: 0.01
+
 # ProteinGym's precomputed baselines that the harness gate checks: score column in the
 # zero-shot score files -> Model_name on the leaderboard (also the DMS-level column header).
 precomputed_models:

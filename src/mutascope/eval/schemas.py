@@ -1,4 +1,4 @@
-"""pandera schemas for benchmark results (``results/*.parquet``).
+"""pandera schemas for benchmark results (``results/*.parquet``) and zero-shot scores.
 
 Per-assay results use the long format every later figure reads:
 ``model, assay_id, split, fold, metric, value``. Zero-shot results have no split or fold, so
@@ -10,6 +10,7 @@ import pandas as pd
 import pandera.pandas as pa
 from pandera.typing.pandas import Series
 
+from mutascope.data.parse import SINGLE_MUTATION_PATTERN
 from mutascope.data.schemas import FUNCTION_TYPES
 from mutascope.eval.metrics import METRICS
 
@@ -76,3 +77,70 @@ class SummarySchema(pa.DataFrameModel):
         none = df["ci_low"].isna() & df["ci_high"].isna()
         ordered = df["ci_low"] <= df["ci_high"]
         return ((defined & both & ordered) | (~defined & none)).astype(bool)
+
+
+class ZeroShotScoreSchema(pa.DataFrameModel):
+    """One model's zero-shot score of one single mutant (``processed/zero_shot/<model>/``).
+
+    Higher = predicted fitter, the direction of ``DMS_score``. Every variant of an assay has a
+    finite score: a variant the model could not score fails the run, it is never left null.
+    """
+
+    assay_id: Series[str]
+    mutant: Series[str] = pa.Field(str_matches=rf"(?:{SINGLE_MUTATION_PATTERN})\Z")
+    model: Series[str]
+    score: Series[float]
+
+    class Config:  # pyright: ignore[reportIncompatibleVariableOverride]
+        strict = True
+        ordered = True
+        unique = ["assay_id", "mutant"]  # noqa: RUF012 — read by pandera
+
+    @pa.check("score")  # pyright: ignore[reportUnknownMemberType] — untyped in pandera
+    @classmethod
+    def score_is_finite(cls, score: "pd.Series[float]") -> "pd.Series[bool]":
+        """No NaN (a position that was not scored) and no infinity."""
+        return score.abs() < float("inf")
+
+
+class ScoringRunSchema(pa.DataFrameModel):
+    """What one ``mutascope score zero-shot`` invocation did for one assay.
+
+    ``positions`` are the distinct positions the assay measures; ``positions_computed`` those
+    that went through the model in this invocation (0 when the cache had them all, as in a
+    resumed run). ``seconds`` covers this invocation only.
+    """
+
+    assay_id: Series[str] = pa.Field(unique=True)
+    model: Series[str]
+    method: Series[str] = pa.Field(isin=["masked", "wt"])
+    region: Series[str]
+    region_length: Series[int] = pa.Field(ge=1)
+    variants: Series[int] = pa.Field(ge=1)
+    positions: Series[int] = pa.Field(ge=1)
+    positions_computed: Series[int] = pa.Field(ge=0)
+    seconds: Series[float] = pa.Field(ge=0)
+
+    class Config:  # pyright: ignore[reportIncompatibleVariableOverride]
+        strict = True
+        ordered = True
+
+
+class AgreementSchema(pa.DataFrameModel):
+    """Model gate, one assay: our scores against ProteinGym's on the same single mutants.
+
+    ``spearman`` and ``max_abs_diff`` compare the two score columns with each other;
+    ``spearman_dms_*`` compare each with ``DMS_score`` (the inputs to the aggregate check).
+    """
+
+    assay_id: Series[str] = pa.Field(unique=True)
+    variants: Series[int] = pa.Field(ge=1)
+    spearman: Series[float] = pa.Field(nullable=True)
+    max_abs_diff: Series[float] = pa.Field(ge=0)
+    spearman_dms_ours: Series[float] = pa.Field(nullable=True)
+    spearman_dms_theirs: Series[float] = pa.Field(nullable=True)
+    passed: Series[bool]
+
+    class Config:  # pyright: ignore[reportIncompatibleVariableOverride]
+        strict = True
+        ordered = True

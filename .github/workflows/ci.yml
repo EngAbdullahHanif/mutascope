@@ -84,6 +84,11 @@ jobs:
             data/raw/*/*.zip
             data/raw/*/*.csv
           key: proteingym-${{ hashFiles('conf/data/proteingym.yaml', 'data/manifest.yaml') }}
+      # SCORE_ZERO_SHOT loads esm2_t6_8M; same cache as the test job.
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/huggingface/hub
+          key: hf-${{ hashFiles('conf/model/esm2_8m.yaml') }}
       - run: make pipeline-test
       - name: Manifest unchanged
         run: git diff --exit-code data/manifest.yaml

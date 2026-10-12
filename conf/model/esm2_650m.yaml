@@ -7,3 +7,5 @@ revision: 08e4846e537177426273712802403f7ba8261b6c
 batch_size: 16
 # ESM-2's training context: 1022 residues + <cls> + <eos>. Longer sequences are windowed.
 window_tokens: 1024
+# ProteinGym's precomputed score column for this checkpoint (the model gate compares with it).
+proteingym_column: ESM2_650M

@@ -131,6 +131,94 @@ def test_cache_skips_the_model(tokenizer: EsmTokenizer, tmp_path: Path) -> None:
     assert model.calls == calls + 1
 
 
+def test_only_the_requested_positions_are_scored(tokenizer: EsmTokenizer) -> None:
+    """Three positions, batch size 7: one forward pass, three finite rows, the rest NaN. The
+    rows equal those of a full run, so restricting positions changes cost, not values."""
+    seq = _random_sequence(40, seed=3)
+    full = _scorer(tokenizer, shift=1).log_probs(seq)
+    scorer = _scorer(tokenizer, shift=1)
+    model = scorer.model
+    assert isinstance(model, _StandIn)
+    partial = scorer.log_probs(seq, positions=[30, 2, 17, 2])
+    assert model.calls == 1 and scorer.positions_computed == 3
+    assert partial.shape == full.shape
+    np.testing.assert_array_equal(partial[[2, 17, 30]], full[[2, 17, 30]])
+    assert np.isnan(np.delete(partial, [2, 17, 30], axis=0)).all()
+    landscape = scorer.landscape(seq, positions=[2])
+    assert np.isfinite(landscape[2]).all() and np.isnan(landscape[3]).all()
+    with pytest.raises(ValueError, match="positions must be within"):
+        scorer.log_probs(seq, positions=[40])
+
+
+@pytest.mark.parametrize("window", [1024, 32], ids=["fits", "windowed"])
+def test_restricted_positions_use_the_right_tokens(tokenizer: EsmTokenizer, window: int) -> None:
+    """Row p must still describe residue p (here: show residue p - 1) when only a few
+    positions are scored, including through left-edge, centred and right-edge windows."""
+    seq = _random_sequence(300, seed=4)
+    positions = [1, 5, 150, 151, 298, 299]
+    log_probs = _scorer(tokenizer, shift=1, window=window).log_probs(seq, positions=positions)
+    predicted = _argmax_residues(log_probs[positions])
+    assert predicted == "".join(seq[p - 1] for p in positions)
+
+
+def test_cache_entry_is_filled_in_incrementally(tokenizer: EsmTokenizer, tmp_path: Path) -> None:
+    """A second request computes only the positions the entry lacks, and the entry ends up
+    identical to one computed in a single run (website landscapes reuse benchmark rows)."""
+    seq = _random_sequence(40, seed=5)
+    cache = LogProbCache(tmp_path)
+    scorer = _scorer(tokenizer, shift=1, cache=cache)
+    scorer.log_probs(seq, positions=[0, 1, 2])
+    assert scorer.positions_computed == 3
+    scorer.log_probs(seq, positions=[1, 2, 3])
+    assert scorer.positions_computed == 4  # only residue 3 was missing
+    scorer.log_probs(seq, positions=[0, 3])
+    assert scorer.positions_computed == 4  # nothing missing: no model call
+    everything = scorer.log_probs(seq)
+    assert scorer.positions_computed == 40
+    np.testing.assert_array_equal(everything, _scorer(tokenizer, shift=1).log_probs(seq))
+    assert [c["positions"] for c in cache.computations()] == [3, 1, 36]
+
+
+class _CrashError(Exception):
+    """Stands in for the process dying (sleep, kill, out of memory)."""
+
+
+def test_a_crashed_run_resumes_without_rescoring(tokenizer: EsmTokenizer, tmp_path: Path) -> None:
+    """Three sequences; the model dies inside the third. A new process (new scorer, same cache
+    directory) must not run the model for the first two, must score the third in full, and
+    must not have been left a half-written entry."""
+    sequences = [_random_sequence(30, seed=s) for s in (6, 7, 8)]
+    expected = [_scorer(tokenizer, shift=1).log_probs(seq) for seq in sequences]
+
+    class Dying(_StandIn):
+        def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> SimpleNamespace:
+            if self.calls == 11:  # 30 residues / batch 7 = 5 passes each; dies in sequence 3
+                raise _CrashError
+            return super().forward(input_ids, attention_mask)
+
+    settings = Esm2Settings("standin", "standin/esm", "0" * 40, batch_size=7, window_tokens=1024)
+    first_run = Esm2Scorer(
+        settings=settings,
+        model=Dying(1),
+        tokenizer=tokenizer,
+        device=torch.device("cpu"),
+        cache=LogProbCache(tmp_path),
+    )
+    with pytest.raises(_CrashError):
+        for seq in sequences:
+            first_run.log_probs(seq)
+    assert len(list(tmp_path.rglob("*.npy"))) == 2 and not list(tmp_path.rglob("*.tmp"))
+
+    resumed = _scorer(tokenizer, shift=1, cache=LogProbCache(tmp_path))
+    model = resumed.model
+    assert isinstance(model, _StandIn)
+    for seq, want in zip(sequences[:2], expected[:2], strict=True):
+        np.testing.assert_array_equal(resumed.log_probs(seq), want)
+    assert model.calls == 0 and resumed.positions_computed == 0
+    np.testing.assert_array_equal(resumed.log_probs(sequences[2]), expected[2])
+    assert model.calls == 5 and resumed.positions_computed == 30
+
+
 def test_bad_tokenisation_fails_loudly(tokenizer: EsmTokenizer) -> None:
     class NoCls:
         cls_token_id, eos_token_id = tokenizer.cls_token_id, tokenizer.eos_token_id

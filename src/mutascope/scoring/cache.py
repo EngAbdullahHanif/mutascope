@@ -8,8 +8,15 @@ without it a fast result could be served for a masked request. The region (``"fu
 separate, labelled entries. The key fields are JSON-encoded before hashing so
 that no two different tuples can concatenate to the same string.
 
-Each entry is one ``.npy`` file of shape ``(L, 20)``, float32, columns in ``AA_ORDER``. Writes go
-to a temporary file that is renamed into place, so a reader never sees half an entry.
+Each entry is one ``.npy`` file of shape ``(L, 20)``, float32, columns in ``AA_ORDER``. A row is
+NaN until its residue has been scored: the benchmark scores only the positions an assay
+measured, and a later request for more positions fills in the missing rows of the same entry
+(ADR 0013). Writes go to a temporary file that is renamed into place, so a reader never sees
+half an entry, and a run killed at any moment leaves every finished entry intact.
+
+``computations.jsonl`` in the cache root gets one line per computation (entry, positions scored,
+seconds). An interrupted run's work is therefore still counted when the total run time is
+reported after a resume.
 """
 
 import hashlib
@@ -17,7 +24,9 @@ import json
 import os
 import tempfile
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -60,18 +69,45 @@ class CacheError(RuntimeError):
     """A cache entry exists but does not have the expected shape."""
 
 
+COMPUTATION_LOG = "computations.jsonl"
+
+
 class LogProbCache:
     """Directory of ``<sha256>.npy`` entries, sharded by the first two hex digits."""
 
     def __init__(self, root: Path) -> None:
         self.root = root
 
+    def record(self, key: CacheKey, *, positions: int, seconds: float) -> None:
+        """Append one computation (``positions`` residues of ``key``'s entry) to the log."""
+        line = {
+            "digest": key.digest(),
+            "model_id": key.model_id,
+            "revision": key.revision,
+            "method": key.method,
+            "region": key.region,
+            "length": len(key.sequence),
+            "positions": positions,
+            "seconds": round(seconds, 3),
+            "finished_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        }
+        self.root.mkdir(parents=True, exist_ok=True)
+        with (self.root / COMPUTATION_LOG).open("a") as fh:
+            fh.write(json.dumps(line) + "\n")
+
+    def computations(self) -> list[dict[str, Any]]:
+        """Every logged computation, oldest first (empty if nothing was computed yet)."""
+        path = self.root / COMPUTATION_LOG
+        if not path.exists():
+            return []
+        return [json.loads(line) for line in path.read_text().splitlines() if line]
+
     def path(self, key: CacheKey) -> Path:
         digest = key.digest()
         return self.root / digest[:2] / f"{digest}.npy"
 
     def get(self, key: CacheKey) -> npt.NDArray[np.float32] | None:
-        """The cached ``(L, 20)`` array, or None if absent.
+        """The cached ``(L, 20)`` array (NaN rows: residues not scored yet), or None if absent.
 
         Raises:
             CacheError: The entry's shape does not match the key's sequence (never trusted).
