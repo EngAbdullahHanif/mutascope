@@ -22,7 +22,7 @@ Requires [uv](https://docs.astral.sh/uv/), Nextflow (Java 17+) and Foldseek (see
 
 ```
 DOWNLOAD -> [SUBSET] -> VALIDATE -> CLEAN, STRUCT_FEATURES, FOLDSEEK_3DI -> STRUCTURE_REPORT
-                                    CLEAN -> SCORE_ZERO_SHOT -> BENCHMARK_ZERO_SHOT
+                   CLEAN, STRUCT_FEATURES, FOLDSEEK_3DI -> SCORE_ZERO_SHOT -> BENCHMARK_ZERO_SHOT
 ```
 
 - `make pipeline` runs on all 217 assays. The release is downloaded once into `data/raw/` and
@@ -37,6 +37,11 @@ DOWNLOAD -> [SUBSET] -> VALIDATE -> CLEAN, STRUCT_FEATURES, FOLDSEEK_3DI -> STRU
   long step: about 1 h 41 min for 650M, 29 min for 150M and 19 min for 35M on an M4 Pro, against
   under 30 s per model for the wild-type marginal. On a laptop, run it as `caffeinate -ims make pipeline` so the
   machine does not sleep, and do not run anything else on the GPU meanwhile.
+- SaProt 650M (`saprot_650m_af2`, masked marginal only) is scored on the 213 assays with an AF2
+  structure, on the residues the structure models, in one pass per position without windows
+  (ADR 0015). It reads its structure tokens from `processed/three_di` and
+  `processed/structure_features` and takes about 1 h 45 min. Its results state 213 assays, and
+  `mutascope eval compare` compares it with ESM-2 650M on those 213.
 - `BENCHMARK_ZERO_SHOT` turns each score set into `results/zero_shot_<label>_single.parquet`
   (per assay) and `..._summary.parquet` (ProteinGym-style aggregates with bootstrap CIs).
 - `make pipeline-test` runs the same steps on 2 small assays, with the 30 MB `esm2_t6_8M`
@@ -68,6 +73,12 @@ by more than 0.01. `make test-slow` runs the same check as a test. Add `model=es
 `model=esm2_150m` (and their score directories) to gate the smaller checkpoints against
 `ESM2_35M` and `ESM2_150M`. The gate applies to masked marginals only: ProteinGym publishes no
 wild-type-marginal ESM-2 scores.
+
+`model=saprot_650m_af2` gates SaProt against `SaProt_650M_AF2` on the 213 assays with a
+structure. Two of them are documented exceptions in `conf/eval/model_gate.yaml`: ProteinGym's
+scores for `POLG_HCVJF_Qi_2014` and `BRCA2_HUMAN_Erwood_2022_HEK293T` were made from wrong
+inputs (ADR 0015), which two slow tests show by reproducing them from those inputs. The gate
+covers the other 211 and fails if a listed assay starts to agree.
 
 ### Experiment tracking
 

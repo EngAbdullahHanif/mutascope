@@ -21,8 +21,10 @@ from mutascope.eval.region import (
     derive_msa_regions,
     score_assay,
     scoring_regions,
+    structure_regions,
 )
 from mutascope.scoring.base import FloatArray
+from mutascope.scoring.struct_tokens import AssayStructure
 from mutascope.utils.config import load_config
 
 CONF = Path(__file__).parents[2] / "conf"
@@ -163,3 +165,48 @@ def test_landscape_mode_scores_every_assay_in_full(reference: pd.DataFrame) -> N
     regions = scoring_regions(reference, "landscape", EXPECTED)
     assert len(regions) == 217
     assert all(region.is_full for region in regions.values())
+
+
+class _Recorder:
+    """Records what the scorer is asked for; every score is 0."""
+
+    model_id = "recorder"
+    positions_computed = 0
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str | None, str]] = []
+
+    def landscape(
+        self,
+        seq: str,
+        struct_tokens: str | None = None,
+        *,
+        fast: bool = False,
+        region: str = "full",
+        positions: Sequence[int] | None = None,
+    ) -> FloatArray:
+        self.calls.append((seq, struct_tokens, region))
+        return np.zeros((len(seq), len(AA_ORDER)), dtype=np.float32)
+
+
+def test_structure_regions_follow_the_structure_not_the_msa() -> None:
+    """``crop`` has MSA region 3-6, but its structure models residues 2-7: a structure-aware
+    model is scored on 2-7. An assay without a structure gets no region."""
+    structures = {"crop": AssayStructure("crop", "#dvvla##", 1, 7)}
+    regions = structure_regions(TOY, structures)
+    assert set(regions) == {"crop"}
+    assert (regions["crop"].start, regions["crop"].end) == (1, 7)
+    assert regions["crop"].label == "pdb:2-7"
+    whole = structure_regions(TOY, {"full": AssayStructure("full", "ddvvl", 0, 5)})
+    assert whole["full"].label == "full"
+
+
+def test_score_assay_passes_the_regions_part_of_the_structure_tokens() -> None:
+    region = ScoringRegion("crop", 1, 7, 8, kind="pdb")
+    scorer = _Recorder()
+    score_assay(scorer, "MKVARLLE", region, ["K2A", "L7G"], struct_tokens="#dvvla##")
+    assert scorer.calls == [("KVARLL", "dvvla#", "pdb:2-7")]
+    with pytest.raises(ScoringRegionError, match="3 structure tokens for a 8-residue target"):
+        score_assay(scorer, "MKVARLLE", region, ["K2A"], struct_tokens="dvv")
+    score_assay(scorer, "MKVARLLE", region, ["K2A"])
+    assert scorer.calls[-1] == ("KVARLL", None, "pdb:2-7")

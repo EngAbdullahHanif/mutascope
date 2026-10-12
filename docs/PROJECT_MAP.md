@@ -373,3 +373,32 @@ and exclude merge commits.
 - **CLI commands added:** `mutascope eval compare` runs every pair in `eval.comparisons`.
 - **Outputs:** `results/zero_shot/comparisons.parquet` (150 rows: 5 pairs × 5 metrics ×
   overall and 5 function types).
+
+## Step 15 — SaProt 650M scorer, 213-assay benchmark and gate exceptions (Phase 2, 2026-10-12)
+
+- **What this step did:** added the structure-aware SaProt scorer as a port of the official
+  scoring, scored the 213 assays with a structure, gated it against ProteinGym's scores with two
+  documented upstream errors left out, and compared it with ESM-2 650M (ADR 0015).
+- **Files created or modified:**
+
+| Path | What it does | Why it exists |
+|---|---|---|
+| `src/mutascope/scoring/masked_lm.py` | Cache handling, masked and wild-type marginals, windows, batch cap | One engine for ESM-2 and SaProt |
+| `src/mutascope/scoring/esm2.py` | Now only ESM-2's tokenisation, mask token and amino-acid columns | Same numbers as before, less code |
+| `src/mutascope/scoring/saprot.py` | Combined tokens, `#` + 3Di masking, probability summed over 21 structure tokens | Port of `predict_mut` (SaProt commit `e91e485`) |
+| `src/mutascope/scoring/struct_tokens.py` | Structure tokens per assay from the processed tables; `#` at low pLDDT and outside the structure | Scoring never runs Foldseek |
+| `src/mutascope/eval/region.py` | `structure_regions`; a region's label says `msa:` or `pdb:` | SaProt's benchmark region is `pdb_range` |
+| `src/mutascope/eval/zero_shot.py`, `compare.py` | Structure-aware runs score only assays with a structure; comparisons on shared assays | 213 assays, stated everywhere |
+| `src/mutascope/eval/gate.py`, `schemas.py` | Gate exceptions, stale-entry check, `exception` column, aggregates with and without them | Documented upstream errors |
+| `src/mutascope/cli.py` | `--three-di-dir`, `--structure-features-dir`; `_model_assays`; gate exceptions from config | One definition of a model's assays |
+| `conf/model/saprot_650m_af2.yaml`, `conf/eval/model_gate.yaml`, `conf/eval/proteingym.yaml` | Pinned checkpoint and settings; the two exceptions with evidence; the SaProt vs ESM-2 pair | No hard-coded settings |
+| `pipeline/main.nf`, `modules/score_zero_shot.nf`, `nextflow.config` | Structure tables passed to scoring; SaProt in `models`, masked marginal only | Pipeline steps stay CLI commands |
+| `tests/scoring/test_saprot.py`, `saprot_reference.py`, `test_struct_tokens.py`, `tests/eval/*`, `tests/test_reproduction.py` | Stand-ins, the official `predict_mut` as oracle, token rules, gate exceptions, the SaProt gate and two replay tests | 29 new fast tests, 6 new slow tests |
+| `docs/adr/0015-saprot-scorer.md`, `docs/upstream/proteingym_saprot_issue.md`, `CLAUDE.md`, `README.md`, `docs/ROADMAP.md`, `docs/BUILD_LOG.md` | Decisions and evidence; draft upstream report (not posted); rules; usage; checklist; entry 15 | Decision record and docs |
+
+- **CLI commands added:** none; `score zero-shot`, `eval model-gate`, `eval zero-shot` and
+  `eval compare` now handle structure-aware models.
+- **Outputs:** `results/zero_shot_saprot_650m_af2_single{,_summary}.parquet`,
+  `results/model_gate_saprot_650m_af2.parquet`, `results/data/zero_shot_run_saprot_650m_af2.parquet`,
+  `results/zero_shot/comparisons.parquet` (180 rows: 6 pairs); the three ESM-2 gate files gained
+  the `exception` column.

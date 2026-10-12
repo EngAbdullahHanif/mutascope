@@ -2,8 +2,10 @@
 # performance_DMS_benchmarks.py at the pinned commit; see mutascope.eval.metrics.
 
 # scoring_region.yaml: which assays are scored on their MSA region in benchmark mode (ADR 0012).
+# model_gate.yaml: documented exceptions to the model gate (ADR 0015).
 defaults:
   - scoring_region
+  - model_gate
   - _self_
 
 # Top fraction, in %, for NDCG and top-10% recall (ProteinGym's default).
@@ -26,10 +28,14 @@ comparisons:
   - [esm2_35m, esm2_35m_wt]
   - [esm2_150m, esm2_150m_wt]
   - [esm2_650m, esm2_650m_wt]
+  # On the 213 assays with a structure: the four of data.structure_exceptions are left out of
+  # both sides (ADR 0003, ADR 0015).
+  - [saprot_650m_af2, esm2_650m]
 
 # Model gate (ADR 0010): our scores against ProteinGym's precomputed scores on single mutants.
 # Per-variant Spearman in every assay, and |our aggregate - theirs| on the same rows. Do not
-# change either value without a new ADR.
+# change either value without a new ADR. Exceptions (model_gate.exceptions) are in
+# model_gate.yaml.
 model_gate:
   min_assay_spearman: 0.99
   aggregate_tolerance: 0.01

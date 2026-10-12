@@ -1123,3 +1123,114 @@ is clearly above zero on Spearman. Decisions are in ADR 0014, decision 13.
 - *Not done yet:* `eval compare` is a command, not a Nextflow step; it joins the pipeline with
   the figures. One of the five seeded runs took 189 s instead of about 35 s for a reason that
   was not looked into; the others, and every run since, took 34 to 53 s.
+
+---
+
+## Entry 15 — SaProt 650M scorer, the 213-assay benchmark and two upstream errors (Phase 2, 2026-10-12)
+
+**Plain-language summary.** MutaScope now has a second kind of model. ESM-2 reads only the
+protein's sequence; SaProt also reads a one-letter description of the local 3D shape around
+every residue (Foldseek's "3Di" letters, computed in Phase 1 from the AlphaFold structures).
+The scoring was ported from the official SaProt code: to score a position, the amino acid is
+hidden while its shape letter stays visible, and the model says how likely each of the 20 amino
+acids is there. SaProt scored 665,793 variants in the 213 experiments that have a usable
+structure (4 of the 217 do not). On those 213 it is better than ESM-2 650M: overall Spearman
+0.4600 against 0.4144, a difference of +0.0456 with a 95% paired interval of +0.0283 to +0.0625.
+Our scores match the ones ProteinGym published in 211 of the 213 experiments. In the other two,
+ProteinGym's published scores turned out to be wrong: they were computed from an older version
+of its own reference file, and feeding our scorer the same wrong inputs reproduces them exactly.
+Those two are now documented exceptions to the model gate, each backed by a test, and a report
+for the ProteinGym maintainers is drafted but not sent. The decisions are in ADR 0015.
+
+**The 3 most important design choices.**
+
+1. **SaProt is scored on the residues its structure covers, in one pass, without windows.**
+   This breaks two rules written for ESM-2 (1,022-residue windows; the MSA region for five
+   assays), so it was measured before it was decided, and approved by the author. On samples of
+   11 to 40 positions per assay, the structure range in one pass gave Spearman 1.000000 against
+   ProteinGym in every case; 1,024-token windows gave 0.9827 on SCN5A and 0.9812 on POLG_CXB3N,
+   below the gate's 0.99; the MSA region gave 0.1228 on SCN5A and 0.2297 on KCNH2. CLAUDE.md
+   now states the SaProt rule on its own instead of as an exception.
+2. **A gate exception must be proven, and must not be able to go stale.** The two assays are
+   listed in `conf/eval/model_gate.yaml` with the reason. The threshold stays 0.99. For each
+   entry a slow test replays the upstream error and requires Spearman above 0.9999 with
+   ProteinGym's scores, and the gate fails if a listed assay ever reaches 0.99 with correct
+   inputs, or if the list names an assay that was not compared. An exception therefore says
+   "their scores are wrong, and here is how", never "we could not match this one".
+3. **One engine for both models, checked to change nothing.** The cache handling, the masked
+   and wild-type marginals and the windows moved to `scoring/masked_lm.py`; ESM-2 and SaProt
+   each supply tokenisation, the masking token and how amino-acid probabilities are read from
+   the logits. Recomputing cached ESM-2 650M entries with the new code gave bit-identical arrays
+   (masked and wild-type, two assays), and the three ESM-2 model gates print the same numbers
+   as in entry 13 (aggregates 0.3113, 0.3820, 0.4125).
+
+**Problems encountered and how they were solved.**
+
+1. **Two assays were nowhere near ProteinGym's scores.** *Found:* in a prototype run before the
+   full scoring: `POLG_HCVJF_Qi_2014` Spearman 0.21 and `BRCA2_HUMAN_Erwood_2022_HEK293T` 0.05 on
+   samples, while every other assay tried gave 1.000000. The full gate later gave 0.2770 (1,630
+   variants) and -0.0611 (265 variants). *Cause:* the reference file from March 2024, when
+   ProteinGym's SaProt scores were made, differs from v1.3 in exactly these two assays (and in
+   CAS9, which has no structure). POLG_HCVJF had `pdb_range` 1981-2224 instead of 1982-2225, so
+   every residue was paired with the next residue's structure letter. BRCA2 had three structure
+   files, and ProteinGym's script writes the concatenated per-file scores back in file order;
+   the file is not sorted by position, so all 265 rows hold another variant's score. *Fix:*
+   none to our scorer. The work stopped at the failed gate as instructed; the author then
+   decided on documented exceptions. *Verified:* replaying the shifted range gives Spearman
+   1.000000 (max difference 2.0e-05); replaying chunks plus misassignment gives 1.000000
+   (2.9e-05), while chunks with scores on the right rows give -0.07. Both replays are tests.
+   ProteinGym's scores for these assays have Spearman 0.0005 and 0.1732 with the experiment;
+   ours have 0.4626 and 0.4047.
+2. **The model loader started downloading weights from an unpinned place.** *Found:* the
+   Hugging Face cache showed a second snapshot directory and a second 2.6 GB download after the
+   pinned file was complete. *Cause:* the SaProt repository has only `pytorch_model.bin`;
+   `transformers` 5.19 then looks for an automatic safetensors conversion on another ref
+   (`refs/pr/5`). *Fix:* `use_safetensors=False` in the SaProt loader. *Verified:* the loaded
+   file's sha256 (`513c3908…`, 2,606,517,773 bytes) equals the LFS object id of
+   `pytorch_model.bin` at the pinned revision, and runs with `HF_HUB_OFFLINE=1` load it.
+3. **One passing assay differed 10,000 times more than the others.**
+   `F7YBW8_MESOW_Ding_2023`: Spearman 0.999695 but a largest difference of 0.099, against less
+   than 8e-05 everywhere else. *Found:* by the author, in the gate's worst-five list. *Cause:*
+   one structure letter. Trying every single-letter change for residues 1 to 74 (the search was
+   stopped at its time limit), exactly one reproduces ProteinGym's scores: residue 3 as `D`
+   instead of our `P` (largest difference 1.3e-05; the next best change gives 0.068). ProteinGym
+   does not record its Foldseek version. *Fix:* none; documented in ADR 0015 as a difference
+   between Foldseek builds at one residue.
+4. **A test of the port could not have failed.** *Found:* its second assertion failed on the
+   first run. The test compares our scorer with the official `predict_mut` on a randomly
+   initialised model, and the scores were all below 0.1 in size, so agreement to 1e-5 said
+   little. *Fix:* wider initial weights. *Verified:* the scores now exceed 1 and the two
+   implementations still agree to 1e-4 on all 480 substitutions of a 24-residue sequence.
+5. **The task named this "entry 14".** Entry 14 already exists (paired comparisons), so this
+   is entry 15.
+
+**Supporting details.**
+- *Sources:* scoring ported from `predict_mut`, westlake-repl/SaProt commit `e91e485` (MIT);
+  ProteinGym's `baselines/saprot/compute_fitness.py` at the pinned `1f8de97` has the same
+  function. Checkpoint `westlake-repl/SaProt_650M_AF2` at revision `d9b9ad0`.
+- *Scoring run:* 213 assays, 42,260 measured positions, 35,992 computed (21 assays came from
+  the cache because they share sequence and structure with an earlier one), 6,293 s on MPS.
+  Three regions are a part of the target (ZIKV 291-794, BRCA2 1-2832, POLG_HCVJF 1982-2225);
+  13 are longer than 1,022 residues. The slowest was POLG_CXB3N (2,185 residues, 851 positions,
+  685 s).
+- *Model gate:* 211 gated assays, 663,898 variants, lowest per-variant Spearman 0.999695,
+  aggregate 0.4595 for both. With the two exceptions included (213 assays): ours 0.4600,
+  ProteinGym's 0.4578.
+- *Benchmark (213 assays):* Spearman 0.4600 [0.4417, 0.4827], AUC 0.7567, MCC 0.3581 (212
+  assays each), NDCG@10% 0.7774, top-10% recall 0.2126. The published leaderboard value for
+  SaProt (650M) is 0.457, over 217 assays and all rows including multi-mutants; it is not a
+  target for a single-mutant aggregate.
+- *SaProt against ESM-2 650M (paired, 213 assays):* clear for Stability (+0.0685 [+0.0418,
+  +0.0952]), Expression (+0.0728 [+0.0333, +0.1063]) and Activity (+0.0319 [+0.0022, +0.0560]);
+  not clear for Binding (+0.0502 [-0.0103, +0.1125]) or OrganismalFitness (+0.0046 [-0.0156,
+  +0.0208]). Not corrected for multiple comparisons. `comparisons.parquet` now has 180 rows.
+- *Upstream:* ProteinGym `main` (`144fe22`, 2026-03-25) has the corrected reference rows and an
+  unchanged script, and v1.3 is still its latest score release. The draft report is
+  `docs/upstream/proteingym_saprot_issue.md`; it has not been posted.
+- *Tests:* 29 new fast tests (355 passing, 1 skipped; about 36 s) and 6 new slow tests (12
+  passing in 235 s). `make lint` clean. `make pipeline-test` passes with the new wiring.
+- *Not done yet:* a SaProt task has not run under Nextflow (the benchmark run used the CLI
+  commands; the smoke test runs `esm2_8m` only). SaProt's wild-type marginal exists in the
+  scorer but is not benchmarked and has nothing upstream to be checked against. `SaProt_35M_AF2`
+  was not scored or checked for the same two errors. Full-target SaProt landscapes for the
+  website are not built.

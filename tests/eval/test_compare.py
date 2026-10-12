@@ -162,3 +162,34 @@ def test_result_sets_must_be_two_different_models_on_the_same_rows() -> None:
     doubled = pd.concat([results_a, results_a], ignore_index=True)
     with pytest.raises(ValueError, match="average folds"):
         paired_bootstrap_diff(doubled, results_b, reference, BOOTSTRAP, rng)
+
+
+def test_assays_one_model_may_lack_are_left_out_of_both() -> None:
+    """A structure-aware model has no results for two documented assays: the comparison runs
+    on the 58 shared ones. An assay missing for any other reason is still an error."""
+    reference = _reference()
+    a, b = _correlated(np.random.default_rng(6), gain=0.02)
+    full = _results("b", reference, b)
+    partial = _results("a", reference, a)
+    partial = partial[~partial["assay_id"].isin(["A00", "A07"])]
+    table = paired_bootstrap_diff(
+        partial, full, reference, BOOTSTRAP, np.random.default_rng(0), may_be_absent=["A00", "A07"]
+    )
+    overall = table[(table["metric"] == "spearman") & (table["level"] == "overall")]
+    assert overall["n_assays"].item() == 58
+    shared = reference[~reference["DMS_id"].isin(["A00", "A07"])]
+    keep = shared.index.to_numpy()
+    expected = (
+        aggregate(a[keep], _groups(shared)).overall - aggregate(b[keep], _groups(shared)).overall
+    )
+    assert overall["diff"].item() == pytest.approx(expected)
+    with pytest.raises(ValueError, match="do not cover the same"):
+        paired_bootstrap_diff(
+            partial, full, reference, BOOTSTRAP, np.random.default_rng(0), may_be_absent=["A00"]
+        )
+    # Listed but present on both sides: nothing is dropped.
+    both = paired_bootstrap_diff(
+        _results("a", reference, a), full, reference, BOOTSTRAP, np.random.default_rng(0),
+        may_be_absent=["A00", "A07"],
+    )  # fmt: skip
+    assert both[both["level"] == "overall"]["n_assays"].eq(60).all()
