@@ -14,7 +14,7 @@ release:
   git_commit: 1f8de974dead8ff7501eff087b725d14a965e9f9
 
 base_url: https://marks.hms.harvard.edu/proteingym/ProteinGym_v1.3
-benchmarks_url: https://raw.githubusercontent.com/OATML-Markslab/ProteinGym/${data.release.git_commit}/benchmarks/DMS_zero_shot/substitutions/Spearman
+benchmarks_url: https://raw.githubusercontent.com/OATML-Markslab/ProteinGym/${data.release.git_commit}/benchmarks/DMS_zero_shot/substitutions
 data_dir: ${oc.env:MUTASCOPE_DATA_DIR,data}
 raw_dir: ${data.data_dir}/raw/proteingym_${data.release.version}
 manifest_path: ${data.data_dir}/manifest.yaml
@@ -80,19 +80,68 @@ files:
         ESM1v_ensemble: DOUBLE
         ESMC-300M: DOUBLE
       delete_archive: true
-  # Published leaderboard, pinned via the commit in `benchmarks_url`. No upstream md5 exists; the
-  # commit pin makes the content immutable and the manifest records its sha256 on first fetch.
-  # The reproduction gate compares against ESM2 (650M) Average_Spearman = 0.414.
+  # Published leaderboard, one summary and one per-assay (DMS-level) file per metric, pinned via
+  # the commit in `benchmarks_url`. No upstream md5 exists; the commit pin makes the content
+  # immutable and the manifest records its sha256 on first fetch. The harness gate (ADR 0010,
+  # 0011) compares against all five metrics; its headline is ESM2 (650M) Average_Spearman = 0.414.
   zero_shot_summary_spearman:
     filename: Summary_performance_DMS_substitutions_Spearman.csv
-    url: ${data.benchmarks_url}/Summary_performance_DMS_substitutions_Spearman.csv
+    url: ${data.benchmarks_url}/Spearman/Summary_performance_DMS_substitutions_Spearman.csv
     size_bytes: 43544
     md5: null
     archive: false
   zero_shot_dms_level_spearman:
     filename: DMS_substitutions_Spearman_DMS_level.csv
-    url: ${data.benchmarks_url}/DMS_substitutions_Spearman_DMS_level.csv
+    url: ${data.benchmarks_url}/Spearman/DMS_substitutions_Spearman_DMS_level.csv
     size_bytes: 138728
+    md5: null
+    archive: false
+  zero_shot_summary_auc:
+    filename: Summary_performance_DMS_substitutions_AUC.csv
+    url: ${data.benchmarks_url}/AUC/Summary_performance_DMS_substitutions_AUC.csv
+    size_bytes: 43560
+    md5: null
+    archive: false
+  zero_shot_dms_level_auc:
+    filename: DMS_substitutions_AUC_DMS_level.csv
+    url: ${data.benchmarks_url}/AUC/DMS_substitutions_AUC_DMS_level.csv
+    size_bytes: 138242
+    md5: null
+    archive: false
+  zero_shot_summary_mcc:
+    filename: Summary_performance_DMS_substitutions_MCC.csv
+    url: ${data.benchmarks_url}/MCC/Summary_performance_DMS_substitutions_MCC.csv
+    size_bytes: 43561
+    md5: null
+    archive: false
+  zero_shot_dms_level_mcc:
+    filename: DMS_substitutions_MCC_DMS_level.csv
+    url: ${data.benchmarks_url}/MCC/DMS_substitutions_MCC_DMS_level.csv
+    size_bytes: 138618
+    md5: null
+    archive: false
+  zero_shot_summary_ndcg:
+    filename: Summary_performance_DMS_substitutions_NDCG.csv
+    url: ${data.benchmarks_url}/NDCG/Summary_performance_DMS_substitutions_NDCG.csv
+    size_bytes: 43549
+    md5: null
+    archive: false
+  zero_shot_dms_level_ndcg:
+    filename: DMS_substitutions_NDCG_DMS_level.csv
+    url: ${data.benchmarks_url}/NDCG/DMS_substitutions_NDCG_DMS_level.csv
+    size_bytes: 138176
+    md5: null
+    archive: false
+  zero_shot_summary_top_recall:
+    filename: Summary_performance_DMS_substitutions_Top_recall.csv
+    url: ${data.benchmarks_url}/Top_recall/Summary_performance_DMS_substitutions_Top_recall.csv
+    size_bytes: 43541
+    md5: null
+    archive: false
+  zero_shot_dms_level_top_recall:
+    filename: DMS_substitutions_Top_recall_DMS_level.csv
+    url: ${data.benchmarks_url}/Top_recall/DMS_substitutions_Top_recall_DMS_level.csv
+    size_bytes: 137549
     md5: null
     archive: false
 

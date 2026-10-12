@@ -13,8 +13,10 @@ CONF = Path(__file__).parents[2] / "conf"
 def _overrides(release_dir: Path) -> list[str]:
     return [
         "eval.bootstrap.n_resamples=200",
-        f"eval.published.summary={release_dir / 'summary.csv'}",
-        f"eval.published.assay_level={release_dir / 'assay_level.csv'}",
+        # The toy release publishes Spearman only; a dict override would merge, so delete the rest.
+        f"eval.published.spearman.summary={release_dir / 'summary.csv'}",
+        f"eval.published.spearman.assay_level={release_dir / 'assay_level.csv'}",
+        *(f"~eval.published.{m}" for m in ("auc", "mcc", "ndcg", "top_recall")),
     ]
 
 
@@ -35,6 +37,8 @@ def test_precomputed_then_compare(release_dir: Path, tmp_path: Path) -> None:
     compare += ["--results", str(out / "proteingym_precomputed_all.parquet")]
     result = CliRunner().invoke(app, [*compare, *_overrides(release_dir)])
     assert result.exit_code == 0, result.output
+    assert result.output.startswith("spearman:\n")
+    assert "auc:" not in result.output
     assert "published 0.400" in result.output  # ESM2 overall from the toy summary
     assert "ESM2_650M: 3 assays, max |ours - published| per assay" in result.output
 

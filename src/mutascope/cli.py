@@ -501,30 +501,33 @@ def eval_compare_leaderboard(
     config_dir: ConfigDir = Path("conf"),
     overrides: Overrides = None,
 ) -> None:
-    """Print our Spearman aggregates and per-assay values next to the published leaderboard.
+    """Print our aggregates and per-assay values next to the published leaderboard.
 
-    Reads ``<results>`` and the matching ``_summary.parquet``. This is a report; the pass/fail
-    gate is ``tests/test_reproduction.py``.
+    One block per metric in ``eval.published``. Reads ``<results>`` and the matching
+    ``_summary.parquet``. This is a report; the pass/fail gate is ``tests/test_reproduction.py``.
     """
     cfg = load_config(config_dir, overrides).eval
     names = {str(k): str(v) for k, v in cfg.precomputed_models.items()}
     summary = read_results(results.with_name(results.stem + "_summary.parquet"))
-    ours = summary[(summary["metric"] == "spearman") & summary["split"].isna()]
-    table = compare_with_published(ours, published_summary(Path(cfg.published.summary), names))
-    for record in table.itertuples(index=False):
-        group = "" if pd.isna(record.group) else record.group
-        typer.echo(
-            f"  {record.model:<16} {record.level:<8} {group:<18} ours {record.ours:.4f}  "
-            f"published {record.published:.3f}  delta {record.delta:+.4f}"
-        )
-    per_assay = read_results(results)
-    per_assay = per_assay[per_assay["metric"] == "spearman"].assign(
+    per_assay = read_results(results).assign(
         model=lambda f: f["model"].str.removeprefix(PRECOMPUTED_PREFIX)
     )
-    published = published_assay_level(Path(cfg.published.assay_level), names)
-    joined = published.merge(per_assay, on=["model", "assay_id"], suffixes=("_pub", ""))
-    for model, rows in joined.groupby("model"):
-        gap = (rows["value"] - rows["value_pub"]).abs()
-        typer.echo(
-            f"  {model}: {len(rows)} assays, max |ours - published| per assay {gap.max():.5f}"
-        )
+    for metric in [str(m) for m in cfg.published]:
+        files = cfg.published[metric]
+        typer.echo(f"{metric}:")
+        ours = summary[(summary["metric"] == metric) & summary["split"].isna()]
+        table = compare_with_published(ours, published_summary(Path(files.summary), names))
+        for record in table.itertuples(index=False):
+            group = "" if pd.isna(record.group) else record.group
+            typer.echo(
+                f"  {record.model:<16} {record.level:<8} {group:<18} ours {record.ours:.4f}  "
+                f"published {record.published:.3f}  delta {record.delta:+.4f}"
+            )
+        published = published_assay_level(Path(files.assay_level), names)
+        mine = per_assay[per_assay["metric"] == metric]
+        joined = published.merge(mine, on=["model", "assay_id"], suffixes=("_pub", ""))
+        for model, rows in joined.groupby("model"):
+            gap = (rows["value"] - rows["value_pub"]).abs()
+            typer.echo(
+                f"  {model}: {len(rows)} assays, max |ours - published| per assay {gap.max():.5f}"
+            )

@@ -18,7 +18,21 @@ precomputed_models:
   ESM2_650M: ESM2 (650M)
   SaProt_650M_AF2: SaProt (650M)
 
-# Published leaderboard files (downloaded and checksummed with the release).
+# Published leaderboard files per metric (downloaded and checksummed with the release; see
+# `data.files.zero_shot_*`). Keys are mutascope.eval.metrics.METRICS.
 published:
-  summary: ${data.raw_dir}/Summary_performance_DMS_substitutions_Spearman.csv
-  assay_level: ${data.raw_dir}/DMS_substitutions_Spearman_DMS_level.csv
+  spearman:
+    summary: ${data.raw_dir}/${data.files.zero_shot_summary_spearman.filename}
+    assay_level: ${data.raw_dir}/${data.files.zero_shot_dms_level_spearman.filename}
+  auc:
+    summary: ${data.raw_dir}/${data.files.zero_shot_summary_auc.filename}
+    assay_level: ${data.raw_dir}/${data.files.zero_shot_dms_level_auc.filename}
+  mcc:
+    summary: ${data.raw_dir}/${data.files.zero_shot_summary_mcc.filename}
+    assay_level: ${data.raw_dir}/${data.files.zero_shot_dms_level_mcc.filename}
+  ndcg:
+    summary: ${data.raw_dir}/${data.files.zero_shot_summary_ndcg.filename}
+    assay_level: ${data.raw_dir}/${data.files.zero_shot_dms_level_ndcg.filename}
+  top_recall:
+    summary: ${data.raw_dir}/${data.files.zero_shot_summary_top_recall.filename}
+    assay_level: ${data.raw_dir}/${data.files.zero_shot_dms_level_top_recall.filename}
