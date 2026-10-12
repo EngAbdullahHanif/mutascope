@@ -17,6 +17,8 @@ dependencies = [
     "scikit-learn>=1.9.1",
     "scipy>=1.17.1",
     "structlog>=24.1",
+    "torch>=2.14.1",
+    "transformers>=5.19.0",
     "typer>=0.12",
 ]
 
@@ -95,3 +97,15 @@ addopts = "-q --strict-markers --import-mode=importlib -m 'not slow'"
 markers = [
     "slow: needs real large models / MPS; excluded from `make test`",
 ]
+
+# --- uv: CPU-only torch on Linux ------------------------------------------------------------------
+# PyPI's Linux torch wheel bundles CUDA (several GB); CI and the Docker image are CPU-only
+# (CLAUDE.md "Docker"). macOS wheels come from PyPI and include MPS.
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]

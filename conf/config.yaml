@@ -4,4 +4,6 @@ defaults:
   - structure: default
   - publish: hub
   - eval: proteingym
+  - model: esm2_650m
+  - scoring: default
   - _self_
