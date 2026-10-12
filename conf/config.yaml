@@ -3,4 +3,5 @@ defaults:
   - data: proteingym
   - structure: default
   - publish: hub
+  - eval: proteingym
   - _self_

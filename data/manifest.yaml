@@ -9,21 +9,61 @@ proteingym_v1.3:
     size_bytes: 208734
     md5: c434631737013fceb56efc98056151e0
     sha256: a8f498011532a74aa9fe556a50555a75e928c5837d19c06a87592ae04049b308
+  DMS_substitutions_AUC_DMS_level.csv:
+    url: https://raw.githubusercontent.com/OATML-Markslab/ProteinGym/1f8de974dead8ff7501eff087b725d14a965e9f9/benchmarks/DMS_zero_shot/substitutions/AUC/DMS_substitutions_AUC_DMS_level.csv
+    size_bytes: 138242
+    md5: 4d423ed79bbd4146b1d75902f23dac74
+    sha256: 525ca2d7bd6d9f8847731b3063bcd89fcf8bb8cc2cc9013e6b6527fb64e3c5f4
+  DMS_substitutions_MCC_DMS_level.csv:
+    url: https://raw.githubusercontent.com/OATML-Markslab/ProteinGym/1f8de974dead8ff7501eff087b725d14a965e9f9/benchmarks/DMS_zero_shot/substitutions/MCC/DMS_substitutions_MCC_DMS_level.csv
+    size_bytes: 138618
+    md5: 4408fb758584877a9ee57f09bac59b1d
+    sha256: a39045c7bccf9ae89672557b65b70bc964e8fee19f59a3b5c92ca75b81180188
+  DMS_substitutions_NDCG_DMS_level.csv:
+    url: https://raw.githubusercontent.com/OATML-Markslab/ProteinGym/1f8de974dead8ff7501eff087b725d14a965e9f9/benchmarks/DMS_zero_shot/substitutions/NDCG/DMS_substitutions_NDCG_DMS_level.csv
+    size_bytes: 138176
+    md5: a50bc374d71339c43071c746b2e984f1
+    sha256: a131664373131d9e69ed00883d6840dbfaf41b82e24b2a145f8a8a8a2ef3c4a9
   DMS_substitutions_Spearman_DMS_level.csv:
     url: https://raw.githubusercontent.com/OATML-Markslab/ProteinGym/1f8de974dead8ff7501eff087b725d14a965e9f9/benchmarks/DMS_zero_shot/substitutions/Spearman/DMS_substitutions_Spearman_DMS_level.csv
     size_bytes: 138728
     md5: afcc653b97e6bddc3e84bf44d7cd680f
     sha256: 6da06559ae0b160327d22cb69ba41d9d535a6e5c7a3afff596783814850d8dde
+  DMS_substitutions_Top_recall_DMS_level.csv:
+    url: https://raw.githubusercontent.com/OATML-Markslab/ProteinGym/1f8de974dead8ff7501eff087b725d14a965e9f9/benchmarks/DMS_zero_shot/substitutions/Top_recall/DMS_substitutions_Top_recall_DMS_level.csv
+    size_bytes: 137549
+    md5: 9735ea906dea01cc669e05c43a654c41
+    sha256: 558c01b4dd31bc379b431aeee803735844c995cbd48bde2b88d75e7b660818f1
   ProteinGym_AF2_structures.zip:
     url: https://marks.hms.harvard.edu/proteingym/ProteinGym_v1.3/ProteinGym_AF2_structures.zip
     size_bytes: 19173248
     md5: 442881616899de02cd1c1b0a57badd37
     sha256: ed8611bf12cfb840ea1c2561be36254901008610a49b1be475e917b6c5d6d56a
+  Summary_performance_DMS_substitutions_AUC.csv:
+    url: https://raw.githubusercontent.com/OATML-Markslab/ProteinGym/1f8de974dead8ff7501eff087b725d14a965e9f9/benchmarks/DMS_zero_shot/substitutions/AUC/Summary_performance_DMS_substitutions_AUC.csv
+    size_bytes: 43560
+    md5: 7d13f51af923ea42dbe641f7a004fcb2
+    sha256: a2adfa7beb9aa279e2173cd29268e3af68088c6437abefb4e2ce9af51c640cdc
+  Summary_performance_DMS_substitutions_MCC.csv:
+    url: https://raw.githubusercontent.com/OATML-Markslab/ProteinGym/1f8de974dead8ff7501eff087b725d14a965e9f9/benchmarks/DMS_zero_shot/substitutions/MCC/Summary_performance_DMS_substitutions_MCC.csv
+    size_bytes: 43561
+    md5: 57ab7b36856b6b36a77eb338c1b091e5
+    sha256: 56281fa85accaa036537cb5f11952e187d0e06688dacabd9e77e931af26f2e81
+  Summary_performance_DMS_substitutions_NDCG.csv:
+    url: https://raw.githubusercontent.com/OATML-Markslab/ProteinGym/1f8de974dead8ff7501eff087b725d14a965e9f9/benchmarks/DMS_zero_shot/substitutions/NDCG/Summary_performance_DMS_substitutions_NDCG.csv
+    size_bytes: 43549
+    md5: ae999b78e9834fa413d40a663b098702
+    sha256: c131e95fd67f3d040d065b16e57386e7390102ef904f5b80113d26253e4f5fd6
   Summary_performance_DMS_substitutions_Spearman.csv:
     url: https://raw.githubusercontent.com/OATML-Markslab/ProteinGym/1f8de974dead8ff7501eff087b725d14a965e9f9/benchmarks/DMS_zero_shot/substitutions/Spearman/Summary_performance_DMS_substitutions_Spearman.csv
     size_bytes: 43544
     md5: 3274d3b8128b4b6b16c5bf9cb60fea03
     sha256: 89c0cdd4f20ad165d4ffec31ada9cf5bbe8a31528bf784e21e33ea6f9dbc263f
+  Summary_performance_DMS_substitutions_Top_recall.csv:
+    url: https://raw.githubusercontent.com/OATML-Markslab/ProteinGym/1f8de974dead8ff7501eff087b725d14a965e9f9/benchmarks/DMS_zero_shot/substitutions/Top_recall/Summary_performance_DMS_substitutions_Top_recall.csv
+    size_bytes: 43541
+    md5: 612cbd9725668e8ff8a6ddd8919900ad
+    sha256: 679b582cc21ac379f2bd3aba2f5acd1c7f092b1a560a249edf7014ff9faa2e30
   cv_folds_singles_substitutions.zip:
     url: https://marks.hms.harvard.edu/proteingym/ProteinGym_v1.3/cv_folds_singles_substitutions.zip
     size_bytes: 13412036

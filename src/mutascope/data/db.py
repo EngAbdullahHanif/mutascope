@@ -44,10 +44,10 @@ def connect(
     if three_di_dir is not None:
         _partitioned_view(con, "three_di", three_di_dir)
     if report_parquet is not None:
-        report = _literal(str(report_parquet.resolve()))
+        report = literal(str(report_parquet.resolve()))
         con.execute(f"CREATE VIEW cleaning_report AS SELECT * FROM read_parquet({report})")
     if reference_csv is not None:
-        ref = _literal(str(reference_csv.resolve()))
+        ref = literal(str(reference_csv.resolve()))
         con.execute(
             "CREATE VIEW assays AS SELECT * RENAME (DMS_id AS assay_id) "
             f"FROM read_csv({ref}, header = true)"
@@ -57,13 +57,13 @@ def connect(
 
 def _partitioned_view(con: duckdb.DuckDBPyConnection, name: str, directory: Path) -> None:
     """``assay_id=<id>/*.parquet`` partitions as one view, ``assay_id`` read from the path."""
-    pattern = _literal(str(directory.resolve() / "*" / "*.parquet"))
+    pattern = literal(str(directory.resolve() / "*" / "*.parquet"))
     con.execute(
         f"CREATE VIEW {name} AS SELECT * FROM read_parquet({pattern}, "
         "hive_partitioning = true, hive_types = {'assay_id': 'VARCHAR'})"
     )
 
 
-def _literal(text: str) -> str:
+def literal(text: str) -> str:
     """Quote a string as a SQL literal (paths may contain spaces or quotes)."""
     return "'" + text.replace("'", "''") + "'"

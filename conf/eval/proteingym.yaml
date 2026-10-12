@@ -1,0 +1,38 @@
+# Benchmark harness (ADR 0011). Metric definitions follow ProteinGym's
+# performance_DMS_benchmarks.py at the pinned commit; see mutascope.eval.metrics.
+
+# Top fraction, in %, for NDCG and top-10% recall (ProteinGym's default).
+top_percent: 10
+
+# Percentile bootstrap over assays, stratified by function type (mutascope.eval.aggregate).
+bootstrap:
+  n_resamples: 10000
+  confidence: 0.95
+  seed: 0
+
+results_dir: results
+
+# ProteinGym's precomputed baselines that the harness gate checks: score column in the
+# zero-shot score files -> Model_name on the leaderboard (also the DMS-level column header).
+precomputed_models:
+  ESM2_650M: ESM2 (650M)
+  SaProt_650M_AF2: SaProt (650M)
+
+# Published leaderboard files per metric (downloaded and checksummed with the release; see
+# `data.files.zero_shot_*`). Keys are mutascope.eval.metrics.METRICS.
+published:
+  spearman:
+    summary: ${data.raw_dir}/${data.files.zero_shot_summary_spearman.filename}
+    assay_level: ${data.raw_dir}/${data.files.zero_shot_dms_level_spearman.filename}
+  auc:
+    summary: ${data.raw_dir}/${data.files.zero_shot_summary_auc.filename}
+    assay_level: ${data.raw_dir}/${data.files.zero_shot_dms_level_auc.filename}
+  mcc:
+    summary: ${data.raw_dir}/${data.files.zero_shot_summary_mcc.filename}
+    assay_level: ${data.raw_dir}/${data.files.zero_shot_dms_level_mcc.filename}
+  ndcg:
+    summary: ${data.raw_dir}/${data.files.zero_shot_summary_ndcg.filename}
+    assay_level: ${data.raw_dir}/${data.files.zero_shot_dms_level_ndcg.filename}
+  top_recall:
+    summary: ${data.raw_dir}/${data.files.zero_shot_summary_top_recall.filename}
+    assay_level: ${data.raw_dir}/${data.files.zero_shot_dms_level_top_recall.filename}

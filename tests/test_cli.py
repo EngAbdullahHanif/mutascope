@@ -7,13 +7,17 @@ import pytest
 from hydra.errors import ConfigCompositionException
 from typer.testing import CliRunner
 
-from mutascope.cli import app, data_app
+from mutascope.cli import app, data_app, eval_app
 
 CONF = Path(__file__).parents[1] / "conf"
 
 
-@pytest.mark.parametrize("command", data_app.registered_commands, ids=lambda c: c.name or "")
-def test_every_data_command_takes_hydra_overrides(command: object) -> None:
+@pytest.mark.parametrize(
+    "command",
+    [*data_app.registered_commands, *eval_app.registered_commands],
+    ids=lambda c: c.name or "",
+)
+def test_every_pipeline_command_takes_hydra_overrides(command: object) -> None:
     """The pipeline appends ``params.hydra_overrides`` to every call; Typer rejects extra
     arguments, so a command without these parameters would break the ``test`` profile."""
     callback = getattr(command, "callback", None)
