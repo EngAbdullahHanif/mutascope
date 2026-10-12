@@ -851,3 +851,79 @@ in `08a3f61`, scoring region in the `feat(eval)` commit that follows; decisions 
   full-target benchmark landscape and the website landscape are the same cache entry.
 - *Not done yet:* scoring all 217 assays and the model gate, the CLI command and Nextflow step for
   scoring, SaProt, and the ensemble.
+
+---
+
+## Entry 12 — Scoring all 217 assays with ESM-2 650M and the model gate (Phase 2, 2026-10-12)
+
+**Plain-language summary.** The 650M ESM-2 model has now scored every single mutant in the
+benchmark: 696,311 variants across 217 experiments. To save time it was asked only about the
+positions each experiment actually measured, which is 37,753 of the 62,671 positions in the
+proteins involved, and the stored table for each protein keeps its full size with the unmeasured
+rows left empty, to be filled in later for the website. The work took 1 hour 41 minutes of model
+time on the Mac's GPU. It is started by one new command, `mutascope score zero-shot`, which the
+Nextflow pipeline calls as a new step. Because a laptop can sleep or crash, each protein's
+result is saved the moment it is finished, and starting the command again skips everything
+already saved. This was tested by killing the real run twice. Finally, our scores were compared
+with the scores ProteinGym published for the same model: in every one of the 217 experiments
+the two rank the variants identically (lowest Spearman 0.99999996), and the overall benchmark
+number is the same, 0.4125. This is the "model gate", and it passes. Decisions are in ADR 0013.
+
+**The 3 most important design choices.**
+
+1. **A cache entry is always the full `(L, 20)` table, and empty rows are filled in later.**
+   The cache key did not change. A row is NaN until its position is scored, and a later request
+   runs the model only for the rows that are missing. Two experiments on the same protein
+   share one entry (the 217 assays need only 187), and the website's full landscapes will reuse
+   the benchmark rows instead of recomputing them. NaN, never 0, marks "not scored", and a
+   variant whose score would be NaN fails the run.
+2. **The cache is the only checkpoint.** Each protein is written to disk by an atomic rename
+   as soon as it is done, in a directory outside both the output folder and Nextflow's work
+   folder. The score files are rebuilt from the cache on every run, which takes seconds, so
+   there is one resume mechanism rather than two that could disagree. A crash loses at most the
+   protein in progress: 455 s in the worst case on this run.
+3. **The gate is one function shared by the command and the test, and it refuses to guess.**
+   It requires the two score tables to contain exactly the same 696,311 variants, counts an
+   undefined agreement as a failure, and checks every assay separately, because one broken
+   assay barely moves an aggregate (a unit test shifts one assay's scores by a row and the gate
+   fails on that assay alone).
+
+**Problems encountered and how they were solved.**
+
+1. **A git commit swapped source files under the running pipeline.** *Found:* a commit made
+   seconds after the full run started failed in the pyright hook with "`AgreementSchema` is
+   unknown import symbol". *Cause:* pre-commit stashes unstaged changes while its hooks run, so
+   for a few seconds `eval/schemas.py` on disk was the old version, and the package is an
+   editable install that the pipeline imports from the same directory. *Fix:* none needed for
+   the run. The scoring process had started at 13:53:29 UTC and had already imported its
+   modules; it went on to finish all 217 assays. No commit was made until the run ended.
+   *Verified:* the run exited 0 with 696,311 scores, and the gate passed. ADR 0013 records the
+   rule: do not commit during a run.
+2. **The scoring command failed on a subset of assays.** *Found:* the new CLI test on a
+   two-assay toy reference exited 1 with "in eval.scoring_region but MSA covers the full
+   target", listing the five configured MSA-region assays. *Cause:* the region check requires
+   the configured list to equal the set derived from the reference, and a subset contains none
+   of the five. The Nextflow test profile would have failed the same way. *Fix:*
+   `eval.scoring_region.msa_region_assays=null` is accepted and the test profile sets it, the
+   same pattern as `data.structure_exceptions=null`. *Verified:* `make pipeline-test` completes
+   all 8 processes and writes scores for both assays with the 8M model.
+
+**Supporting details.**
+- *Run:* `caffeinate -ims make pipeline`, 13:52:44–15:29:00 UTC, 1 h 36 min for the whole
+  pipeline. The scoring step took 5,725 s, scored 35,775 positions in 189 assays and read 28
+  assays from the cache. Including the 359 s the two deliberately killed runs had finished, the
+  model time is 6,081 s for 37,753 positions. The 11 assays scored on more than 1,022 residues
+  took 774 s. The cache is 5.2 MB.
+- *Resume test on the real run:* killed with `SIGKILL` after 298 s, partway into assay 5. The
+  rerun computed 0 positions for assays 1–4 in 0.0 s each, scored assay 5 in full (564
+  positions, 93.5 s) and read assay 6 (same protein) from the cache.
+- *Agreement:* lowest per-variant Spearman 0.99999996; largest absolute score difference
+  2.35e-04 (`RDRP_I33A0_Li_2023`); 22 assays have a difference above 1e-04. Aggregate Spearman
+  against `DMS_score` 0.4125 for both; the largest per-assay difference is 9.9e-06.
+- *Our results* (ProteinGym v1.3, single mutants, zero-shot, 95% bootstrap CI): Spearman 0.4125
+  [0.389, 0.441], AUC 0.733, MCC 0.325, NDCG@10% 0.759, top-10% recall 0.195. AUC and MCC are
+  defined on 216 assays.
+- *Tests:* 24 new (308 passing, 1 skipped without Foldseek on `PATH`; `make test` about 25 s).
+  The slow model-gate test takes about 10 s with the cache warm.
+- *Not done yet:* ESM-2 35M and 150M runs, the remaining 24,918 positions for website
+  landscapes, SaProt, the ensemble, figures and experiment tracking.

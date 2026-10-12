@@ -6,6 +6,7 @@ assays use their MSA region in benchmark mode, every other assay the full target
 landscapes the full target everywhere.
 """
 
+from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
@@ -63,15 +64,20 @@ def test_malformed_region_is_refused() -> None:
 
 
 class _RecordingScorer:
-    """Landscape value = target position of the row, so lookups reveal the coordinates used."""
+    """Landscape value = target position of the row, so lookups reveal the coordinates used.
+    Rows that were not requested are NaN, as a real scorer leaves them."""
 
     def __init__(self, offset: int) -> None:
         self.offset = offset
-        self.calls: list[tuple[str, str]] = []
+        self.calls: list[tuple[str, str, list[int] | None]] = []
 
     @property
     def model_id(self) -> str:
         return "recording"
+
+    @property
+    def positions_computed(self) -> int:
+        return sum(len(positions or ()) for _, _, positions in self.calls)
 
     def landscape(
         self,
@@ -80,20 +86,40 @@ class _RecordingScorer:
         *,
         fast: bool = False,
         region: str = "full",
+        positions: Sequence[int] | None = None,
     ) -> FloatArray:
-        self.calls.append((seq, region))
+        self.calls.append((seq, region, None if positions is None else list(positions)))
         rows = np.arange(len(seq), dtype=np.float32)[:, None] + self.offset
-        return np.repeat(rows, len(AA_ORDER), axis=1)
+        landscape = np.repeat(rows, len(AA_ORDER), axis=1)
+        if positions is not None:
+            landscape[np.setdiff1d(np.arange(len(seq)), positions)] = np.nan
+        return landscape
 
 
 def test_score_assay_scores_the_region_and_maps_positions() -> None:
+    """Only the measured positions are requested, in region coordinates (V3 -> 0, L6 -> 3)."""
     region = derive_msa_regions(TOY)["crop"]
     scorer = _RecordingScorer(offset=region.start)
-    scores = score_assay(scorer, "MKVARLLE", region, ["V3A", "L6A"])
-    assert scorer.calls == [("VARL", "msa:3-6")]
-    assert scores.tolist() == [2.0, 5.0]  # target positions 2 and 5 (0-based)
+    scores = score_assay(scorer, "MKVARLLE", region, ["V3A", "L6A", "V3C"])
+    assert scorer.calls == [("VARL", "msa:3-6", [0, 3])]
+    assert scores.tolist() == [2.0, 5.0, 2.0]  # target positions 2 and 5 (0-based)
+
+
+def test_score_assay_rejects_a_mutant_outside_the_region_before_scoring() -> None:
+    region = derive_msa_regions(TOY)["crop"]
+    scorer = _RecordingScorer(offset=region.start)
     with pytest.raises(ValueError, match="no residue there"):
-        score_assay(scorer, "MKVARLLE", region, ["K2A"])  # outside the region: fail, not drop
+        score_assay(scorer, "MKVARLLE", region, ["V3A", "K2A"])  # fail, not drop
+    assert scorer.calls == []  # no model time spent on an assay that cannot be scored
+
+
+def test_score_assay_fails_if_the_scorer_leaves_a_requested_position_unscored() -> None:
+    class Lazy(_RecordingScorer):
+        def landscape(self, seq: str, *args: object, **kwargs: object) -> FloatArray:
+            return np.full((len(seq), len(AA_ORDER)), np.nan, dtype=np.float32)
+
+    with pytest.raises(RuntimeError, match="left requested positions unscored"):
+        score_assay(Lazy(0), "MKVAR", ScoringRegion("full", 0, 5, 5), ["K2A"])
 
 
 # --- the pinned ProteinGym reference ------------------------------------------------------------

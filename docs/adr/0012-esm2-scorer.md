@@ -68,7 +68,8 @@ that decide the numbers:
    assay ids are kept in config, and any difference between the two fails loudly, in either
    direction (the `structure_exceptions` pattern). A variant outside the scored region raises
    instead of being dropped; on the pinned release every variant of the five lies inside it.
-9. **Score every position.** Website landscapes need masked marginals at every residue, not
+9. **Score every position.** *Superseded for benchmark runs by ADR 0013 (2026-10-12): the
+   benchmark scores only measured positions; the cache entry keeps its `(L, 20)` shape.* Website landscapes need masked marginals at every residue, not
    only at measured variants, so the scoring step computes the full `(L, 20)` landscape for
    every scored sequence. Benchmark metrics then read only the measured variants from it.
 

@@ -1,5 +1,7 @@
 # Settings shared by every zero-shot scorer (mutascope.scoring).
 # auto = MPS when available, else CPU (mutascope.utils.device). Never CUDA.
 device: auto
-# Log-probability cache, keyed by model, revision, sequence, structure tokens and method.
+# Log-probability cache, keyed by model, revision, sequence, structure tokens, method and region.
+# It is also the checkpoint of a scoring run (ADR 0013): keep it outside any output or Nextflow
+# work directory, so a rerun after a crash finds what was already scored.
 cache_dir: ${data.data_dir}/cache/logprobs

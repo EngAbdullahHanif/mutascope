@@ -5,6 +5,7 @@
  *   DOWNLOAD -> [SUBSET] -> VALIDATE -> CLEAN ----------\
  *                                    -> STRUCT_FEATURES --> STRUCTURE_REPORT
  *                                    -> FOLDSEEK_3DI ----/
+ *                                       CLEAN -> SCORE_ZERO_SHOT
  *
  * SUBSET runs only when params.assays names assays (the test profile). Every command gets
  * params.hydra_overrides appended, so one override reaches every step.
@@ -17,10 +18,12 @@ include { CLEAN            } from './modules/clean'
 include { STRUCT_FEATURES  } from './modules/struct_features'
 include { FOLDSEEK_3DI     } from './modules/foldseek_3di'
 include { STRUCTURE_REPORT } from './modules/structure_report'
+include { SCORE_ZERO_SHOT  } from './modules/score_zero_shot'
 
 workflow {
     log.info "MutaScope pipeline | profile: ${workflow.profile}"
     log.info "data cache: ${params.data_dir} | processed: ${params.processed_dir} | reports: ${params.reports_dir}"
+    log.info "zero-shot model: ${params.model}"
     log.info "Hydra overrides: ${params.hydra_overrides ?: '(none)'}"
 
     DOWNLOAD()
@@ -44,4 +47,5 @@ workflow {
         STRUCT_FEATURES.out.features,
         FOLDSEEK_3DI.out.three_di,
     )
+    SCORE_ZERO_SHOT(inputs.reference, CLEAN.out.variants)
 }
