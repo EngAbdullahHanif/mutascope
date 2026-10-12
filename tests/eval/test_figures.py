@@ -121,6 +121,8 @@ def test_cli_writes_every_figure_in_every_format_and_redraws_identically(
         assert (tmp_path / "one" / name).read_bytes() == (tmp_path / "two" / name).read_bytes()
     svg = (tmp_path / "one" / "ensemble_gain.svg").read_text()
     assert "<svg" in svg and "<dc:date>" not in svg
+    # What the pre-commit hooks would change, they must find already done.
+    assert svg.endswith(">\n") and not any(line != line.rstrip() for line in svg.splitlines())
     assert (tmp_path / "one" / "ensemble_gain.png").read_bytes().startswith(b"\x89PNG")
 
 

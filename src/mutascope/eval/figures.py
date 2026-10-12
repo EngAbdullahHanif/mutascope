@@ -21,6 +21,7 @@ matplotlib is the optional ``figures`` extra and is imported only by this module
 # matplotlib types the styling arguments of every drawing call as untyped **kwargs.
 # pyright: reportUnknownMemberType=false
 
+import io
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -373,7 +374,10 @@ def save_figure(
     """Write ``<out_dir>/<name>.<format>`` for every format and return the paths.
 
     The files carry no creation date or software version, so redrawing unchanged results gives
-    identical files and a diff of ``results/figures`` shows real changes only.
+    identical files and a diff of ``results/figures`` shows real changes only. matplotlib ends
+    some SVG lines with a space; those are removed here, because the repository's
+    trailing-whitespace hook would otherwise rewrite the file on commit and the committed
+    figure would no longer be the one this function wrote.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     blank: dict[str, dict[str, str | None]] = {
@@ -385,8 +389,14 @@ def save_figure(
         if fmt not in blank:
             raise FigureDataError(f"unsupported figure format {fmt!r}; use {sorted(blank)}")
         path = out_dir / f"{name}.{fmt}"
+        buffer = io.BytesIO()
         with matplotlib.rc_context(_RC):
-            figure.savefig(path, format=fmt, dpi=dpi, metadata=blank[fmt])
+            figure.savefig(buffer, format=fmt, dpi=dpi, metadata=blank[fmt])
+        data = buffer.getvalue()
+        if fmt == "svg":
+            lines = [line.rstrip() for line in data.decode("utf-8").splitlines()]
+            data = ("\n".join(lines).rstrip("\n") + "\n").encode("utf-8")
+        path.write_bytes(data)
         paths.append(path)
     return paths
 
