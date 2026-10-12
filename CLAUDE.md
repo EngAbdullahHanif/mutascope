@@ -28,7 +28,7 @@ mutascope/
 ├── src/mutascope/
 │   ├── cli.py                # Typer entry point: `mutascope <group> <cmd>`
 │   ├── data/                 # download, parse, validate (pandera), clean, structures, 3Di
-│   ├── scoring/              # Scorer protocol, registry, esm2.py, saprot.py, ensemble.py, cache.py
+│   ├── scoring/              # Scorer protocol, registry, masked_lm.py, esm2.py, saprot.py, struct_tokens.py, ensemble.py, cache.py
 │   ├── features/             # per-variant feature builders
 │   ├── models/               # ridge, lgbm, mlp (Lightning), conformal, ensemble
 │   ├── eval/                 # metrics, ProteinGym-style aggregation, bootstrap CIs, figures
@@ -109,9 +109,21 @@ Run `make lint test` before declaring any task done.
   `ACDEFGHIKLMNPQRSTVWY` (constant `AA_ORDER`; never redefine it).
 - Score definition: `log P(mt | x_masked_i) - log P(wt | x_masked_i)` (masked marginal).
   The wild-type marginal (single unmasked pass) is a separate method, `fast=True`.
-- Sequences > 1022 residues: overlapping windows; each position is scored from the window where it is most central.
-- SaProt: combined tokens (uppercase AA + lowercase 3Di); 3Di replaced by `#` where pLDDT < 70.
-  Port the scoring logic from the official SaProt repository and cite it in the docstring.
+- ESM-2, sequences > 1022 residues: overlapping windows; each position is scored from the window
+  where it is most central. Benchmark runs score the MSA region where it is not the full target
+  (ADR 0012).
+- SaProt (ADR 0015): combined tokens (uppercase AA + lowercase 3Di). The 3Di letter is `#` where
+  pLDDT < `structure.low_plddt_threshold` (70) and at residues outside the structure's range.
+  Tokens are read from `processed/three_di` and `processed/structure_features`; scoring never
+  runs Foldseek. A residue is masked as `#` + its own 3Di letter, and an amino acid's
+  probability is the sum over its 21 structure tokens (ported from the official SaProt
+  repository, cited in the docstring).
+- SaProt is never windowed, and its benchmark region is the residues the assay's structure
+  models (`pdb_range`), in one pass whatever the length. This is the SaProt rule, not an
+  exception to the ESM-2 one: it is what the official scoring and ProteinGym's baseline do.
+- SaProt is scored and evaluated only on assays with a structure (213 of 217; ADR 0003). Any
+  SaProt result, and any comparison with a sequence-only model, states the assay count and uses
+  the shared assays.
 - Cache logits on disk keyed by
   `sha256(model_id + revision + sequence + struct_tokens + method + region)` (method = masked or
   wild-type marginal; region = full target or MSA region; ADR 0012).
@@ -142,6 +154,12 @@ Run `make lint test` before declaring any task done.
     `ESM2_650M` scores must have per-variant Spearman ≥ 0.99 in every assay, and our aggregate
     Spearman must be within ±0.01 of the aggregate the same harness computes from their scores on
     the same single-mutant rows. Never compare a single-mutant aggregate with the published 0.414.
+  - *Gate exceptions* (ADR 0015): `conf/eval/model_gate.yaml` lists, per model, assays where
+    ProteinGym's precomputed scores are shown to come from wrong inputs (two for SaProt 650M).
+    They are left out of both gate checks; the benchmark uses our scores for them. An entry
+    needs a replay test in `tests/test_reproduction.py` showing that the wrong inputs reproduce
+    ProteinGym's scores, and the gate fails if a listed assay starts to agree. Never add an
+    entry to make a gate pass without that evidence, and never touch the 0.99 threshold.
 - Supervised: use ProteinGym's fold assignments for random, modulo and contiguous splits. Report all three.
 - **No leakage:** scalers, feature selection and hyperparameter search (Optuna) are fit on training folds only
   (nested CV). Test folds are touched exactly once per final evaluation.
@@ -192,8 +210,8 @@ lint → typecheck → tests (+ coverage) → Nextflow `-profile local,test` smo
 - Keep changes small and focused; one concern per commit. Conventional Commits (`feat:`, `fix:`, `test:`, `docs:`…).
 - When a design decision is made (tool, model, protocol change), add an ADR in `docs/adr/NNNN-title.md`.
 - If a metric looks surprisingly good, assume leakage or an indexing bug and investigate before reporting it.
-- Do not modify `conf/data/proteingym.yaml` pins, the reproduction test tolerance or the evaluation
-  protocol without explicitly asking.
+- Do not modify `conf/data/proteingym.yaml` pins, the reproduction test tolerance, the model gate
+  exceptions or the evaluation protocol without explicitly asking.
 - Explain non-obvious code in plain language in the PR/commit description — the author must be able to defend every line in an interview.
 
 ## Current phase
