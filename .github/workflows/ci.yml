@@ -42,6 +42,12 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
       - run: uv sync --all-extras --locked
+      # Tests load esm2_t6_8M (about 30 MB) from the Hub at its pinned revision; the key changes
+      # only when that pin does.
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/huggingface/hub
+          key: hf-${{ hashFiles('conf/model/esm2_8m.yaml') }}
       - run: make test PYTEST_ARGS="--cov=mutascope --cov-report=term-missing --cov-report=xml"
       - uses: actions/upload-artifact@v7
         with:
