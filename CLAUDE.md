@@ -117,8 +117,15 @@ Run `make lint test` before declaring any task done.
 - Metrics per assay: Spearman (primary), AUC, MCC, NDCG@10%, top-10% recall.
 - Aggregate ProteinGym-style: per UniProt ID → per function type → overall. Never report a plain mean over assays as the headline.
 - 95% CIs by bootstrap over assays.
-- **Reproduction gate:** our ESM-2 650M zero-shot average Spearman must match ProteinGym's published value
-  within ±0.01 (`tests/test_reproduction.py`, marked `slow`). If it fails, fix the bug before any new modelling work.
+- **Reproduction gate** (`tests/test_reproduction.py`, ADR 0010). It has two parts, and both must pass.
+  If either fails, fix the bug before any new modelling work.
+  - *Harness gate* (no model; needs the downloaded data): our metrics and aggregation, run on ProteinGym's precomputed `ESM2_650M`
+    scores over **all** rows (single and multi-mutants), must reproduce the published average
+    Spearman of 0.414 (rounds to it: |Δ| ≤ 0.0005). This tests the harness, not our model.
+  - *Model gate* (`slow`): on single mutants, our ESM-2 650M scores against ProteinGym's precomputed
+    `ESM2_650M` scores must have per-variant Spearman ≥ 0.99 in every assay, and our aggregate
+    Spearman must be within ±0.01 of the aggregate the same harness computes from their scores on
+    the same single-mutant rows. Never compare a single-mutant aggregate with the published 0.414.
 - Supervised: use ProteinGym's fold assignments for random, modulo and contiguous splits. Report all three.
 - **No leakage:** scalers, feature selection and hyperparameter search (Optuna) are fit on training folds only
   (nested CV). Test folds are touched exactly once per final evaluation.
