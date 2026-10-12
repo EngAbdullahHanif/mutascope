@@ -62,7 +62,9 @@ Goal: several pretrained models score every mutation; our numbers reproduce the 
 - [x] `Scorer` protocol (`scoring/base.py`) returning `(L, 20)` landscapes in `AA_ORDER`; registry
 - [x] ESM-2 35M / 150M / 650M via Hugging Face `transformers`, pinned revisions (ADR 0012;
       all three scored on all 217 assays at measured positions, ADR 0013 and 0014)
-- [ ] SaProt 650M (AF2): combined AA + 3Di tokens, `#` where pLDDT < 70; scoring ported from the official repo
+- [x] SaProt 650M (AF2): combined AA + 3Di tokens, `#` where pLDDT < 70; scoring ported from the official repo
+      (ADR 0015: one unwindowed pass over `pdb_range`, 213 assays; model gate on 211, two
+      documented upstream errors; issue drafted in `docs/upstream/`)
 - [ ] [stretch] ESM-1v ensemble; ESM C 300M (check licence first)
 
 ### Scoring methods
