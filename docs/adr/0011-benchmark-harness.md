@@ -1,6 +1,6 @@
 # 0011 — Benchmark harness: ProteinGym's metrics, NaN for undefined values, stratified bootstrap
 
-- Status: accepted
+- Status: accepted (decisions 2 and 4 confirmed by the author, 2026-10-12)
 - Date: 2026-10-12
 
 ## Context
@@ -40,21 +40,39 @@ pinned commit `1f8de97` and matched it line by line. The details that change num
    k = 0, are NaN (upstream: 0). Where upstream already gives NaN, so do we. NaN values are left
    out of every mean, as pandas does upstream, and each run logs a count per model and metric
    with the assay ids. Malformed inputs (NaN scores, length mismatch, labels not 0/1) raise
-   instead. On single mutants the only undefined values are AUC and MCC of
-   `F7YBW8_MESOW_Aakre_2015`, whose 37 single mutants all have label 1. Recording its MCC as 0
-   would halve its protein's MCC (0.16 → 0.08, it shares UniProt ID and function type with
-   `F7YBW8_MESOW_Ding_2023`). For ESM-2 650M's precomputed scores that lowers the OrganismalFitness
-   MCC from 0.2820 to 0.2808 and the overall from 0.3253 to 0.3251. Small, but a bias, not noise.
+   instead.
+
+   **This is a deliberate deviation from ProteinGym for MCC, not a bug.** On single mutants the
+   only undefined values are AUC and MCC of `F7YBW8_MESOW_Aakre_2015`, whose 37 single mutants
+   all have `DMS_score_bin = 1` (on all 9,192 rows half are 1, so the gate never meets it). AUC
+   is NaN in both harnesses. MCC differs, with two consequences, measured on ProteinGym's
+   precomputed scores for the 696,311 single mutants:
+   - *The assay and its protein.* `F7YBW8_MESOW_Aakre_2015`'s MCC is NaN, where ProteinGym
+     records 0. Its protein, `F7YBW8_MESOW` (OrganismalFitness, shared with
+     `F7YBW8_MESOW_Ding_2023`), therefore has MCC 0.1601, Ding's value alone. With
+     ProteinGym's 0 it would be 0.0801: the mean of 0.1601 and a 0 that measures nothing.
+     The same holds for both models.
+   - *The headline.* ESM-2 650M's overall single-mutant MCC is 0.3253, where ProteinGym's
+     convention gives 0.3251 (OrganismalFitness: 0.2820 vs 0.2808). For SaProt 650M it is 0.3547
+     vs 0.3544.
+
+   Small, but a bias rather than noise: a 0 can only ever pull an average down.
 3. **No intermediate rounding.** We aggregate unrounded per-assay values. The published values
    therefore differ from ours by rounding only, but by up to two roundings: SaProt 650M's Binding
    Spearman is 0.37853 from unrounded values and exactly 0.3785 from the 3-decimal ones, which
-   pandas rounds (half to even) to the published 0.378. ADR 0010's gate compares the overall
-   value within 0.0005 and is unchanged; the function-level check in `tests/test_reproduction.py`
-   allows 0.001 for this reason. A separate test feeds ProteinGym's own rounded per-assay values
-   to our aggregation and requires every published aggregate exactly.
+   pandas rounds (half to even) to the published 0.378. **The function-level tolerance of 0.001
+   exists only because ProteinGym rounds per-assay values to 3 decimals before averaging and
+   then rounds the average again; the overall gate keeps ±0.0005 (ADR 0010).** Over all five
+   metrics and both models, 3 of the 50 function-level values land beyond 0.0005 for this
+   reason: SaProt Binding Spearman (+0.00053), ESM-2 Activity MCC (−0.00056) and ESM-2 Binding
+   top-10% recall (+0.00056). All 10 overall values are within 0.00044. A separate test feeds
+   ProteinGym's own rounded per-assay values to our aggregation and requires every published
+   aggregate exactly.
 4. **95% CIs: percentile bootstrap over assays, stratified by function type.** 10,000 resamples
-   (seed 0, `conf/eval/proteingym.yaml`). Each resample draws, within every function type, as
-   many assays as it has, with replacement, and reruns the full hierarchical aggregation.
+   (seed 0, `conf/eval/proteingym.yaml`). The unit is the assay, as CLAUDE.md specifies;
+   matching ProteinGym's protocol is preferred over wider protein-level intervals (see
+   Alternatives). Each resample draws, within every function type, as many assays as it has,
+   with replacement, and reruns the full hierarchical aggregation.
    Stratifying keeps all five function types in every resample, so the overall value always
    averages the same five categories. The resample is a weight vector, so the point estimate
    (all weights 1) and the bootstrap share one implementation and cannot disagree. These CIs
@@ -69,9 +87,9 @@ pinned commit `1f8de97` and matched it line by line. The details that change num
 
 Our harness on ProteinGym's precomputed scores, all 2,465,767 rows of the 217 assays, against
 the leaderboard at the pinned commit. Per-assay values agree within 0.0005 (the published
-rounding) for all 217 assays, in every metric, for both models. The AUC, MCC, NDCG and
-top-recall files were fetched from the same commit for this check; only the Spearman files
-are in the pinned download.
+rounding) for all 217 assays, in every metric, for both models. All ten leaderboard files
+(summary and DMS-level, five metrics) are in the pinned, checksummed download, and
+`tests/test_reproduction.py` checks every cell of this table.
 
 | Metric | ESM2 (650M) ours / published | SaProt (650M) ours / published |
 |---|---|---|
@@ -88,8 +106,8 @@ are in the pinned download.
   (no metric is undefined on all rows).
 - **Resample UniProt IDs instead of assays.** Assays of the same protein are correlated (P53
   has four), so resampling proteins would give somewhat wider, arguably more honest intervals.
-  CLAUDE.md specifies a bootstrap over assays, so we follow it. Revisit if Phase 3 comparisons
-  hinge on overlapping CIs.
+  CLAUDE.md specifies a bootstrap over assays, and the author confirmed it (2026-10-12):
+  matching ProteinGym's protocol matters more than wider intervals.
 - **Paired bootstrap of differences between models** (what the leaderboard's standard error
   measures). Needed when comparing models in Phase 3. The weighted implementation supports it,
   because the same weight matrix can be applied to two models' values.
@@ -98,7 +116,8 @@ are in the pinned download.
 
 - `mutascope eval precomputed` writes `results/proteingym_precomputed_{all,single}.parquet`
   and their `_summary` files. `mutascope eval compare-leaderboard` prints the comparison.
-- The harness gate in `tests/test_reproduction.py` runs in about 5 s with the release present
-  and is skipped without it (CI).
+- The harness gate in `tests/test_reproduction.py` covers all five metrics for both models
+  (15 checks: gate, per-assay and exact-aggregation diagnostics per metric). It runs in about
+  4 s with the release present and is skipped without it (CI).
 - Our zero-shot scorers will reuse `assay_metrics_table` and `summarise` unchanged; supervised
   results must average folds before `summarise`, which refuses duplicate rows.
