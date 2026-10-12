@@ -181,6 +181,7 @@ class Esm2Scorer:
         else:
             result = cached
             result[missing] = self._masked_marginal(tokens, missing)
+        self._release_device_cache()
         seconds = time.monotonic() - start
         self._positions_computed += len(missing)
         log.info(
@@ -196,6 +197,18 @@ class Esm2Scorer:
             self.cache.put(key, result)
             self.cache.record(key, positions=len(missing), seconds=seconds)
         return result
+
+    def _release_device_cache(self) -> None:
+        """Give the MPS allocator's cached buffers back to the system after a sequence.
+
+        PyTorch keeps freed MPS buffers for reuse. Every sequence length needs buffers of new
+        sizes, and with the 8M and 35M checkpoints the kept ones were never released: driver
+        memory grew by about 1.6 GiB per 1,000 positions until the 35M benchmark run failed
+        with "MPS backend out of memory" (build log entry 13). Emptying the cache once per
+        sequence costs nothing measurable and changes no number.
+        """
+        if self.device.type == "mps":
+            torch.mps.empty_cache()
 
     @torch.inference_mode()
     def _masked_marginal(self, tokens: torch.Tensor, residues: Sequence[int]) -> FloatArray:
