@@ -59,16 +59,20 @@ Done when: `make pipeline` produces clean Parquet + structure features + 3Di; `m
 Goal: several pretrained models score every mutation; our numbers reproduce the ProteinGym leaderboard.
 
 ### Scorers
-- [ ] `Scorer` protocol (`scoring/base.py`) returning `(L, 20)` landscapes in `AA_ORDER`; registry
-- [ ] ESM-2 35M / 150M / 650M via Hugging Face `transformers`, pinned revisions
+- [x] `Scorer` protocol (`scoring/base.py`) returning `(L, 20)` landscapes in `AA_ORDER`; registry
+- [x] ESM-2 35M / 150M / 650M via Hugging Face `transformers`, pinned revisions (ADR 0012;
+      full landscapes for all assays not yet computed)
 - [ ] SaProt 650M (AF2): combined AA + 3Di tokens, `#` where pLDDT < 70; scoring ported from the official repo
 - [ ] [stretch] ESM-1v ensemble; ESM C 300M (check licence first)
 
 ### Scoring methods
-- [ ] Masked marginal: one masked pass per position, batched 16–32, `torch.inference_mode()`, float32 on MPS
-- [ ] Wild-type marginal (`fast=True`): one unmasked pass
-- [ ] Sliding windows for L > 1022; each position from its most central window
-- [ ] Disk cache keyed by `sha256(model_id + revision + sequence + struct_tokens)`
+- [x] Masked marginal: one masked pass per position, batched 16–32, `torch.inference_mode()`, float32 on MPS
+- [x] Wild-type marginal (`fast=True`): one unmasked pass
+- [x] Sliding windows for L > 1022; each position from its most central window
+- [x] Disk cache keyed by `sha256(model_id + revision + sequence + struct_tokens + method + region)`
+- [x] Benchmark scoring region: MSA region where it is not the full target (5 assays, derived and
+      checked against `conf/eval/scoring_region.yaml`); website landscapes use the full target (ADR 0012)
+- [ ] Full masked landscapes at every position for all 187 distinct targets (650M about 4 h on MPS)
 - [ ] Ensemble: per-assay z-score, then mean
 
 ### Benchmark harness
@@ -99,7 +103,7 @@ Goal: beat zero-shot using the assay data, under ProteinGym's supervised protoco
 - [ ] Optuna hyperparameter search inside training folds only (nested CV); scalers fit on train folds only
 
 ### Features (variant at position i, wt → mt)
-- [ ] Zero-shot scores (each model + ensemble)
+- [ ] Zero-shot scores (each model + ensemble), benchmark scoring region (ADR 0012)
 - [ ] One-hot wt and mt, BLOSUM62
 - [ ] 20-dim log-probabilities at i (ESM-2, SaProt)
 - [ ] Position-i embeddings: ESM-2 650M (mean of last 4 layers, 1280-d) and SaProt
@@ -151,7 +155,8 @@ Done when: CI green on every push, tags deploy automatically, `/docs` live, fast
 ## Phase 5 — Weeks 8–10: Frontend, launch
 
 - [ ] Next.js (App Router) + TypeScript + Tailwind + shadcn/ui; Explorer page first
-- [ ] Heatmap (D3/visx, colourblind-safe diverging) linked to 3D structure (3Dmol.js)
+- [ ] Heatmap (D3/visx, colourblind-safe diverging) linked to 3D structure (3Dmol.js); label the
+      5 proteins whose benchmark scores use the MSA region (ADR 0012)
 - [ ] Pages: Landing, Explorer, Benchmarks, How it works (pipeline, model card, limitations), About
 - [ ] Deploy frontend (Vercel / Cloudflare Pages) on a subdomain
 - [ ] README, 2-minute demo video, write-up

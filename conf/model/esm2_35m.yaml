@@ -1,0 +1,9 @@
+# ESM-2 checkpoint on the Hugging Face Hub, pinned to a commit (verified via the Hub API).
+name: esm2_35m
+scorer: esm2
+hf_id: facebook/esm2_t12_35M_UR50D
+revision: 6fbf070e65b0b7291e7bbcd451118c216cff79d8
+# Masked passes per forward call; each holds at most window_tokens tokens.
+batch_size: 16
+# ESM-2's training context: 1022 residues + <cls> + <eos>. Longer sequences are windowed.
+window_tokens: 1024

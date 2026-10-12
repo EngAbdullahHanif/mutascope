@@ -1,0 +1,20 @@
+# Benchmark scoring region (ADR 0012). Every benchmark number (model gate, zero-shot results,
+# Phase 3 features) scores an assay on the region its MSA covers (MSA_start..MSA_end in the
+# reference file) when that region is not the full target, because ProteinGym's published scores
+# were computed that way. Website landscapes always use the full target.
+#
+# The set is derived from the reference file; this list must equal it, or scoring fails (the same
+# pattern as data.structure_exceptions). Evidence: esm2_t6_8M masked marginals against
+# ProteinGym's ESM2_8M scores, Spearman on the full target vs the MSA region.
+scoring_region:
+  msa_region_assays:
+    A0A140D2T1_ZIKV_Sourisseau_2019: >-
+      MSA 281-804 of 3,423; full target rho 0.9603, MSA region rho 1.0000 (max |diff| 2.7e-05)
+    KCNH2_HUMAN_Kozek_2020: >-
+      MSA 535-565 of 1,159; full target rho 0.3613, MSA region rho 1.0000 (max |diff| 4.3e-06)
+    POLG_CXB3N_Mattenberger_2021: >-
+      MSA 1-861 of 2,185; full target rho 0.9917, MSA region rho 1.0000 (max |diff| 8.8e-06)
+    POLG_HCVJF_Qi_2014: >-
+      MSA 1984-2089 of 3,033; full target rho 0.9111, MSA region rho 1.0000 (max |diff| 8.1e-06)
+    SCN5A_HUMAN_Glazer_2019: >-
+      MSA 1611-1642 of 2,016; full target rho 0.3901, MSA region rho 1.0000 (max |diff| 8.5e-06)

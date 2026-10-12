@@ -1,0 +1,5 @@
+# Settings shared by every zero-shot scorer (mutascope.scoring).
+# auto = MPS when available, else CPU (mutascope.utils.device). Never CUDA.
+device: auto
+# Log-probability cache, keyed by model, revision, sequence, structure tokens and method.
+cache_dir: ${data.data_dir}/cache/logprobs
