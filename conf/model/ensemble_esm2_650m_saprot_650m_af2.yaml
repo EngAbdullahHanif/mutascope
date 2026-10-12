@@ -1,0 +1,10 @@
+# Ensemble of two score sets (ADR 0016): each member's scores are z-scored within an assay, then
+# averaged. No checkpoint of its own: it is built from the members' written scores by
+# `mutascope score ensemble`, on the assays every member has (213: SaProt needs a structure).
+name: ensemble_esm2_650m_saprot_650m_af2
+scorer: ensemble
+# Each member is a model config (conf/model/<model>.yaml) and a scoring method, masked or wt;
+# together they name a score set (mutascope.eval.zero_shot.run_label).
+members:
+  - {model: esm2_650m, method: masked}
+  - {model: saprot_650m_af2, method: masked}

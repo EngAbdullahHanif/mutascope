@@ -45,7 +45,7 @@ from mutascope.eval.benchmark import (
     summary_metrics,
     write_results,
 )
-from mutascope.eval.compare import paired_bootstrap_diff
+from mutascope.eval.compare import paired_bootstrap_diff, shared_assays, summarise_shared
 from mutascope.eval.gate import GateThresholds, join_scores, model_gate
 from mutascope.eval.proteingym import (
     PRECOMPUTED_PREFIX,
@@ -61,11 +61,23 @@ from mutascope.eval.region import (
     scoring_regions,
     structure_regions,
 )
-from mutascope.eval.schemas import AgreementSchema, ComparisonSchema, ScoringRunSchema
-from mutascope.eval.zero_shot import load_scores, run_label, score_assays, with_labels
+from mutascope.eval.schemas import (
+    AgreementSchema,
+    ComparisonSchema,
+    ScoringRunSchema,
+    SummarySchema,
+)
+from mutascope.eval.zero_shot import (
+    load_scores,
+    run_label,
+    score_assays,
+    with_labels,
+    write_scores,
+)
 from mutascope.export.hub import PublishError, push_dataset, stage_dataset
 from mutascope.scoring.base import build_scorer
 from mutascope.scoring.cache import LogProbCache
+from mutascope.scoring.ensemble import zscore_mean
 from mutascope.scoring.struct_tokens import AssayStructure, StructTokenError, load_struct_tokens
 from mutascope.utils.config import as_str_dict, load_config
 from mutascope.utils.io import write_table
@@ -136,11 +148,22 @@ def _track(
     metrics: dict[str, float],
     artifacts: list[Path],
     tags: dict[str, str] | None = None,
+    members: dict[str, DictConfig] | None = None,
 ) -> None:
-    """Log one model's scoring or evaluation run: the model config and the method as params."""
+    """Log one model's scoring or evaluation run: the model config and the method as params.
+
+    An ensemble (``members``, from :func:`_members`) has no checkpoint of its own, so the run
+    records the Hub id and pinned revision of every member instead, and its method is the
+    combination rule.
+    """
     model = as_str_dict(OmegaConf.to_container(cfg.model, resolve=True), "model")
     params: dict[str, object] = {f"model.{key}": value for key, value in model.items()}
     params |= {"method": "wt" if fast else "masked", "scoring.device": str(cfg.scoring.device)}
+    if members:
+        params["method"] = ENSEMBLE_METHOD
+        for member, member_cfg in members.items():
+            params[f"member.{member}.hf_id"] = str(member_cfg.hf_id)
+            params[f"member.{member}.revision"] = str(member_cfg.revision)
     _log_run(cfg, step, label, params, metrics, artifacts, {"model": label} | (tags or {}))
 
 
@@ -608,17 +631,49 @@ def eval_compare_leaderboard(
             )
 
 
-def _model_assays(cfg: DictConfig, reference: pd.DataFrame) -> list[str]:
+ENSEMBLE_METHOD = "zscore_mean"
+"""The ``method`` param of an ensemble's tracked runs (:mod:`mutascope.scoring.ensemble`)."""
+
+
+def _members(cfg: DictConfig, config_dir: Path) -> dict[str, DictConfig]:
+    """Score-set label -> model config of every member of an ensemble; empty for one model.
+
+    A member is ``{model, method}`` in ``model.members``: its config is
+    ``conf/model/<model>.yaml`` and its label comes from
+    :func:`~mutascope.eval.zero_shot.run_label`, like every other score set's.
+
+    Raises:
+        ValueError: A member's method is not ``masked`` or ``wt``, or a member is listed twice.
+    """
+    members: dict[str, DictConfig] = {}
+    model = as_str_dict(OmegaConf.to_container(cfg.model, resolve=True), "model")
+    listed: list[object] = model.get("members") or []
+    for member in listed:
+        entry = as_str_dict(member, "model.members[]")
+        name, method = str(entry["model"]), str(entry["method"])
+        if method not in ("masked", "wt"):
+            raise ValueError(f"member {name}: method must be masked or wt, got {method!r}")
+        label = run_label(name, fast=method == "wt")
+        if label in members:
+            raise ValueError(f"member {label} is listed twice")
+        members[label] = load_config(config_dir, [f"model={name}"]).model
+    return members
+
+
+def _model_assays(cfg: DictConfig, reference: pd.DataFrame, config_dir: Path) -> list[str]:
     """The assays the configured model is scored and evaluated on.
 
     Every assay of the reference for a sequence-only model. A structure-aware model (its
     config has ``plddt_threshold``) leaves out ``data.structure_exceptions``, the assays
-    without a usable structure (ADR 0003). Every command derives the set here, so scoring, the
+    without a usable structure (ADR 0003). An ensemble exists where all its members do, so it
+    is structure-aware if any member is. Every command derives the set here, so scoring, the
     model gate and the benchmark cannot disagree on it, and none of them accepts any other set.
     """
     assays = reference["DMS_id"].astype(str).tolist()
     exceptions = cfg.data.structure_exceptions  # null on a subset (the test profile)
-    if cfg.model.get("plddt_threshold") is None or exceptions is None:
+    models = list(_members(cfg, config_dir).values()) or [cfg.model]
+    structure_aware = any(model.get("plddt_threshold") is not None for model in models)
+    if not structure_aware or exceptions is None:
         return assays
     excluded = {str(a) for a in exceptions}
     return [a for a in assays if a not in excluded]
@@ -629,6 +684,7 @@ def _structure_inputs(
     reference: pd.DataFrame,
     three_di_dir: Path | None,
     structure_features_dir: Path | None,
+    config_dir: Path,
 ) -> tuple[dict[str, AssayStructure], dict[str, ScoringRegion]]:
     """Structure tokens and scoring regions of a structure-aware model's assays.
 
@@ -646,7 +702,7 @@ def _structure_inputs(
     structures = load_struct_tokens(
         three_di_dir, structure_features_dir, targets, float(cfg.model.plddt_threshold)
     )
-    expected = set(_model_assays(cfg, reference))
+    expected = set(_model_assays(cfg, reference, config_dir))
     if set(structures) != expected:
         raise ValueError(
             f"assays with a structure differ from the reference minus "
@@ -698,6 +754,9 @@ def score_zero_shot(
     different directories and report files. The run is logged to MLflow (``tracking``).
     """
     cfg = load_config(config_dir, overrides)
+    if cfg.model.get("members"):
+        typer.echo(f"error: {cfg.model.name} is an ensemble: use `score ensemble`", err=True)
+        raise typer.Exit(code=1)
     table = pd.read_csv(reference)
     structures: dict[str, AssayStructure] | None = None
     try:
@@ -708,7 +767,7 @@ def score_zero_shot(
             regions = scoring_regions(table, "benchmark", expected)
         else:
             structures, regions = _structure_inputs(
-                cfg, table, three_di_dir, structure_features_dir
+                cfg, table, three_di_dir, structure_features_dir, config_dir
             )
     except (ScoringRegionError, StructTokenError, ValueError) as exc:
         typer.echo(f"error: {exc}", err=True)
@@ -770,6 +829,76 @@ def score_zero_shot(
     )
 
 
+@score_app.command("ensemble")
+def score_ensemble(
+    scores_root: Annotated[
+        Path,
+        typer.Option(
+            help="Root of the members' <label>/ score sets (`mutascope score zero-shot`).",
+            exists=True,
+            file_okay=False,
+        ),
+    ],
+    reference: Reference,
+    out_dir: Annotated[Path, typer.Option(help="Root for <name>/assay_id=<id>/ partitions.")],
+    config_dir: ConfigDir = Path("conf"),
+    overrides: Overrides = None,
+) -> None:
+    """Build the configured ensemble (``model=<ensemble>``) from its members' written scores.
+
+    Each member's scores are z-scored within an assay and the z-scores are averaged
+    (:mod:`mutascope.scoring.ensemble`). No model runs. The ensemble covers the assays every
+    member has: with a structure-aware member, the assays with a structure (ADR 0003). The
+    members must hold exactly the same variants there. Benchmark it with
+    ``mutascope eval zero-shot`` like any other score set. The run is logged to MLflow.
+    """
+    cfg = load_config(config_dir, overrides)
+    name = str(cfg.model.name)
+    table = pd.read_csv(reference)
+    exceptions = cfg.data.structure_exceptions  # null on a subset (the test profile)
+    no_structure = [] if exceptions is None else [str(a) for a in exceptions]
+    try:
+        members = _members(cfg, config_dir)
+        if not members:
+            raise ValueError(f"{name} is not an ensemble: its config has no members")
+        scores: dict[str, pd.DataFrame] = {}
+        for label in members:
+            if not (scores_root / label).is_dir():
+                raise ValueError(f"no scores for member {label} in {scores_root}")
+            scores[label] = load_scores(scores_root / label)
+            if set(scores[label]["model"]) != {label}:
+                found = sorted(set(scores[label]["model"]))
+                raise ValueError(f"{scores_root / label} holds {found}, not {label}")
+        assays = shared_assays({k: set(v["assay_id"]) for k, v in scores.items()}, no_structure)
+        expected = _model_assays(cfg, table, config_dir)
+        if set(assays) != set(expected):
+            raise ValueError(
+                f"the members share {len(assays)} assays, the reference gives {len(expected)}: "
+                f"missing {sorted(set(expected) - set(assays))}, "
+                f"unexpected {sorted(set(assays) - set(expected))}"
+            )
+        shared = {k: v[v["assay_id"].isin(assays)] for k, v in scores.items()}
+        ensemble = zscore_mean(shared, name)
+    except ValueError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    write_scores(ensemble, out_dir / name)
+    typer.echo(f"{name}: mean of within-assay z-scores of {', '.join(members)}")
+    typer.echo(f"{len(assays)} assays, {len(ensemble):,} variants -> {out_dir / name}")
+    for label, frame in scores.items():
+        left_out = frame["assay_id"].nunique() - len(assays)
+        typer.echo(f"  {label}: {frame['assay_id'].nunique()} assays, {left_out} not shared")
+    _track(
+        cfg,
+        "score",
+        name,
+        fast=False,
+        metrics={"assays": float(len(assays)), "variants": float(len(ensemble))},
+        artifacts=[],
+        members=members,
+    )
+
+
 @eval_app.command("model-gate")
 def eval_model_gate(
     scores_dir: Annotated[
@@ -812,7 +941,7 @@ def eval_model_gate(
         raise typer.Exit(code=1)
     table = pd.read_csv(reference)
     theirs = load_precomputed_scores(precomputed_dir, [column], "single")
-    theirs = theirs[theirs["assay_id"].isin(_model_assays(cfg, table))]
+    theirs = theirs[theirs["assay_id"].isin(_model_assays(cfg, table, config_dir))]
     try:
         joined = join_scores(ours, theirs, column)
     except ValueError as exc:
@@ -923,9 +1052,20 @@ def eval_zero_shot(
     config and ``--fast`` name, so results can never be tracked under the wrong revision.
 
     A structure-aware model is benchmarked on its assays with a structure (213 of 217 on the
-    pinned release); the assay count is printed and is ``n_assays`` in the summary.
+    pinned release); the assay count is printed and is ``n_assays`` in the summary. So is an
+    ensemble with a structure-aware member (``mutascope score ensemble`` writes its scores).
     """
     cfg = load_config(config_dir, overrides)
+    try:
+        members = _members(cfg, config_dir)
+    except ValueError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if members and fast:
+        typer.echo(
+            "error: --fast does not apply to an ensemble; its members name methods", err=True
+        )
+        raise typer.Exit(code=1)
     label = run_label(str(cfg.model.name), fast=fast)
     scores = load_scores(scores_dir)
     if set(scores["model"]) != {label}:
@@ -935,7 +1075,7 @@ def eval_zero_shot(
         raise typer.Exit(code=1)
     table = pd.read_csv(reference)
     try:
-        variants = with_labels(scores, variants_dir, _model_assays(cfg, table))
+        variants = with_labels(scores, variants_dir, _model_assays(cfg, table, config_dir))
     except ValueError as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -967,6 +1107,7 @@ def eval_zero_shot(
         },
         artifacts=list(results),
         tags={"rows": "single", "kind": "zero-shot"},
+        members=members,
     )
 
 
@@ -1080,3 +1221,197 @@ def eval_compare(
         [path],
         {"kind": "zero-shot", "rows": "single"},
     )
+
+
+@eval_app.command("shared")
+def eval_shared(
+    results_dir: Annotated[
+        Path,
+        typer.Option(
+            help="Directory of zero_shot_<label>_single.parquet (`mutascope eval zero-shot`).",
+            exists=True,
+            file_okay=False,
+        ),
+    ],
+    reference: Reference,
+    out: Annotated[Path, typer.Option(help="Output Parquet file, e.g. <results>/zero_shot/…")],
+    config_dir: ConfigDir = Path("conf"),
+    overrides: Overrides = None,
+) -> None:
+    """Summarise the score sets of ``eval.shared_summary`` on the assays all of them have.
+
+    A structure-aware model has no scores for ``data.structure_exceptions``, so its summary
+    file covers fewer assays than a sequence-only model's and the two files cannot be shown
+    side by side. This writes every listed score set's ProteinGym aggregates and bootstrap
+    CIs on the shared assays (:class:`SummarySchema`; ``n_assays`` says how many) and logs one
+    MLflow run. The per-assay values are read from the results files, never recomputed.
+    """
+    cfg = load_config(config_dir, overrides)
+    labels = [str(label) for label in cfg.eval.shared_summary]
+    missing = [
+        label
+        for label in labels
+        if not (results_dir / f"zero_shot_{label}_single.parquet").exists()
+    ]
+    if not labels or missing:
+        problem = (
+            f"no results for {missing} in {results_dir}"
+            if labels
+            else "eval.shared_summary is empty"
+        )
+        typer.echo(f"error: {problem}", err=True)
+        raise typer.Exit(code=1)
+    bootstrap = BootstrapParams(
+        int(cfg.eval.bootstrap.n_resamples), float(cfg.eval.bootstrap.confidence)
+    )
+    seed = int(cfg.eval.bootstrap.seed)
+    seed_all(seed)
+    exceptions = cfg.data.structure_exceptions  # null on a subset (the test profile)
+    no_structure = [] if exceptions is None else [str(a) for a in exceptions]
+    try:
+        summary = summarise_shared(
+            {
+                label: read_results(results_dir / f"zero_shot_{label}_single.parquet")
+                for label in labels
+            },
+            pd.read_csv(reference),
+            bootstrap,
+            seed,
+            may_be_absent=no_structure,
+        )
+    except (ValueError, KeyError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    path = write_table(summary, SummarySchema, out)
+    metrics: dict[str, float] = {}
+    typer.echo(f"{len(labels)} score sets on their shared assays:")
+    for label in labels:
+        metrics |= {f"{label}/{k}": v for k, v in summary_metrics(summary, label).items()}
+        row = summary[
+            (summary["model"] == label)
+            & (summary["metric"] == "spearman")
+            & (summary["level"] == "overall")
+        ].iloc[0]
+        typer.echo(
+            f"  {label:<36} Spearman {row['value']:.4f} "
+            f"[{row['ci_low']:.4f}, {row['ci_high']:.4f}] ({row['n_assays']} assays)"
+        )
+    typer.echo(f"summary: {path}")
+    _log_run(
+        cfg,
+        "shared-summary",
+        "zero-shot",
+        {
+            "score_sets": ", ".join(labels),
+            "bootstrap.n_resamples": bootstrap.n_resamples,
+            "bootstrap.confidence": bootstrap.confidence,
+            "bootstrap.seed": seed,
+        },
+        metrics,
+        [path],
+        {"kind": "zero-shot", "rows": "single"},
+    )
+
+
+@eval_app.command("figures")
+def eval_figures(
+    results_dir: Annotated[
+        Path,
+        typer.Option(
+            help="Directory of zero_shot_<label>_single_summary.parquet.",
+            exists=True,
+            file_okay=False,
+        ),
+    ],
+    comparisons: Annotated[
+        Path,
+        typer.Option(help="Paired comparisons (`eval compare`).", exists=True, dir_okay=False),
+    ],
+    shared_summary: Annotated[
+        Path,
+        typer.Option(help="Shared-assay summary (`eval shared`).", exists=True, dir_okay=False),
+    ],
+    out_dir: Annotated[Path, typer.Option(help="Directory for the figure files.")],
+    config_dir: ConfigDir = Path("conf"),
+    overrides: Overrides = None,
+) -> None:
+    """Draw the benchmark figures of ``eval.figures`` from the results files (ADR 0016).
+
+    Model size against the metric, bars per function type, the ensemble's gain over its
+    members and the masked against the wild-type marginal, each in every format of
+    ``eval.figures.formats``. Every number is read from a results file; a missing one fails
+    the command. Differences between score sets are shown with their paired-bootstrap CI.
+    """
+    # matplotlib is the optional `figures` extra; no other command needs it.
+    from mutascope.eval.figures import (
+        FigureContext,
+        FigureDataError,
+        difference_figure,
+        function_type_figure,
+        model_size_figure,
+        save_figure,
+    )
+
+    cfg = load_config(config_dir, overrides)
+    spec = cfg.eval.figures
+    context = FigureContext(
+        metric=str(spec.metric),
+        names={str(k): str(v) for k, v in spec.names.items()},
+        dataset=f"ProteinGym {cfg.data.release.version}",
+        confidence=float(cfg.eval.bootstrap.confidence),
+    )
+    sizes = {str(k): float(v) for k, v in spec.model_size.items()}
+    gains = [(str(a), str(b)) for a, b in spec.ensemble_gain]
+    fast = [(str(a), str(b)) for a, b in spec.fast_vs_masked]
+    try:
+        missing = [
+            label
+            for label in sizes
+            if not (results_dir / f"zero_shot_{label}_single_summary.parquet").exists()
+        ]
+        not_wt = [(a, b) for a, b in fast if b != run_label(a, fast=True)]
+        if missing or not_wt:
+            raise FigureDataError(
+                f"no summary for {missing} in {results_dir}"
+                if missing
+                else f"eval.figures.fast_vs_masked: not [masked, wild-type] pairs: {not_wt}"
+            )
+        summaries = pd.concat(
+            [
+                read_results(results_dir / f"zero_shot_{label}_single_summary.parquet")
+                for label in sizes
+            ],
+            ignore_index=True,
+        )
+        paired, shared = read_results(comparisons), read_results(shared_summary)
+        figures = {
+            f"model_size_vs_{context.metric}": model_size_figure(summaries, paired, sizes, context),
+            f"function_type_{context.metric}": function_type_figure(
+                shared, [str(label) for label in spec.function_types], context
+            ),
+            "ensemble_gain": difference_figure(
+                paired,
+                gains,
+                context,
+                title=f"Ensemble gain in zero-shot {context.metric_name}",
+                panel_titles=[
+                    f"{context.name(a)} \N{MINUS SIGN} {context.name(b)}" for a, b in gains
+                ],
+                setting="single mutants",
+            ),
+            "fast_vs_masked": difference_figure(
+                paired,
+                fast,
+                context,
+                title=f"Masked minus wild-type marginal, zero-shot {context.metric_name}",
+                panel_titles=[context.name(a) for a, _ in fast],
+                setting="single mutants",
+            ),
+        }
+        formats, dpi = [str(f) for f in spec.formats], int(spec.dpi)
+        for name, figure in figures.items():
+            for path in save_figure(figure, out_dir, name, formats, dpi):
+                typer.echo(f"figure: {path}")
+    except FigureDataError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc

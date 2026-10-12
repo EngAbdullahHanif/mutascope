@@ -22,6 +22,7 @@ import time
 from collections.abc import Collection, Mapping
 from pathlib import Path
 
+import duckdb
 import pandas as pd
 
 from mutascope.data.db import connect
@@ -132,6 +133,20 @@ def score_assays(
             )
     replace_dir(tmp, out_dir)
     return ScoringRunSchema.validate(pd.DataFrame.from_records(runs), lazy=True)
+
+
+def write_scores(scores: pd.DataFrame, out_dir: Path) -> None:
+    """Write a whole score set to ``out_dir/assay_id=<id>/data.parquet``, replacing ``out_dir``.
+
+    For scores that are not produced assay by assay by a model (an ensemble). Like
+    :func:`score_assays`, the partitions are built in ``<out_dir>.tmp`` and moved into place.
+    """
+    scores = ZeroShotScoreSchema.validate(scores)
+    tmp = fresh_tmp_dir(out_dir)
+    with duckdb.connect() as con:
+        for assay_id, frame in scores.groupby("assay_id", sort=True):
+            write_partition(con, frame, tmp / f"assay_id={assay_id}")
+    replace_dir(tmp, out_dir)
 
 
 def load_scores(scores_dir: Path) -> pd.DataFrame:
