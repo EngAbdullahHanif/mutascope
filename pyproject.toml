@@ -32,6 +32,9 @@ notebooks = [
     "altair>=6.3.0",
     "marimo>=0.25.1",
 ]
+tracking = [
+    "mlflow>=3.17.0",
+]
 
 [project.scripts]
 mutascope = "mutascope.cli:app"

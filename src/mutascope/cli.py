@@ -41,6 +41,7 @@ from mutascope.eval.benchmark import (
     assay_metrics_table,
     read_results,
     summarise,
+    summary_metrics,
     write_results,
 )
 from mutascope.eval.gate import GateThresholds, join_scores, model_gate
@@ -54,7 +55,7 @@ from mutascope.eval.proteingym import (
 )
 from mutascope.eval.region import ScoringRegionError, scoring_regions
 from mutascope.eval.schemas import AgreementSchema, ScoringRunSchema
-from mutascope.eval.zero_shot import load_scores, score_assays
+from mutascope.eval.zero_shot import load_scores, run_label, score_assays, with_labels
 from mutascope.export.hub import PublishError, push_dataset, stage_dataset
 from mutascope.scoring.base import build_scorer
 from mutascope.scoring.cache import LogProbCache
@@ -62,6 +63,7 @@ from mutascope.utils.config import as_str_dict, load_config
 from mutascope.utils.io import write_table
 from mutascope.utils.logging import configure_logging
 from mutascope.utils.seeding import seed_all
+from mutascope.utils.tracking import TrackedRun, TrackingError, TrackingSettings, log_run
 
 app = typer.Typer(
     name="mutascope",
@@ -115,6 +117,49 @@ def _accept_overrides(config_dir: Path, overrides: list[str] | None) -> None:
     silently ignoring it.
     """
     load_config(config_dir, overrides)
+
+
+def _track(
+    cfg: DictConfig,
+    step: str,
+    label: str,
+    *,
+    fast: bool,
+    metrics: dict[str, float],
+    artifacts: list[Path],
+    tags: dict[str, str] | None = None,
+) -> None:
+    """Log one command's run to the local MLflow store (``tracking`` config; ADR 0014).
+
+    Called after the command has written its outputs, so a tracking failure loses no result;
+    it still exits 1, because an untracked run must not look like a tracked one.
+    """
+    model = as_str_dict(OmegaConf.to_container(cfg.model, resolve=True), "model")
+    params: dict[str, object] = {f"model.{key}": value for key, value in model.items()}
+    params |= {
+        "method": "wt" if fast else "masked",
+        "scoring.device": str(cfg.scoring.device),
+        "data.release.version": str(cfg.data.release.version),
+        "data.release.git_commit": str(cfg.data.release.git_commit),
+    }
+    run = TrackedRun(
+        name=f"{step} {label}",
+        params=params,
+        metrics=metrics,
+        tags={"step": step, "model": label} | (tags or {}),
+        config=as_str_dict(OmegaConf.to_container(cfg, resolve=True), "config"),
+        artifacts=artifacts,
+    )
+    settings = TrackingSettings.from_config(
+        as_str_dict(OmegaConf.to_container(cfg.tracking, resolve=True), "tracking")
+    )
+    try:
+        run_id = log_run(settings, run)
+    except TrackingError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if run_id is not None:
+        typer.echo(f"tracked: run {run_id} in {settings.directory}")
 
 
 @data_app.command("download")
@@ -549,8 +594,10 @@ def score_zero_shot(
     variants_dir: Annotated[
         Path, typer.Option(help="Processed variant partitions.", exists=True, file_okay=False)
     ],
-    out_dir: Annotated[Path, typer.Option(help="Output dir for assay_id=<id>/ partitions.")],
-    report_dir: Annotated[Path, typer.Option(help="Directory for zero_shot_run_<model>.parquet.")],
+    out_dir: Annotated[
+        Path, typer.Option(help="Root for <label>/assay_id=<id>/ partitions (label: see below).")
+    ],
+    report_dir: Annotated[Path, typer.Option(help="Directory for zero_shot_run_<label>.parquet.")],
     fast: Annotated[
         bool, typer.Option("--fast", help="Wild-type marginal instead of the masked marginal.")
     ] = False,
@@ -562,6 +609,10 @@ def score_zero_shot(
     Only the positions an assay measures are scored, on its benchmark scoring region. The
     run is resumable: every finished sequence is in ``scoring.cache_dir``, so a rerun after a
     crash scores only what is missing and reports ``positions_computed = 0`` for the rest.
+
+    The label of a score set is the model name, plus ``_wt`` with ``--fast``
+    (:func:`~mutascope.eval.zero_shot.run_label`): the two methods of one model go to
+    different directories and report files. The run is logged to MLflow (``tracking``).
     """
     cfg = load_config(config_dir, overrides)
     table = pd.read_csv(reference)
@@ -580,15 +631,14 @@ def score_zero_shot(
         cache_dir=cache_dir,
     )
     started = time.monotonic()
-    report = score_assays(scorer, table, variants_dir, regions, out_dir, fast=fast)
+    label = run_label(scorer.model_id, fast=fast)
+    report = score_assays(scorer, table, variants_dir, regions, out_dir / label, fast=fast)
     wall = time.monotonic() - started
-    path = write_table(
-        report, ScoringRunSchema, report_dir / f"zero_shot_run_{scorer.model_id}.parquet"
-    )
+    path = write_table(report, ScoringRunSchema, report_dir / f"zero_shot_run_{label}.parquet")
     computed = report[report["positions_computed"] > 0]
     typer.echo(
-        f"{scorer.model_id}: {len(report)} assays, {int(report['variants'].sum()):,} variants "
-        f"-> {out_dir}"
+        f"{label}: {len(report)} assays, {int(report['variants'].sum()):,} variants "
+        f"-> {out_dir / label}"
     )
     typer.echo(
         f"this run: {wall:.0f} s; {int(report['positions_computed'].sum()):,} positions scored "
@@ -597,13 +647,34 @@ def score_zero_shot(
     logged = [
         c
         for c in LogProbCache(cache_dir).computations()
-        if c["model_id"] == str(cfg.model.hf_id) and c["revision"] == str(cfg.model.revision)
+        if c["model_id"] == str(cfg.model.hf_id)
+        and c["revision"] == str(cfg.model.revision)
+        and c["method"] == ("wt" if fast else "masked")
     ]
+    model_seconds = float(sum(c["seconds"] for c in logged))
+    model_positions = int(sum(c["positions"] for c in logged))
     typer.echo(
-        f"all runs (cache log): {sum(c['seconds'] for c in logged):.0f} s of model time, "
-        f"{sum(c['positions'] for c in logged):,} positions"
+        f"all runs (cache log): {model_seconds:.0f} s of model time, {model_positions:,} positions"
     )
     typer.echo(f"report: {path}")
+    _track(
+        cfg,
+        "score",
+        label,
+        fast=fast,
+        metrics={
+            "assays": float(len(report)),
+            "variants": float(report["variants"].sum()),
+            "positions": float(report["positions"].sum()),
+            # This invocation only: 0 positions when everything came from the cache.
+            "positions_computed": float(report["positions_computed"].sum()),
+            "wall_seconds": wall,
+            # Every invocation that filled this cache, interrupted ones included (ADR 0013).
+            "model_seconds_all_runs": model_seconds,
+            "positions_all_runs": float(model_positions),
+        },
+        artifacts=[path],
+    )
 
 
 @eval_app.command("model-gate")
@@ -625,10 +696,12 @@ def eval_model_gate(
 ) -> None:
     """Model gate (ADR 0010): our scores against ProteinGym's precomputed ones, single mutants.
 
-    Writes ``model_gate_<model>.parquet`` (per-assay agreement) and our benchmark results,
-    ``zero_shot_<model>_single.parquet`` and ``..._summary.parquet``, to ``out_dir``. Exits 1
-    if any assay is below ``eval.model_gate.min_assay_spearman`` or the aggregate differs by
-    more than ``eval.model_gate.aggregate_tolerance``.
+    Writes ``model_gate_<model>.parquet`` (per-assay agreement) to ``out_dir`` and logs the
+    outcome to MLflow. Exits 1 if any assay is below ``eval.model_gate.min_assay_spearman`` or
+    the aggregate differs by more than ``eval.model_gate.aggregate_tolerance``. Masked
+    marginals only: ProteinGym's ``ESM2_*`` columns are masked marginals, so a wild-type
+    score set has nothing to be compared with. Benchmark results are written by
+    ``mutascope eval zero-shot``.
     """
     cfg = load_config(config_dir, overrides)
     column, name = str(cfg.model.proteingym_column), str(cfg.model.name)
@@ -651,13 +724,6 @@ def eval_model_gate(
     gate = model_gate(joined, table, thresholds)
     agreement = write_table(gate.per_assay, AgreementSchema, out_dir / f"model_gate_{name}.parquet")
 
-    per_assay = assay_metrics_table(joined, {"ours": name}, float(cfg.eval.top_percent))
-    bootstrap = BootstrapParams(
-        int(cfg.eval.bootstrap.n_resamples), float(cfg.eval.bootstrap.confidence)
-    )
-    summary = summarise(per_assay, table, bootstrap, seed_all(int(cfg.eval.bootstrap.seed)))
-    results = write_results(per_assay, summary, out_dir, f"zero_shot_{name}_single")
-
     rho, diff = gate.per_assay["spearman"], gate.per_assay["max_abs_diff"]
     typer.echo(
         f"{name} vs proteingym:{column}: {len(gate.per_assay)} assays, "
@@ -678,8 +744,100 @@ def eval_model_gate(
             f"max |diff| {record.max_abs_diff:.3g}, {record.variants} variants"
         )
     typer.echo(f"agreement: {agreement}")
-    typer.echo(f"results: {results[0]}, {results[1]}")
+    _track(
+        cfg,
+        "model-gate",
+        name,
+        fast=False,
+        metrics={
+            "assays": float(len(gate.per_assay)),
+            "variants": float(len(joined)),
+            "min_assay_spearman": float(rho.min()),
+            "max_abs_diff": float(diff.max()),
+            "assays_failing": float(len(gate.failing)),
+            "aggregate_spearman_ours": gate.ours,
+            "aggregate_spearman_theirs": gate.theirs,
+            "aggregate_delta": gate.aggregate_delta,
+        },
+        artifacts=[agreement],
+        tags={"gate_passed": str(gate.passed).lower(), "proteingym_column": column},
+    )
     if not gate.passed:
         typer.echo("error: model gate FAILED", err=True)
         raise typer.Exit(code=1)
     typer.echo("model gate passed")
+
+
+@eval_app.command("zero-shot")
+def eval_zero_shot(
+    scores_dir: Annotated[
+        Path,
+        typer.Option(
+            help="One score set: <label>/ written by `mutascope score zero-shot`.",
+            exists=True,
+            file_okay=False,
+        ),
+    ],
+    variants_dir: Annotated[
+        Path, typer.Option(help="Processed variant partitions.", exists=True, file_okay=False)
+    ],
+    reference: Reference,
+    out_dir: Annotated[Path, typer.Option(help="Results directory.")],
+    fast: Annotated[
+        bool, typer.Option("--fast", help="The score set is the wild-type marginal.")
+    ] = False,
+    config_dir: ConfigDir = Path("conf"),
+    overrides: Overrides = None,
+) -> None:
+    """Benchmark one of our zero-shot score sets (``model=<name>``, ``--fast``) on single mutants.
+
+    Writes ``zero_shot_<label>_single.parquet`` (per assay, long format) and
+    ``..._summary.parquet`` (ProteinGym-style aggregates with bootstrap CIs) to ``out_dir``,
+    and logs the aggregates to MLflow. The labels come from the processed variants, and the
+    scores must cover exactly those variants. Exits 1 if the score set is not the one the
+    config and ``--fast`` name, so results can never be tracked under the wrong revision.
+    """
+    cfg = load_config(config_dir, overrides)
+    label = run_label(str(cfg.model.name), fast=fast)
+    scores = load_scores(scores_dir)
+    if set(scores["model"]) != {label}:
+        typer.echo(
+            f"error: {scores_dir} holds {sorted(set(scores['model']))}, not {label}", err=True
+        )
+        raise typer.Exit(code=1)
+    try:
+        variants = with_labels(scores, variants_dir)
+    except ValueError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    per_assay = assay_metrics_table(variants, {"score": label}, float(cfg.eval.top_percent))
+    bootstrap = BootstrapParams(
+        int(cfg.eval.bootstrap.n_resamples), float(cfg.eval.bootstrap.confidence)
+    )
+    summary = summarise(
+        per_assay, pd.read_csv(reference), bootstrap, seed_all(int(cfg.eval.bootstrap.seed))
+    )
+    results = write_results(per_assay, summary, out_dir, f"zero_shot_{label}_single")
+    typer.echo(
+        f"{label}: {variants['assay_id'].nunique()} assays, {len(variants):,} single mutants"
+    )
+    overall = summary[summary["level"] == "overall"]
+    for record in overall.itertuples(index=False):
+        typer.echo(
+            f"  {record.metric:<10} {record.value:.4f} "
+            f"[{record.ci_low:.4f}, {record.ci_high:.4f}] ({record.n_assays} assays)"
+        )
+    typer.echo(f"results: {results[0]}, {results[1]}")
+    _track(
+        cfg,
+        "benchmark",
+        label,
+        fast=fast,
+        metrics=summary_metrics(summary, label)
+        | {
+            "assays": float(variants["assay_id"].nunique()),
+            "variants": float(len(variants)),
+        },
+        artifacts=list(results),
+        tags={"rows": "single", "kind": "zero-shot"},
+    )

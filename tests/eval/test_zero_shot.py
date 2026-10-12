@@ -11,13 +11,16 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+from mlflow.tracking import MlflowClient
 from typer.testing import CliRunner
 
 from mutascope.alphabet import AA_ORDER
 from mutascope.cli import app
+from mutascope.eval.benchmark import read_results
 from mutascope.eval.region import scoring_regions
-from mutascope.eval.zero_shot import load_scores, score_assays
+from mutascope.eval.zero_shot import load_scores, run_label, score_assays, with_labels
 from mutascope.scoring.base import FloatArray, landscape_from_log_probs, resolve_positions
+from mutascope.utils.tracking import TrackingSettings
 
 CONF = Path(__file__).parents[2] / "conf"
 TARGET = "MKVAR"
@@ -138,32 +141,157 @@ def test_an_assay_without_variants_fails(
     assert not (tmp_path / "scores").exists()
 
 
-def test_cli_scores_with_the_real_8m_model_and_resumes(
+def test_the_two_methods_of_a_model_have_different_labels(
+    processed_root: Path, reference: pd.DataFrame, tmp_path: Path
+) -> None:
+    """Results tables have no method column, so the label carries the method."""
+    assert run_label("esm2_650m", fast=False) == "esm2_650m"
+    assert run_label("esm2_650m", fast=True) == "esm2_650m_wt"
+    regions = scoring_regions(reference, "benchmark", [])
+    variants = processed_root / "processed" / "variants"
+    report = score_assays(_CachingScorer({}), reference, variants, regions, tmp_path, fast=True)
+    assert set(load_scores(tmp_path)["model"]) == {"toy_wt"}
+    assert set(report["model"]) == {"toy"} and set(report["method"]) == {"wt"}
+
+
+def test_scores_are_paired_with_labels_and_must_cover_the_same_variants(
+    processed_root: Path, reference: pd.DataFrame, tmp_path: Path
+) -> None:
+    variants = processed_root / "processed" / "variants"
+    regions = scoring_regions(reference, "benchmark", [])
+    score_assays(_CachingScorer({}), reference, variants, regions, tmp_path / "scores")
+    scores = load_scores(tmp_path / "scores")
+
+    joined = with_labels(scores, variants)
+    assert list(joined.columns) == ["assay_id", "mutant", "DMS_score", "DMS_score_bin", "score"]
+    by_key = joined.set_index(["assay_id", "mutant"])
+    assert (
+        by_key.loc[("A", "A4C"), "DMS_score"] == 1.5 and by_key.loc[("A", "A4C"), "score"] == -0.5
+    )
+    assert by_key.loc[("B", "R5W"), "DMS_score_bin"] == 0 and len(joined) == 6
+
+    with pytest.raises(ValueError, match=r"5 scores, 6 variants, unmatched \{'left_only': 1\}"):
+        with_labels(scores.iloc[1:], variants)
+    extra = scores.iloc[[0]].assign(mutant="K2W")
+    with pytest.raises(ValueError, match="right_only"):
+        with_labels(pd.concat([scores, extra], ignore_index=True), variants)
+
+
+def _tracked(store: Path) -> dict[str, tuple[dict[str, str], dict[str, float], dict[str, str]]]:
+    """Run name -> (params, metrics, tags) in a tracking store; the latest run of a name wins."""
+    settings = TrackingSettings(enabled=True, directory=store, experiment="zero-shot")
+    client = MlflowClient(tracking_uri=settings.uri)
+    experiment = client.get_experiment_by_name(settings.experiment)
+    assert experiment is not None
+    runs = client.search_runs([experiment.experiment_id], order_by=["attributes.start_time ASC"])
+    assert all(r.info.status == "FINISHED" for r in runs)
+    return {str(r.info.run_name): (r.data.params, r.data.metrics, r.data.tags) for r in runs}
+
+
+def test_cli_scores_with_the_real_8m_model_resumes_and_tracks_every_run(
     processed_root: Path, reference: pd.DataFrame, tmp_path: Path
 ) -> None:
     """``mutascope score zero-shot`` twice with one cache directory: the second invocation
-    scores nothing and writes the same scores."""
+    scores nothing and writes the same scores. ``--fast`` writes a separate score set. Then
+    ``eval zero-shot`` and ``eval model-gate`` on the results; every command logs one run."""
     ref_csv = tmp_path / "reference.csv"
     reference.to_csv(ref_csv, index=False)
-    args = ["score", "zero-shot", "--config-dir", str(CONF), "--reference", str(ref_csv)]
-    args += ["--variants-dir", str(processed_root / "processed" / "variants")]
-    args += ["--report-dir", str(tmp_path / "report"), "model=esm2_8m"]
-    args += [
+    variants = processed_root / "processed" / "variants"
+    common = ["--config-dir", str(CONF), "--reference", str(ref_csv)]
+    overrides = [
+        "model=esm2_8m",
         f"scoring.cache_dir={tmp_path / 'cache'}",
+        f"tracking.dir={tmp_path / 'mlruns'}",
         "eval.scoring_region.msa_region_assays=null",
+        "eval.bootstrap.n_resamples=200",
     ]
+    args = ["score", "zero-shot", *common, "--variants-dir", str(variants)]
+    args += ["--report-dir", str(tmp_path / "report")]
 
-    first = CliRunner().invoke(app, [*args, "--out-dir", str(tmp_path / "first")])
+    first = CliRunner().invoke(app, [*args, "--out-dir", str(tmp_path / "first"), *overrides])
     assert first.exit_code == 0, first.output
     assert "esm2_8m: 2 assays, 6 variants" in first.output
     assert "5 positions scored in 2 assays, 0 assays read from the cache" in first.output
 
-    second = CliRunner().invoke(app, [*args, "--out-dir", str(tmp_path / "second")])
+    second = CliRunner().invoke(app, [*args, "--out-dir", str(tmp_path / "second"), *overrides])
     assert second.exit_code == 0, second.output
     assert "0 positions scored in 0 assays, 2 assays read from the cache" in second.output
     assert "all runs (cache log)" in second.output and "5 positions" in second.output
 
-    a, b = load_scores(tmp_path / "first"), load_scores(tmp_path / "second")
+    a, b = load_scores(tmp_path / "first" / "esm2_8m"), load_scores(tmp_path / "second" / "esm2_8m")
     pd.testing.assert_frame_equal(a, b)
     assert np.isfinite(a["score"]).all() and a["score"].abs().max() > 0
+    assert set(a["model"]) == {"esm2_8m"}
     assert (tmp_path / "report" / "zero_shot_run_esm2_8m.parquet").exists()
+
+    # The wild-type marginal: its own directory, report and cache-log total (5 residues in one
+    # pass, not 10 with the masked run's), and different scores.
+    wt = CliRunner().invoke(
+        app, [*args, "--fast", "--out-dir", str(tmp_path / "first"), *overrides]
+    )
+    assert wt.exit_code == 0, wt.output
+    assert "esm2_8m_wt: 2 assays, 6 variants" in wt.output
+    assert "all runs (cache log)" in wt.output and "5 positions" in wt.output
+    fast = load_scores(tmp_path / "first" / "esm2_8m_wt")
+    assert set(fast["model"]) == {"esm2_8m_wt"} and not np.allclose(fast["score"], a["score"])
+    pd.testing.assert_frame_equal(load_scores(tmp_path / "first" / "esm2_8m"), a)
+    assert (tmp_path / "report" / "zero_shot_run_esm2_8m_wt.parquet").exists()
+
+    results = tmp_path / "results"
+    bench = ["eval", "zero-shot", *common, "--variants-dir", str(variants)]
+    bench += ["--out-dir", str(results)]
+    for label, flags in (("esm2_8m", []), ("esm2_8m_wt", ["--fast"])):
+        scores_dir = ["--scores-dir", str(tmp_path / "first" / label)]
+        done = CliRunner().invoke(app, [*bench, *scores_dir, *flags, *overrides])
+        assert done.exit_code == 0, done.output
+        assert f"{label}: 2 assays, 6 single mutants" in done.output
+        per_assay = read_results(results / f"zero_shot_{label}_single.parquet")
+        assert set(per_assay["model"]) == {label} and set(per_assay["assay_id"]) == {"A", "B"}
+        assert (results / f"zero_shot_{label}_single_summary.parquet").exists()
+
+    # A score set evaluated under the wrong method (so the wrong label) is refused.
+    wrong = CliRunner().invoke(
+        app, [*bench, "--scores-dir", str(tmp_path / "first" / "esm2_8m_wt"), *overrides]
+    )
+    assert wrong.exit_code == 1 and "holds ['esm2_8m_wt'], not esm2_8m" in wrong.output
+
+    # The gate against "ProteinGym's" scores: here our own masked scores under their column name.
+    column = "ESM2_8M"
+    precomputed = with_labels(a, variants).rename(columns={"score": column})
+    for assay_id, rows in precomputed.groupby("assay_id"):
+        part = tmp_path / "precomputed" / f"assay_id={assay_id}"
+        part.mkdir(parents=True)
+        rows.drop(columns="assay_id").to_parquet(part / "data.parquet")
+    gate = ["eval", "model-gate", *common, "--precomputed-dir", str(tmp_path / "precomputed")]
+    gate += ["--scores-dir", str(tmp_path / "first" / "esm2_8m"), "--out-dir", str(results)]
+    passed = CliRunner().invoke(app, [*gate, *overrides])
+    assert passed.exit_code == 0, passed.output
+    assert "model gate passed" in passed.output
+    assert (results / "model_gate_esm2_8m.parquet").exists()
+    not_masked = CliRunner().invoke(
+        app, [*gate, "--scores-dir", str(tmp_path / "first" / "esm2_8m_wt"), *overrides]
+    )
+    assert not_masked.exit_code == 1 and "not esm2_8m" in not_masked.output
+
+    runs = _tracked(tmp_path / "mlruns")
+    assert sorted(runs) == [
+        "benchmark esm2_8m",
+        "benchmark esm2_8m_wt",
+        "model-gate esm2_8m",
+        "score esm2_8m",
+        "score esm2_8m_wt",
+    ]  # the two masked scoring runs share a name; the latest is kept here
+    params, metrics, tags = runs["benchmark esm2_8m_wt"]
+    assert params["model.hf_id"] == "facebook/esm2_t6_8M_UR50D" and params["method"] == "wt"
+    assert len(params["model.revision"]) == 40 and tags["step"] == "benchmark"
+    summary = read_results(results / "zero_shot_esm2_8m_wt_single_summary.parquet")
+    overall = summary[(summary["level"] == "overall") & (summary["metric"] == "spearman")]
+    assert metrics["spearman"] == pytest.approx(overall["value"].item())
+    assert metrics["variants"] == 6 and "spearman/Stability" in metrics
+    params, metrics, tags = runs["score esm2_8m"]
+    assert params["method"] == "masked" and metrics["positions_computed"] == 0
+    assert metrics["positions_all_runs"] == 5 and metrics["model_seconds_all_runs"] > 0
+    assert runs["score esm2_8m_wt"][1]["positions_computed"] == 5
+    _, metrics, tags = runs["model-gate esm2_8m"]
+    assert tags["gate_passed"] == "true" and metrics["min_assay_spearman"] == pytest.approx(1.0)
+    assert metrics["max_abs_diff"] == 0 and metrics["aggregate_delta"] == 0

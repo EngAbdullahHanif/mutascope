@@ -1,0 +1,8 @@
+# Experiment tracking with MLflow, local only: a SQLite file and an artifact folder, no server
+# and no account (ADR 0014). Every scoring and evaluation command of our own models logs one run.
+# false skips tracking (and the mlflow import), e.g. where the `tracking` extra is not installed.
+enabled: true
+# Holds mlflow.db and artifacts/. Relative to the working directory; Nextflow passes an absolute
+# path (params.tracking_dir), because its tasks run in work directories.
+dir: mlruns
+experiment: zero-shot
