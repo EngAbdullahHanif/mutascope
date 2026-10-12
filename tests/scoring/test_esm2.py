@@ -278,6 +278,26 @@ def test_real_model_landscapes(esm2_8m: Scorer) -> None:
     assert not np.allclose(masked, fast)
 
 
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="needs Apple's MPS backend")
+def test_mps_memory_does_not_grow_with_the_number_of_sequences() -> None:
+    """Regression test: on MPS, PyTorch kept the buffers of every sequence length it had seen.
+
+    With the 8M and 35M checkpoints the memory held by the Metal driver grew by about 1.6 GiB
+    per 1,000 positions, and the 35M benchmark run died with "MPS backend out of memory" after
+    about 11,000 (build log entry 13). Before the fix, the six sequences below took the driver
+    from 1.27 to 2.75 GiB; after it, from 0.10 to 0.32 GiB. The limit is half of the old growth.
+    """
+    model_cfg = as_str_dict(OmegaConf.to_container(_cfg.model, resolve=True), "model")
+    scorer = build_scorer(model_cfg, device="mps", cache_dir=None)
+    rng = np.random.default_rng(0)
+    lengths = [200, 280, 240, 320, 220, 300]
+    driver: list[int] = []
+    for length in lengths:
+        scorer.landscape("".join(rng.choice(list(AA_ORDER), size=length)))
+        driver.append(torch.mps.driver_allocated_memory())
+    assert max(driver[1:]) - driver[0] < 0.75 * 2**30, [round(d / 2**30, 2) for d in driver]
+
+
 _release = load_release(_cfg.data)
 _SCORES = _release.raw_dir / _release.file("zero_shot_scores").extract_dirname
 _REFERENCE = _release.raw_dir / _release.file("reference").filename
