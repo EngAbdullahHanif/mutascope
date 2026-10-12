@@ -284,7 +284,7 @@ def test_mps_memory_does_not_grow_with_the_number_of_sequences() -> None:
 
     With the 8M and 35M checkpoints the memory held by the Metal driver grew by about 1.6 GiB
     per 1,000 positions, and the 35M benchmark run died with "MPS backend out of memory" after
-    about 11,000 (build log entry 13). Before the fix, the six sequences below took the driver
+    about 9,200 (build log entry 13). Before the fix, the six sequences below took the driver
     from 1.27 to 2.75 GiB; after it, from 0.10 to 0.32 GiB. The limit is half of the old growth.
     """
     model_cfg = as_str_dict(OmegaConf.to_container(_cfg.model, resolve=True), "model")
