@@ -59,16 +59,17 @@ Done when: `make pipeline` produces clean Parquet + structure features + 3Di; `m
 Goal: several pretrained models score every mutation; our numbers reproduce the ProteinGym leaderboard.
 
 ### Scorers
-- [ ] `Scorer` protocol (`scoring/base.py`) returning `(L, 20)` landscapes in `AA_ORDER`; registry
-- [ ] ESM-2 35M / 150M / 650M via Hugging Face `transformers`, pinned revisions
+- [x] `Scorer` protocol (`scoring/base.py`) returning `(L, 20)` landscapes in `AA_ORDER`; registry
+- [x] ESM-2 35M / 150M / 650M via Hugging Face `transformers`, pinned revisions (ADR 0012;
+      full landscapes for all assays not yet computed)
 - [ ] SaProt 650M (AF2): combined AA + 3Di tokens, `#` where pLDDT < 70; scoring ported from the official repo
 - [ ] [stretch] ESM-1v ensemble; ESM C 300M (check licence first)
 
 ### Scoring methods
-- [ ] Masked marginal: one masked pass per position, batched 16–32, `torch.inference_mode()`, float32 on MPS
-- [ ] Wild-type marginal (`fast=True`): one unmasked pass
-- [ ] Sliding windows for L > 1022; each position from its most central window
-- [ ] Disk cache keyed by `sha256(model_id + revision + sequence + struct_tokens)`
+- [x] Masked marginal: one masked pass per position, batched 16–32, `torch.inference_mode()`, float32 on MPS
+- [x] Wild-type marginal (`fast=True`): one unmasked pass
+- [x] Sliding windows for L > 1022; each position from its most central window
+- [x] Disk cache keyed by `sha256(model_id + revision + sequence + struct_tokens + method)`
 - [ ] Ensemble: per-assay z-score, then mean
 
 ### Benchmark harness
