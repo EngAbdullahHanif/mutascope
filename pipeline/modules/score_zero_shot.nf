@@ -31,11 +31,12 @@ process SCORE_ZERO_SHOT {
 
     script:
     def fast = method == 'wt' ? '--fast' : ''
+    def cache = params.cache_dir ? "\"scoring.cache_dir=${params.cache_dir}\"" : ''
     """
     mutascope score zero-shot --reference ${reference} --variants-dir ${variants} \\
         --three-di-dir ${three_di} --structure-features-dir ${structure_features} \\
         --out-dir zero_shot --report-dir report ${fast} \\
-        --config-dir "${params.conf_dir}" "data.data_dir=${params.data_dir}" \\
+        --config-dir "${params.conf_dir}" "data.data_dir=${params.data_dir}" ${cache} \\
         "tracking.dir=${params.tracking_dir}" "model=${model}" ${params.hydra_overrides}
     """
 }
