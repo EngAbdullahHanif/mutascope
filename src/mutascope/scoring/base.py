@@ -14,7 +14,8 @@ the cache key, so landscapes of different regions can never be confused on disk.
 ``positions`` limits the work to some residues (0-indexed in ``seq``): the benchmark needs only
 the positions an assay measured. The landscape keeps its ``(L, 20)`` shape, and a row that was
 neither requested nor scored earlier is NaN, wild-type column included, so "not scored" can
-never be read as a score. ``None`` scores every residue.
+never be read as a score. ``None`` scores every residue. An empty list scores nothing and
+returns what is already known, which is how a caller asks what is still missing.
 
 The registry maps a scorer name (``model.scorer`` in the config) to the module that implements
 it. Modules are imported only when a scorer is built, so commands that never score never pay for

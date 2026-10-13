@@ -5,3 +5,11 @@ device: auto
 # It is also the checkpoint of a scoring run (ADR 0013): keep it outside any output or Nextflow
 # work directory, so a rerun after a crash finds what was already scored.
 cache_dir: ${data.data_dir}/cache/logprobs
+# Full landscapes: masked marginals at every residue (`mutascope score landscapes`, ADR 0018).
+landscapes:
+  # Model work between two cache writes, in tokens run through the model. It is the most an
+  # interrupted run can lose: 128 passes of a 1,024-token window, about 45 s for a 650M model
+  # on MPS.
+  checkpoint_tokens: 131072
+  # The models `mutascope score check-landscapes` requires a complete landscape from.
+  models: [esm2_35m, esm2_150m, esm2_650m, saprot_650m_af2]
