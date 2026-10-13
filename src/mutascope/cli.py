@@ -47,6 +47,13 @@ from mutascope.eval.benchmark import (
 )
 from mutascope.eval.compare import paired_bootstrap_diff, shared_assays, summarise_shared
 from mutascope.eval.gate import GateThresholds, join_scores, model_gate
+from mutascope.eval.landscapes import (
+    LandscapeTarget,
+    fill_landscapes,
+    format_duration,
+    landscape_coverage,
+    landscape_targets,
+)
 from mutascope.eval.proteingym import (
     PRECOMPUTED_PREFIX,
     RowSet,
@@ -64,6 +71,8 @@ from mutascope.eval.region import (
 from mutascope.eval.schemas import (
     AgreementSchema,
     ComparisonSchema,
+    LandscapeCoverageSchema,
+    LandscapeRunSchema,
     ScoringRunSchema,
     SummarySchema,
 )
@@ -76,7 +85,7 @@ from mutascope.eval.zero_shot import (
 )
 from mutascope.export.hub import PublishError, push_dataset, stage_dataset
 from mutascope.scoring.base import build_scorer
-from mutascope.scoring.cache import LogProbCache
+from mutascope.scoring.cache import CacheError, LogProbCache
 from mutascope.scoring.ensemble import zscore_mean
 from mutascope.scoring.struct_tokens import AssayStructure, StructTokenError, load_struct_tokens
 from mutascope.utils.config import as_str_dict, load_config
@@ -712,6 +721,43 @@ def _structure_inputs(
     return structures, structure_regions(reference, structures)
 
 
+ThreeDiDir = Annotated[
+    Path | None,
+    typer.Option(help="Processed 3Di partitions (structure-aware models).", file_okay=False),
+]
+StructureFeaturesDir = Annotated[
+    Path | None,
+    typer.Option(
+        help="Processed structure-feature partitions (structure-aware models).", file_okay=False
+    ),
+]
+
+
+def _benchmark_inputs(
+    cfg: DictConfig,
+    reference: pd.DataFrame,
+    three_di_dir: Path | None,
+    structure_features_dir: Path | None,
+    config_dir: Path,
+) -> tuple[dict[str, AssayStructure] | None, dict[str, ScoringRegion]]:
+    """The configured model's structure tokens (None if sequence-only) and benchmark regions.
+
+    A sequence-only model has a region for every assay: the MSA region where it is not the
+    full target (ADR 0012). A structure-aware model has one for the assays with a structure:
+    the residues the structure models (ADR 0015).
+
+    Raises:
+        ValueError: The MSA-region assays differ from the config, or see
+            :func:`_structure_inputs`.
+    """
+    if cfg.model.get("plddt_threshold") is None:
+        # null on a subset of assays (the pipeline's test profile), like structure_exceptions.
+        configured = cfg.eval.scoring_region.msa_region_assays
+        expected = [] if configured is None else [str(a) for a in configured]
+        return None, scoring_regions(reference, "benchmark", expected)
+    return _structure_inputs(cfg, reference, three_di_dir, structure_features_dir, config_dir)
+
+
 @score_app.command("zero-shot")
 def score_zero_shot(
     reference: Reference,
@@ -725,17 +771,8 @@ def score_zero_shot(
     fast: Annotated[
         bool, typer.Option("--fast", help="Wild-type marginal instead of the masked marginal.")
     ] = False,
-    three_di_dir: Annotated[
-        Path | None,
-        typer.Option(help="Processed 3Di partitions (structure-aware models).", file_okay=False),
-    ] = None,
-    structure_features_dir: Annotated[
-        Path | None,
-        typer.Option(
-            help="Processed structure-feature partitions (structure-aware models).",
-            file_okay=False,
-        ),
-    ] = None,
+    three_di_dir: ThreeDiDir = None,
+    structure_features_dir: StructureFeaturesDir = None,
     config_dir: ConfigDir = Path("conf"),
     overrides: Overrides = None,
 ) -> None:
@@ -758,17 +795,10 @@ def score_zero_shot(
         typer.echo(f"error: {cfg.model.name} is an ensemble: use `score ensemble`", err=True)
         raise typer.Exit(code=1)
     table = pd.read_csv(reference)
-    structures: dict[str, AssayStructure] | None = None
     try:
-        if cfg.model.get("plddt_threshold") is None:
-            # null on a subset of assays (the pipeline's test profile), like structure_exceptions.
-            configured = cfg.eval.scoring_region.msa_region_assays
-            expected = [] if configured is None else [str(a) for a in configured]
-            regions = scoring_regions(table, "benchmark", expected)
-        else:
-            structures, regions = _structure_inputs(
-                cfg, table, three_di_dir, structure_features_dir, config_dir
-            )
+        structures, regions = _benchmark_inputs(
+            cfg, table, three_di_dir, structure_features_dir, config_dir
+        )
     except (ScoringRegionError, StructTokenError, ValueError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -827,6 +857,160 @@ def score_zero_shot(
         },
         artifacts=[path],
     )
+
+
+def _landscape_targets(
+    cfg: DictConfig,
+    reference: pd.DataFrame,
+    three_di_dir: Path | None,
+    structure_features_dir: Path | None,
+    config_dir: Path,
+) -> list[LandscapeTarget]:
+    """Every landscape the configured model owes: see :mod:`mutascope.eval.landscapes`."""
+    structures, regions = _benchmark_inputs(
+        cfg, reference, three_di_dir, structure_features_dir, config_dir
+    )
+    return landscape_targets(reference, regions, structures)
+
+
+@score_app.command("landscapes")
+def score_landscapes(
+    reference: Reference,
+    report_dir: Annotated[Path, typer.Option(help="Directory for landscape_run_<model>.parquet.")],
+    three_di_dir: ThreeDiDir = None,
+    structure_features_dir: StructureFeaturesDir = None,
+    config_dir: ConfigDir = Path("conf"),
+    overrides: Overrides = None,
+) -> None:
+    """Masked marginals at every residue of every assay, with the configured model.
+
+    Fills the cache entries of ``mutascope score zero-shot``: only the residues an entry lacks
+    are scored, so the scores the benchmark used stay as they are. An assay whose benchmark
+    region is part of its target (MSA region, or the residues a structure models) gets a
+    second landscape of the full target, a separate entry with the region label ``full``.
+
+    The cache (``scoring.cache_dir``) is written every ``scoring.landscapes.checkpoint_tokens``
+    of model work, also inside a long protein, so the run can be killed and started again at
+    any time. Progress and the estimated time remaining are logged after every write. The run
+    is logged to MLflow.
+    """
+    cfg = load_config(config_dir, overrides)
+    if cfg.model.get("members"):
+        typer.echo(f"error: {cfg.model.name} is an ensemble: it has no landscape", err=True)
+        raise typer.Exit(code=1)
+    table = pd.read_csv(reference)
+    try:
+        targets = _landscape_targets(cfg, table, three_di_dir, structure_features_dir, config_dir)
+    except (ScoringRegionError, StructTokenError, ValueError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    cache_dir = Path(cfg.scoring.cache_dir)
+    scorer = build_scorer(
+        as_str_dict(OmegaConf.to_container(cfg.model, resolve=True), "model"),
+        device=str(cfg.scoring.device),
+        cache_dir=cache_dir,
+    )
+    window = cfg.model.window_tokens
+    started = time.monotonic()
+    report = fill_landscapes(
+        scorer,
+        targets,
+        window_tokens=None if window is None else int(window),
+        checkpoint_tokens=int(cfg.scoring.landscapes.checkpoint_tokens),
+    )
+    wall = time.monotonic() - started
+    name = scorer.model_id
+    path = write_table(report, LandscapeRunSchema, report_dir / f"landscape_run_{name}.parquet")
+    extra = report[~report["benchmark"]]
+    computed = int(report["positions_computed"].sum())
+    typer.echo(
+        f"{name}: {len(report)} complete landscapes of {report['assay_id'].nunique()} assays "
+        f"({len(extra)} full-target landscapes beside a partial benchmark region)"
+    )
+    if report["assay_id"].nunique() < len(table):
+        missing = len(table) - report["assay_id"].nunique()
+        typer.echo(f"no landscape (no structure): {missing} assays")
+    typer.echo(f"this run: {format_duration(wall)}; {computed:,} positions scored")
+    typer.echo(f"report: {path}")
+    _track(
+        cfg,
+        "landscapes",
+        name,
+        fast=False,
+        metrics={
+            "assays": float(report["assay_id"].nunique()),
+            "landscapes": float(len(report)),
+            "full_target_landscapes": float(len(extra)),
+            # This invocation only: 0 positions when the landscapes were complete already.
+            "positions_computed": float(computed),
+            "wall_seconds": wall,
+        },
+        artifacts=[path],
+    )
+
+
+@score_app.command("check-landscapes")
+def score_check_landscapes(
+    reference: Reference,
+    out: Annotated[Path, typer.Option(help="Output Parquet file: one row per landscape.")],
+    three_di_dir: ThreeDiDir = None,
+    structure_features_dir: StructureFeaturesDir = None,
+    config_dir: ConfigDir = Path("conf"),
+    overrides: Overrides = None,
+) -> None:
+    """Fail unless every model in ``scoring.landscapes.models`` has every landscape complete.
+
+    For each model and each of its assays: the benchmark-region landscape, and the full-target
+    one where that differs, must hold all 20 values at every residue in the cache
+    (``scoring.cache_dir``). No model is loaded. A structure-aware model is checked on the
+    assays with a structure. Writes the coverage table whether or not the check passes.
+    """
+    base = [o for o in overrides or [] if not o.startswith("model=")]
+    cfg = load_config(config_dir, base)
+    table = pd.read_csv(reference)
+    cache = LogProbCache(Path(cfg.scoring.cache_dir))
+    frames: list[pd.DataFrame] = []
+    try:
+        for name in cfg.scoring.landscapes.models:
+            model_cfg = load_config(config_dir, [*base, f"model={name}"])
+            targets = _landscape_targets(
+                model_cfg, table, three_di_dir, structure_features_dir, config_dir
+            )
+            frames.append(
+                landscape_coverage(
+                    cache,
+                    targets,
+                    model=str(model_cfg.model.name),
+                    hf_id=str(model_cfg.model.hf_id),
+                    revision=str(model_cfg.model.revision),
+                )
+            )
+        if not frames:
+            raise ValueError("scoring.landscapes.models is empty")
+    except (ScoringRegionError, StructTokenError, CacheError, ValueError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    coverage = pd.concat(frames, ignore_index=True)
+    path = write_table(coverage, LandscapeCoverageSchema, out)
+    for model, rows in coverage.groupby("model", sort=False):
+        typer.echo(
+            f"{model}: {int(rows['complete'].sum())}/{len(rows)} landscapes complete "
+            f"({rows['assay_id'].nunique()} assays, {int((~rows['benchmark']).sum())} "
+            f"full-target beside a partial benchmark region), "
+            f"{int(rows['positions_scored'].sum()):,}/{int(rows['region_length'].sum()):,} residues"
+        )
+    typer.echo(f"coverage: {path}")
+    incomplete = coverage[~coverage["complete"]]
+    if len(incomplete):
+        for row in incomplete.head(20).itertuples():
+            typer.echo(
+                f"  incomplete: {row.model} {row.assay_id} ({row.region}): "
+                f"{row.positions_scored}/{row.region_length}",
+                err=True,
+            )
+        typer.echo(f"FAIL: {len(incomplete)} of {len(coverage)} landscapes incomplete", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"PASS: all {len(coverage)} landscapes are complete (L, 20) arrays")
 
 
 @score_app.command("ensemble")
