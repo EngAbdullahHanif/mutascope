@@ -428,3 +428,37 @@ and exclude merge commits.
   `results/zero_shot/shared_summary.parquet` (90 rows: 3 score sets),
   `results/zero_shot/comparisons.parquet` (240 rows: 8 pairs), `results/figures/*.{svg,png}`
   (4 figures).
+
+## Step 17 — Phase 2 close-out (Phase 2, 2026-10-13)
+
+- **What this step did:** reviewed the Phase 2 checklist against the repository, recorded what is
+  open or weak, summarised Phase 2 with its headline table, and pointed the project at Phase 3
+  (ADR 0017). No code changed and no number in `results/` changed.
+- **Files created or modified:**
+
+| Path | What it does | Why it exists |
+|---|---|---|
+| `docs/adr/0017-phase-2-close.md` | Headline table (8 score sets, per function type, CIs, assay counts), paired comparisons, gate results, open and weak items, what Phase 3 inherits | One-page phase summary, as ADR 0009 was for Phase 1 |
+| `CLAUDE.md` | Current phase → Phase 3, with what Phase 2 delivered and the one open item | Created in step 1; the section is updated at the start of each phase |
+| `docs/ROADMAP.md` | Full-landscape item now counts SaProt's 28,886 residues beside ESM-2's 24,918 and is linked from the Phase 4 export; close note under Phase 2 | The item named only the ESM-2 figure; the export depends on it |
+| `README.md` | Status line → Phase 3, link to ADR 0017 | The line named Phase 2 |
+| `docs/BUILD_LOG.md`, `docs/PROJECT_MAP.md` | Entry 17; this step | Journal and index |
+
+- **CLI commands added:** none.
+- **Outputs:** none. The audit read `results/*.parquet`, `results/zero_shot/*.parquet` and the
+  log-probability cache, and reran `make lint test` and `make test-slow`.
+
+## Where Phase 2 left things
+
+A map of what exists after steps 9–17, by the question it answers.
+
+| Question | Where to look |
+|---|---|
+| What does a model score, and how? | `src/mutascope/scoring/` (`base.py` protocol, `masked_lm.py`, `esm2.py`, `saprot.py`, `windows.py`, `struct_tokens.py`, `ensemble.py`, `cache.py`); ADRs 0012, 0013, 0015, 0016 |
+| How is a score set benchmarked? | `src/mutascope/eval/` (`metrics.py`, `aggregate.py`, `benchmark.py`, `zero_shot.py`, `region.py`); ADR 0011 |
+| How are two score sets compared? | `src/mutascope/eval/compare.py`, `conf/eval/proteingym.yaml` (`comparisons`, `shared_summary`); ADR 0014 |
+| How do we know the numbers are right? | `tests/test_reproduction.py`, `src/mutascope/eval/gate.py`, `conf/eval/model_gate.yaml`, `results/model_gate_*.parquet`; ADRs 0010, 0015 |
+| Which models, at which revisions? | `conf/model/*.yaml` |
+| Where are the numbers? | `results/zero_shot_<label>_single{,_summary}.parquet`, `results/zero_shot/{comparisons,shared_summary}.parquet`, `results/figures/`; summary in ADR 0017 |
+| What runs in the pipeline, and what by hand? | `pipeline/main.nf` runs `SCORE_ZERO_SHOT` and `BENCHMARK_ZERO_SHOT` per model and method. `score ensemble`, `eval compare`, `eval shared`, `eval figures` and the model gate are run by hand |
+| What is not in git? | `data/cache/logprobs/` (cache and checkpoint), `data/processed/zero_shot/` (score sets), `mlruns/` (MLflow store) |
