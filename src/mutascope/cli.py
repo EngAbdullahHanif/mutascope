@@ -90,11 +90,22 @@ from mutascope.eval.zero_shot import (
 )
 from mutascope.export.hub import PublishError, push_dataset, stage_dataset
 from mutascope.features.base import build_features
+from mutascope.features.embeddings import fill_embeddings, hidden_size
+from mutascope.features.schemas import EmbeddingRunSchema, FeatureStoreReportSchema
+from mutascope.features.sets import FeatureSetError, assays_of, feature_sets, width
+from mutascope.features.store import (
+    FeatureStoreError,
+    ModelSource,
+    build_store,
+    measured_keys,
+    read_structure_features,
+)
 from mutascope.models.cv import CrossValidationError, cv_metrics_table
 from mutascope.models.registry import model_factory
 from mutascope.scoring.base import build_scorer
 from mutascope.scoring.cache import CacheError, LogProbCache
 from mutascope.scoring.ensemble import zscore_mean
+from mutascope.scoring.masked_lm import MaskedLMScorer
 from mutascope.scoring.struct_tokens import AssayStructure, StructTokenError, load_struct_tokens
 from mutascope.utils.config import as_str_dict, load_config
 from mutascope.utils.io import write_table
@@ -115,6 +126,8 @@ score_app = typer.Typer(help="Score variants with zero-shot models.", no_args_is
 app.add_typer(score_app, name="score")
 train_app = typer.Typer(help="Cross-validate supervised models.", no_args_is_help=True)
 app.add_typer(train_app, name="train")
+features_app = typer.Typer(help="Build per-variant features.", no_args_is_help=True)
+app.add_typer(features_app, name="features")
 
 ConfigDir = Annotated[
     Path,
@@ -1726,3 +1739,197 @@ def eval_figures(
     except FigureDataError as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
+
+
+@features_app.command("embed")
+def features_embed(
+    reference: Reference,
+    report_dir: Annotated[Path, typer.Option(help="Directory for embedding_run_<model>.parquet.")],
+    three_di_dir: ThreeDiDir = None,
+    structure_features_dir: StructureFeaturesDir = None,
+    config_dir: ConfigDir = Path("conf"),
+    overrides: Overrides = None,
+) -> None:
+    """Per-residue embeddings of every landscape of the configured model (``model=<name>``).
+
+    One unmasked pass per distinct sequence, region and structure-token string (assays of one
+    protein share it): the benchmark region of every assay, and the full target where that
+    region is only part of it, as for ``score landscapes``. The embedding of a residue is the
+    mean of the last ``features.embedding_layers`` hidden states (ADR 0020). Each pass is
+    written to ``features.embedding_cache_dir`` before the next starts, so a rerun computes
+    only what is missing. Logged to MLflow in the ``features.experiment`` experiment.
+    """
+    cfg = load_config(config_dir, overrides)
+    if cfg.model.get("members"):
+        typer.echo(f"error: {cfg.model.name} is an ensemble: it has no embedding", err=True)
+        raise typer.Exit(code=1)
+    table = pd.read_csv(reference)
+    try:
+        targets = _landscape_targets(cfg, table, three_di_dir, structure_features_dir, config_dir)
+    except (ScoringRegionError, StructTokenError, ValueError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    scorer = build_scorer(
+        as_str_dict(OmegaConf.to_container(cfg.model, resolve=True), "model"),
+        device=str(cfg.scoring.device),
+        cache_dir=None,
+    )
+    if not isinstance(scorer, MaskedLMScorer):
+        typer.echo(f"error: {cfg.model.name} is not a masked language model", err=True)
+        raise typer.Exit(code=1)
+    layers = int(cfg.features.embedding_layers)
+    cache = LogProbCache(Path(cfg.features.embedding_cache_dir), width=hidden_size(scorer))
+    started = time.monotonic()
+    report = fill_embeddings(scorer, cache, targets, layers=layers)
+    wall = time.monotonic() - started
+    name = scorer.model_id
+    path = write_table(report, EmbeddingRunSchema, report_dir / f"embedding_run_{name}.parquet")
+    computed = report[report["computed"]]
+    entries = {t.entry for t in targets}
+    typer.echo(
+        f"{name}: {len(report)} landscapes of {report['assay_id'].nunique()} assays, "
+        f"{len(entries)} distinct sequences (one pass each), width {cache.width}"
+    )
+    typer.echo(
+        f"this run: {format_duration(wall)}; {len(computed)} passes over "
+        f"{int(computed['region_length'].sum()):,} residues "
+        f"({float(computed['seconds'].sum()):.0f} s of model time)"
+    )
+    typer.echo(f"report: {path}")
+    _log_run(
+        cfg,
+        "embed",
+        name,
+        {
+            "model.name": name,
+            "model.hf_id": str(cfg.model.hf_id),
+            "model.revision": str(cfg.model.revision),
+            "features.embedding_layers": layers,
+        },
+        {
+            "assays": float(report["assay_id"].nunique()),
+            "landscapes": float(len(report)),
+            "cache_entries": float(len(entries)),
+            # This invocation only: 0 passes when every embedding was cached already.
+            "passes": float(len(computed)),
+            "residues_computed": float(computed["region_length"].sum()),
+            "model_seconds": float(computed["seconds"].sum()),
+            "wall_seconds": wall,
+        },
+        [path],
+        {"model": name, "kind": "embedding"},
+        experiment=str(cfg.features.experiment),
+    )
+
+
+@features_app.command("build")
+def features_build(
+    reference: Reference,
+    variants_dir: Annotated[
+        Path,
+        typer.Option(
+            help="Processed variant partitions (keys only are read).", exists=True, file_okay=False
+        ),
+    ],
+    three_di_dir: Annotated[
+        Path, typer.Option(help="Processed 3Di partitions.", exists=True, file_okay=False)
+    ],
+    structure_features_dir: Annotated[
+        Path,
+        typer.Option(help="Processed structure-feature partitions.", exists=True, file_okay=False),
+    ],
+    out_dir: Annotated[Path, typer.Option(help="The feature store (replaced whole).")],
+    report: Annotated[Path, typer.Option(help="Output Parquet file: one row per assay.")],
+    config_dir: ConfigDir = Path("conf"),
+    overrides: Overrides = None,
+) -> None:
+    """Write every possible substitution of every target with its features (ADR 0020).
+
+    No model is loaded and no label is read. Scores and log-probabilities come from
+    ``scoring.cache_dir`` (``score check-landscapes`` must pass), embeddings from
+    ``features.embedding_cache_dir`` (``features embed``), structure features from the
+    processed tables. Fails, writing nothing, if any input is missing or a measured variant
+    is not in the store with the same wild type.
+    """
+    base = [o for o in overrides or [] if not o.startswith("model=")]
+    cfg = load_config(config_dir, base)
+    table = pd.read_csv(reference)
+    started = time.monotonic()
+    try:
+        sets = feature_sets(
+            as_str_dict(OmegaConf.to_container(cfg.features.sets, resolve=True), "features.sets")
+        )
+        models = [str(m) for m in cfg.features.models]
+        unknown = sorted({m for s in sets.values() for m in s.models} - set(models))
+        if unknown:
+            raise FeatureSetError(f"feature sets use {unknown}, which features.models lacks")
+        sources: list[ModelSource] = []
+        for name in models:
+            model_cfg = load_config(config_dir, [*base, f"model={name}"])
+            targets = _landscape_targets(
+                model_cfg, table, three_di_dir, structure_features_dir, config_dir
+            )
+            by_assay: dict[str, list[LandscapeTarget]] = {}
+            for target in targets:
+                by_assay.setdefault(target.assay_id, []).append(target)
+            sources.append(
+                ModelSource(
+                    name=str(model_cfg.model.name),
+                    hf_id=str(model_cfg.model.hf_id),
+                    revision=str(model_cfg.model.revision),
+                    targets=by_assay,
+                    embedding_cache=LogProbCache(Path(cfg.features.embedding_cache_dir), None),
+                    embedding_layers=int(cfg.features.embedding_layers),
+                )
+            )
+        store = build_store(
+            table,
+            sources,
+            LogProbCache(Path(cfg.scoring.cache_dir)),
+            read_structure_features(structure_features_dir),
+            measured_keys(variants_dir),
+            out_dir,
+        )
+    except (
+        FeatureSetError,
+        FeatureStoreError,
+        ScoringRegionError,
+        StructTokenError,
+        CacheError,
+        ValueError,
+    ) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    wall = time.monotonic() - started
+    path = write_table(store, FeatureStoreReportSchema, report)
+    typer.echo(
+        f"{len(store)} assays, {int(store['variants'].sum()):,} variants "
+        f"({int(store['measured'].sum()):,} measured), {int(store['target_length'].sum()):,} "
+        f"residues -> {out_dir}"
+    )
+    for part in ("variants", "positions", "arrays"):
+        size = sum(f.stat().st_size for f in (out_dir / part).rglob("*") if f.is_file())
+        typer.echo(f"  {part:<9} {size / 1e6:,.1f} MB")
+    typer.echo(f"  total     {int(store['bytes'].sum()) / 1e6:,.1f} MB, built in {wall:.0f} s")
+    hidden = {s.name: _embedding_width(out_dir, store, s.name) for s in sources}
+    structured = set(store.loc[store["structure"], "assay_id"])
+    for feature_set in sets.values():
+        assays = assays_of(feature_set, store["assay_id"].tolist(), structured)
+        rows = int(store.set_index("assay_id").loc[assays, "variants"].sum())
+        columns = width(feature_set, hidden)
+        typer.echo(
+            f"  set {feature_set.name}: {len(assays)} assays, {rows:,} variants x {columns:,} "
+            f"features ({rows * columns * 4 / 1e9:.1f} GB if assembled at once in float32)"
+        )
+    typer.echo(f"report: {path}")
+
+
+def _embedding_width(store_dir: Path, store: pd.DataFrame, model: str) -> int:
+    """Width of ``model``'s embeddings, read from the store; the same in every assay."""
+    widths = {
+        int(np.load(p, mmap_mode="r").shape[1])
+        for p in (store_dir / "arrays").glob(f"*/{model}.embedding.npy")
+    }
+    if len(widths) != 1:
+        raise FeatureStoreError(f"{model}: embedding widths {sorted(widths)} in the store")
+    return widths.pop()
