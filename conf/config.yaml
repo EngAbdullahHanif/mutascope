@@ -7,5 +7,6 @@ defaults:
   - model: esm2_650m
   - scoring: default
   - train: default
+  - features: default
   - tracking: default
   - _self_

@@ -1,0 +1,28 @@
+# Per-variant features for the supervised models (`mutascope features embed|build`, ADR 0020).
+# Zero-shot models whose scores, log-probabilities and embeddings go into the store. Names are
+# conf/model/*.yaml; their log-probabilities are read from scoring.cache_dir.
+models: [esm2_650m, saprot_650m_af2]
+# Embedding of residue i: mean of the last `embedding_layers` hidden states at token i + 1, from
+# one unmasked pass over the wild-type sequence (the last one is after the final LayerNorm).
+embedding_layers: 4
+# Embedding cache: one entry per (model, sequence, structure tokens, region), written once per
+# pass. Like scoring.cache_dir it is the checkpoint of a run: keep it outside any output dir.
+embedding_cache_dir: ${data.data_dir}/cache/embeddings
+# The store: variants/, positions/ and arrays/, partitioned by assay_id.
+store_dir: ${data.processed_dir}/features
+# MLflow experiment for `features embed` runs.
+experiment: features
+# Feature sets by name (mutascope.features.sets). Blocks: onehot, blosum62, rel_position,
+# structure, <model>:score, <model>:log_probs, <model>:embedding. structure: true = defined only
+# on the assays with a structure (213 of 217; ADR 0003).
+sets:
+  seq:
+    structure: false
+    blocks: [onehot, blosum62, rel_position,
+             esm2_650m:score, esm2_650m:log_probs, esm2_650m:embedding]
+  seq_struct:
+    structure: true
+    blocks: [onehot, blosum62, rel_position,
+             esm2_650m:score, esm2_650m:log_probs, esm2_650m:embedding,
+             saprot_650m_af2:score, saprot_650m_af2:log_probs, saprot_650m_af2:embedding,
+             structure]
