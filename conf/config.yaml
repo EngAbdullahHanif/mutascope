@@ -6,5 +6,6 @@ defaults:
   - eval: proteingym
   - model: esm2_650m
   - scoring: default
+  - train: default
   - tracking: default
   - _self_

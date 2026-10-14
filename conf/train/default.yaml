@@ -1,0 +1,10 @@
+# Supervised cross-validation (`mutascope train cv`, ADR 0019). Per assay and scheme, each of
+# ProteinGym's folds is predicted by `model` trained on the other folds, using `feature_set`.
+# Names are keys of mutascope.models.registry.MODELS and mutascope.features.base.FEATURE_SETS.
+model: training_mean
+feature_set: none
+# ProteinGym's three schemes (fold_random_5, fold_modulo_5, fold_contiguous_5). Report all three.
+schemes: [random, modulo, contiguous]
+seed: 0
+# MLflow experiment for supervised runs, next to tracking.experiment (zero-shot).
+experiment: supervised
