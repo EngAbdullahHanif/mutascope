@@ -119,6 +119,51 @@ class CleaningReportSchema(pa.DataFrameModel):
         return (df["rows_in"] == df["rows_out"] + dropped).astype(bool)
 
 
+CV_SCHEMES = ("random", "modulo", "contiguous")
+"""ProteinGym's supervised CV schemes; the fold column of scheme ``s`` is ``fold_<s>``."""
+
+
+class FoldAssignmentSchema(pa.DataFrameModel):
+    """ProteinGym's CV fold of each processed single mutant, one row per (assay, mutant), and
+    one fold per scheme (ADR 0019).
+
+    Keys only: scores and labels are read from :class:`ProcessedVariantSchema` (ADR 0005), so
+    the two tables join on ``(assay_id, mutant)``. ``position`` is carried to check the
+    position-based schemes: modulo and contiguous folds hold whole positions, and contiguous
+    folds are ordered along the sequence.
+    """
+
+    assay_id: Series[str]
+    mutant: Series[str] = pa.Field(str_matches=_SINGLE_FULL)
+    position: Series[int] = pa.Field(ge=0)
+    fold_random: Series[int] = pa.Field(isin=[0, 1, 2, 3, 4])
+    fold_modulo: Series[int] = pa.Field(isin=[0, 1, 2, 3, 4])
+    fold_contiguous: Series[int] = pa.Field(isin=[0, 1, 2, 3, 4])
+
+    class Config:  # pyright: ignore[reportIncompatibleVariableOverride]
+        strict = True
+        ordered = True
+        unique = ["assay_id", "mutant"]  # noqa: RUF012 — pandera reads this class attribute
+
+    @pa.dataframe_check  # pyright: ignore[reportUnknownMemberType] — untyped in pandera
+    @classmethod
+    def position_schemes_hold_whole_positions(cls, df: pd.DataFrame) -> "pd.Series[bool]":
+        """Every variant at a position has the same modulo fold and the same contiguous fold."""
+        groups = df.groupby(["assay_id", "position"])
+        same = (groups["fold_modulo"].transform("nunique") == 1) & (
+            groups["fold_contiguous"].transform("nunique") == 1
+        )
+        return same.astype(bool)
+
+    @pa.dataframe_check  # pyright: ignore[reportUnknownMemberType] — untyped in pandera
+    @classmethod
+    def contiguous_folds_are_ordered(cls, df: pd.DataFrame) -> "pd.Series[bool]":
+        """Along the sequence, the contiguous fold never decreases (fold 0 is the N-terminus)."""
+        ordered = df.sort_values(["assay_id", "position"], kind="stable")
+        steps = ordered.groupby("assay_id")["fold_contiguous"].diff().fillna(0)
+        return (steps >= 0).reindex(df.index).astype(bool)
+
+
 THREE_DI_ALPHABET = AA_ORDER
 """Foldseek's 20 3Di states are written with the same 20 letters as the amino acids."""
 

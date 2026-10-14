@@ -128,6 +128,16 @@ def top_recall(
     return float(np.sum(true_top & model_top) / np.sum(true_top))
 
 
+SUPERVISED_METRICS: Final = ("spearman", "mse")
+"""What ProteinGym reports for supervised models (``merge_supervised.py``; ADR 0019)."""
+
+
+def mse(y_true: FloatArray, y_pred: FloatArray) -> float:
+    """Mean squared error, as ProteinGym's ``merge_supervised.py`` computes it."""
+    _check(y_true, y_pred)
+    return float(np.mean((y_true - y_pred) ** 2))
+
+
 def assay_metrics(
     y_true: FloatArray,
     y_bin: IntArray,
