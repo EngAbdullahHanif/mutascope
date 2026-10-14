@@ -127,7 +127,7 @@ The six SaProt entries over 2,000 residues took 19,317 s, 75% of its time; the f
 3,423-residue ZIKV target alone took 4,938 s (1.44 s per position).
 
 **Interruptions.** The run was stopped four times: once on purpose to test resuming
-(`SIGKILL` 75 s into ESM-2 35M), and three times because the laptop had to be shut down
+(`SIGKILL` 75 s into ESM-2 35M), and three times on request (the first for a flat battery)
 (150M at 20,289 of 36,734; 650M at 12,201, then at 19,072 of the 24,533 left). Each restart
 planned exactly the remainder (35,818; 16,445; 24,533; 5,461 positions), and the positions in
 the cache log add up to exactly the missing count for every model: no residue was scored twice,

@@ -1423,7 +1423,7 @@ the few proteins where the benchmark scores only part of the sequence (five for 
 SaProt), each model also scored the whole protein, stored separately and labelled `full`, so
 the benchmark's version and the website's version never mix. The scores the benchmark already
 used were not touched: every one of them is bit-identical afterwards, and the model gates pass
-as before. The run had to be stopped three times because the laptop had to be shut down, and
+as before. The run had to be stopped three times on request, and
 each restart continued exactly where it left off. A new command checks, without loading any
 model, that all 882 landscapes are complete.
 
@@ -1450,8 +1450,8 @@ model, that all 882 landscapes are complete.
 
 **Problems encountered and how they were solved.**
 
-1. **The laptop had to be shut down three times mid-run.** *Found:* the user had to stop the
-   run (low battery, then twice more for the laptop). *What happened:* stops at ESM-2 150M
+1. **The run had to be stopped three times.** *Found:* the author asked for it to stop (once for
+   a flat laptop battery, twice more at set times). *What happened:* stops at ESM-2 150M
    20,289 of 36,734 positions, ESM-2 650M 12,201 of 36,734 and then 19,072 of the 24,533 left.
    *Fix:* none needed; each restart was the same command. *Verified:* the restarts planned
    16,445, 24,533 and 5,461 positions, exactly the remainders; no `*.tmp` file was left; the
