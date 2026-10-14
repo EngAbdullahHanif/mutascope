@@ -5,7 +5,7 @@ Every pipeline step is a command here; Nextflow only ever calls these commands.
 
 import csv
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Annotated
 
@@ -19,9 +19,11 @@ from mutascope import __version__
 from mutascope.data.clean import clean_dataset
 from mutascope.data.db import connect
 from mutascope.data.download import DownloadError, fetch_release
+from mutascope.data.folds import FoldJoinError, build_folds, load_cv_table
 from mutascope.data.manifest import Manifest
 from mutascope.data.release import load_release
 from mutascope.data.report import write_report
+from mutascope.data.schemas import CV_SCHEMES
 from mutascope.data.staging import SubsetError, link_release, subset_release
 from mutascope.data.structure_features import (
     FeatureParams,
@@ -37,6 +39,7 @@ from mutascope.data.structure_report import (
 from mutascope.data.structures import StructureCheck, StructureMappingError, map_structures
 from mutascope.data.three_di import FoldseekConfig, FoldseekError, build_three_di, check_foldseek
 from mutascope.data.validate import VariantValidationError, check_assays
+from mutascope.eval.aggregate import AssayGroups, aggregate
 from mutascope.eval.benchmark import (
     BootstrapParams,
     assay_metrics_table,
@@ -54,6 +57,7 @@ from mutascope.eval.landscapes import (
     landscape_coverage,
     landscape_targets,
 )
+from mutascope.eval.metrics import SUPERVISED_METRICS
 from mutascope.eval.proteingym import (
     PRECOMPUTED_PREFIX,
     RowSet,
@@ -75,6 +79,7 @@ from mutascope.eval.schemas import (
     LandscapeRunSchema,
     ScoringRunSchema,
     SummarySchema,
+    SupervisedMetricSchema,
 )
 from mutascope.eval.zero_shot import (
     load_scores,
@@ -84,6 +89,9 @@ from mutascope.eval.zero_shot import (
     write_scores,
 )
 from mutascope.export.hub import PublishError, push_dataset, stage_dataset
+from mutascope.features.base import build_features
+from mutascope.models.cv import CrossValidationError, cv_metrics_table
+from mutascope.models.registry import model_factory
 from mutascope.scoring.base import build_scorer
 from mutascope.scoring.cache import CacheError, LogProbCache
 from mutascope.scoring.ensemble import zscore_mean
@@ -105,6 +113,8 @@ eval_app = typer.Typer(help="Benchmark predictions against DMS assays.", no_args
 app.add_typer(eval_app, name="eval")
 score_app = typer.Typer(help="Score variants with zero-shot models.", no_args_is_help=True)
 app.add_typer(score_app, name="score")
+train_app = typer.Typer(help="Cross-validate supervised models.", no_args_is_help=True)
+app.add_typer(train_app, name="train")
 
 ConfigDir = Annotated[
     Path,
@@ -184,11 +194,14 @@ def _log_run(
     metrics: dict[str, float],
     artifacts: list[Path],
     tags: dict[str, str],
+    *,
+    experiment: str | None = None,
 ) -> None:
     """Log one command's run to the local MLflow store (``tracking`` config; ADR 0014).
 
     Called after the command has written its outputs, so a tracking failure loses no result;
     it still exits 1, because an untracked run must not look like a tracked one.
+    ``experiment`` replaces ``tracking.experiment`` (supervised runs have their own).
     """
     run = TrackedRun(
         name=f"{step} {subject}",
@@ -205,6 +218,8 @@ def _log_run(
     settings = TrackingSettings.from_config(
         as_str_dict(OmegaConf.to_container(cfg.tracking, resolve=True), "tracking")
     )
+    if experiment is not None:
+        settings = replace(settings, experiment=experiment)
     try:
         run_id = log_run(settings, run)
     except TrackingError as exc:
@@ -547,6 +562,118 @@ def data_publish(
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(f"pushed -> {url}")
+
+
+@data_app.command("folds")
+def data_folds(
+    variants_dir: Annotated[
+        Path, typer.Option(help="Processed variant partitions.", exists=True, file_okay=False)
+    ],
+    folds_dir: Annotated[
+        Path,
+        typer.Option(
+            help="ProteinGym's cv_folds_singles_substitutions directory.",
+            exists=True,
+            file_okay=False,
+        ),
+    ],
+    out_dir: Annotated[Path, typer.Option(help="Output dir for assay_id=<id>/ partitions.")],
+    config_dir: ConfigDir = Path("conf"),
+    overrides: Overrides = None,
+) -> None:
+    """Join ProteinGym's CV folds to the processed variants on ``(assay_id, mutant)``.
+
+    Every variant must get exactly one fold per scheme (random, modulo, contiguous), and the
+    fold files must hold no other mutant; any mismatch fails with every offending assay and
+    nothing is written. Only keys and folds are written: labels stay in the variants table
+    (ADR 0005, ADR 0019).
+    """
+    _accept_overrides(config_dir, overrides)
+    try:
+        report = build_folds(variants_dir, folds_dir, out_dir)
+    except FoldJoinError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"{len(report)} assays, {int(report['variants'].sum()):,} variants -> {out_dir}")
+    for scheme in CV_SCHEMES:
+        counts = report[f"folds_{scheme}"].value_counts().sort_index()
+        summary = ", ".join(f"{n} assays with {k} folds" for k, n in counts.items())
+        typer.echo(f"  {scheme}: {summary}")
+
+
+@train_app.command("cv")
+def train_cv(
+    variants_dir: Annotated[
+        Path, typer.Option(help="Processed variant partitions.", exists=True, file_okay=False)
+    ],
+    folds_dir: Annotated[
+        Path,
+        typer.Option(help="Fold partitions (`data folds`).", exists=True, file_okay=False),
+    ],
+    reference: Reference,
+    out_dir: Annotated[Path, typer.Option(help="Results directory.")],
+    config_dir: ConfigDir = Path("conf"),
+    overrides: Overrides = None,
+) -> None:
+    """Cross-validate ``train.model`` on ``train.feature_set`` in every assay (ADR 0019).
+
+    Per assay and scheme, each fold is predicted by a model trained on the others. Writes
+    ``cv_<model>_<feature_set>.parquet`` to ``out_dir``: Spearman and MSE over the pooled
+    out-of-fold predictions (``fold`` null, ProteinGym's number) and per fold. Prints the
+    ProteinGym-style aggregate of the pooled values per scheme (no CI yet), and logs the run
+    to MLflow in the ``train.experiment`` experiment.
+    """
+    cfg = load_config(config_dir, overrides)
+    model, feature_set = str(cfg.train.model), str(cfg.train.feature_set)
+    schemes = [str(s) for s in cfg.train.schemes]
+    unknown = sorted(set(schemes) - set(CV_SCHEMES))
+    if unknown:
+        typer.echo(f"error: train.schemes: unknown {unknown}; use {list(CV_SCHEMES)}", err=True)
+        raise typer.Exit(code=1)
+    seed_all(int(cfg.train.seed))
+    try:
+        make_model = model_factory(model)
+        data = load_cv_table(variants_dir, folds_dir)
+        features = build_features(feature_set, data)
+        per_assay = cv_metrics_table(
+            data, features, make_model, model=model, feature_set=feature_set, schemes=schemes
+        )
+    except (KeyError, FoldJoinError, CrossValidationError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    path = write_table(
+        per_assay, SupervisedMetricSchema, out_dir / f"cv_{model}_{feature_set}.parquet"
+    )
+    assays = sorted(set(per_assay["assay_id"]))
+    typer.echo(f"{model} on {feature_set}: {len(assays)} assays, {len(data):,} variants")
+    groups = AssayGroups.from_reference(pd.read_csv(reference), assays)
+    pooled = per_assay[per_assay["fold"].isna()]
+    undefined: dict[str, float] = {}
+    for scheme in schemes:
+        for metric in SUPERVISED_METRICS:
+            values = (
+                pooled[(pooled["scheme"] == scheme) & (pooled["metric"] == metric)]
+                .set_index("assay_id")
+                .loc[assays, "value"]
+                .to_numpy(np.float64)
+            )
+            n_nan = int(np.isnan(values).sum())
+            undefined[f"undefined.{scheme}.{metric}"] = float(n_nan)
+            typer.echo(
+                f"  {scheme:<10} {metric:<8} {aggregate(values, groups).overall:.4f} "
+                f"({len(assays) - n_nan} assays defined)"
+            )
+    typer.echo(f"results: {path}")
+    _log_run(
+        cfg,
+        "cross-validate",
+        f"{model} {feature_set}",
+        {"train.model": model, "train.feature_set": feature_set, "train.schemes": schemes},
+        {"assays": float(len(assays)), "variants": float(len(data))} | undefined,
+        [path],
+        {"model": model, "feature_set": feature_set, "kind": "supervised"},
+        experiment=str(cfg.train.experiment),
+    )
 
 
 @eval_app.command("precomputed")
