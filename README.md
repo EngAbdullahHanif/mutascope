@@ -45,6 +45,13 @@ DOWNLOAD -> [SUBSET] -> VALIDATE -> CLEAN, STRUCT_FEATURES, FOLDSEEK_3DI -> STRU
   `mutascope eval compare` compares it with ESM-2 650M on those 213.
 - `BENCHMARK_ZERO_SHOT` turns each score set into `results/zero_shot_<label>_single.parquet`
   (per assay) and `..._summary.parquet` (ProteinGym-style aggregates with bootstrap CIs).
+- `LANDSCAPES` then fills in every residue of every assay, once per model, in the same cache
+  (`mutascope score landscapes`), and `CHECK_LANDSCAPES` fails unless every landscape is a
+  complete `(L, 20)` array (`mutascope score check-landscapes`, no model loaded). An assay whose
+  benchmark region is part of its target (five MSA-region assays for ESM-2, three
+  partial-structure assays for SaProt) also gets a full-target landscape, labelled `full`
+  ([ADR 0018](docs/adr/0018-full-landscapes.md)). On an empty cache this is about 11 h 20 min of
+  model time (SaProt 7 h 11 min); `--landscapes false` skips both steps.
 - `make pipeline-test` runs the same steps on 2 small assays, with the 30 MB `esm2_t6_8M`
   model and both methods, and skips the 1.9 GB zero-shot archive. It writes only to `pipeline/results/`
   (gitignored), taking about 30 s from an empty cache. CI runs it on every push.
@@ -58,6 +65,11 @@ the one sequence in progress is lost, which is under 7 minutes of work. The comm
 many assays came from the cache, and `results/data/zero_shot_run_<label>.parquet` records
 `positions_computed` per assay (0 = read from the cache)
 ([ADR 0013](docs/adr/0013-benchmark-scoring-run.md)).
+
+`score landscapes` goes further: it writes the cache every `scoring.landscapes.checkpoint_tokens`
+of model work (under a minute on the 650M models), also inside one long protein, so a stop at
+any moment loses less than a minute. It logs `landscape_progress` after every write with the
+positions done, the share of the work and the estimated time remaining.
 
 ### The model gate
 

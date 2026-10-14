@@ -6,11 +6,14 @@
  *                                    -> STRUCT_FEATURES --> STRUCTURE_REPORT
  *                                    -> FOLDSEEK_3DI ----/
  *            CLEAN, STRUCT_FEATURES, FOLDSEEK_3DI -> SCORE_ZERO_SHOT -> BENCHMARK_ZERO_SHOT
+ *                                                    SCORE_ZERO_SHOT -> LANDSCAPES -> CHECK_LANDSCAPES
  *
  * SCORE_ZERO_SHOT and BENCHMARK_ZERO_SHOT run once per (model, method) in params.models x
  * params.methods, except that the models in params.masked_only_models run the masked marginal
  * only (SaProt: the official scoring defines no wild-type marginal, and ProteinGym has no
- * scores to check one against). SUBSET runs only when params.assays names assays (the test profile). Every command gets
+ * scores to check one against). LANDSCAPES runs once per model, after every scoring task (they
+ * fill the same cache entries and share one GPU), unless params.landscapes is false.
+ * SUBSET runs only when params.assays names assays (the test profile). Every command gets
  * params.hydra_overrides appended, so one override reaches every step.
  */
 
@@ -23,6 +26,8 @@ include { FOLDSEEK_3DI     } from './modules/foldseek_3di'
 include { STRUCTURE_REPORT } from './modules/structure_report'
 include { SCORE_ZERO_SHOT     } from './modules/score_zero_shot'
 include { BENCHMARK_ZERO_SHOT } from './modules/benchmark_zero_shot'
+include { LANDSCAPES          } from './modules/landscapes'
+include { CHECK_LANDSCAPES    } from './modules/check_landscapes'
 
 // A comma-separated command-line value arrives as a string; profiles set lists.
 def as_list(value) {
@@ -73,4 +78,23 @@ workflow {
         runs,
     )
     BENCHMARK_ZERO_SHOT(inputs.reference, CLEAN.out.variants, SCORE_ZERO_SHOT.out.scores)
+    if (params.landscapes) {
+        // collect() emits once, when the last scoring task has finished; flatten() then emits
+        // each model again, one LANDSCAPES task each.
+        def scored = SCORE_ZERO_SHOT.out.scores.map { model, _method, _scores -> model }
+            .unique().collect().flatten()
+        LANDSCAPES(
+            inputs.reference,
+            FOLDSEEK_3DI.out.three_di,
+            STRUCT_FEATURES.out.features,
+            scored,
+        )
+        CHECK_LANDSCAPES(
+            inputs.reference,
+            FOLDSEEK_3DI.out.three_di,
+            STRUCT_FEATURES.out.features,
+            LANDSCAPES.out.report.collect(),
+            models,
+        )
+    }
 }
