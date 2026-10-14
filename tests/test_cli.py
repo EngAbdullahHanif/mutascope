@@ -7,7 +7,7 @@ import pytest
 from hydra.errors import ConfigCompositionException
 from typer.testing import CliRunner
 
-from mutascope.cli import app, data_app, eval_app, score_app
+from mutascope.cli import app, data_app, eval_app, score_app, train_app
 
 CONF = Path(__file__).parents[1] / "conf"
 
@@ -18,6 +18,7 @@ CONF = Path(__file__).parents[1] / "conf"
         *data_app.registered_commands,
         *eval_app.registered_commands,
         *score_app.registered_commands,
+        *train_app.registered_commands,
     ],
     ids=lambda c: c.name or "",
 )
