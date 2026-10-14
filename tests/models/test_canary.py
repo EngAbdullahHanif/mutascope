@@ -22,6 +22,7 @@ from tests.synthetic_assays import synthetic_assay
 
 from mutascope.data.folds import load_cv_table
 from mutascope.data.release import load_release
+from mutascope.features.matrix import FeatureMatrix
 from mutascope.models.canary import permutation_canary
 from mutascope.utils.config import load_config
 
@@ -59,11 +60,11 @@ class Oracle:
     def __init__(self, labels: np.ndarray) -> None:
         self.labels = labels
 
-    def fit(self, x: np.ndarray, y: np.ndarray) -> "Oracle":
+    def fit(self, x: FeatureMatrix, y: np.ndarray, groups: np.ndarray) -> "Oracle":
         return self
 
-    def predict(self, x: np.ndarray) -> np.ndarray:
-        return self.labels[x[:, 0].astype(int)]
+    def predict(self, x: FeatureMatrix) -> np.ndarray:
+        return self.labels[x.dense[:, 0].astype(int)]
 
 
 @pytest.mark.parametrize("scheme", SCHEMES)
@@ -85,7 +86,7 @@ def test_canary_passes_on_synthetic_assay(scheme: str) -> None:
 def test_canary_catches_labels_that_bypass_training(scheme: str) -> None:
     assay = synthetic_assay("A_TEST", seed=11)
     y = assay["DMS_score"].to_numpy()
-    row_ids = np.arange(len(y), dtype=np.float64)[:, None]
+    row_ids = FeatureMatrix.of(np.arange(len(y), dtype=np.float64)[:, None])
     result = permutation_canary(
         row_ids,
         y,

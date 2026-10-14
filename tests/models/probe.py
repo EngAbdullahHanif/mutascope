@@ -11,20 +11,33 @@ import pandas as pd
 from sklearn.linear_model import Ridge  # pyright: ignore[reportMissingTypeStubs]
 
 from mutascope.alphabet import AA_ORDER
+from mutascope.features.matrix import FeatureMatrix
 from mutascope.models.cv import Regressor
 
 
-def probe_features(variants: pd.DataFrame) -> np.ndarray:
+def probe_features(variants: pd.DataFrame) -> FeatureMatrix:
     """One-hot wt (20) + mt (20) + position (one column per distinct position)."""
     identity = np.eye(20)
     wt = identity[[AA_ORDER.index(a) for a in variants["wt_aa"]]]
     mt = identity[[AA_ORDER.index(a) for a in variants["mt_aa"]]]
     codes = pd.Categorical(variants["position"]).codes
     site = np.eye(int(codes.max()) + 1)[codes]
-    return np.hstack([wt, mt, site]).astype(np.float64)
+    return FeatureMatrix.of(np.hstack([wt, mt, site]))
+
+
+class _Probe:
+    """scikit-learn's Ridge(alpha=1) on the dense columns; ignores the training folds."""
+
+    def __init__(self) -> None:
+        self.ridge = Ridge(alpha=1.0)
+
+    def fit(self, x: FeatureMatrix, y: np.ndarray, groups: np.ndarray) -> "_Probe":
+        self.ridge.fit(x.dense, y)  # pyright: ignore[reportUnknownMemberType]
+        return self
+
+    def predict(self, x: FeatureMatrix) -> np.ndarray:
+        return np.asarray(self.ridge.predict(x.dense), dtype=np.float64)  # pyright: ignore[reportUnknownMemberType]
 
 
 def probe_model() -> Regressor:
-    # sklearn is untyped; Ridge has the fit/predict interface the loop needs.
-    model: Regressor = Ridge(alpha=1.0)  # pyright: ignore[reportAssignmentType]
-    return model
+    return _Probe()
