@@ -1494,3 +1494,83 @@ model, that all 882 landscapes are complete.
 - *Tests:* `make lint` clean; `make test` 385 passed, 1 skipped (12 new in
   `tests/eval/test_landscapes.py`); `make pipeline-test` passes with the two new processes.
 - *Not done:* the Phase 4 export itself; the stretch models.
+
+---
+
+## Entry 19 — Supervised cross-validation harness and a leakage canary (Phase 3, 2026-10-14)
+
+**Plain-language summary.** Phase 3 trains a model per experiment on the measured data and
+checks it on mutations it never saw. Before any real model, this task built and tested the
+machinery for that. ProteinGym splits each experiment's mutations into 5 groups ("folds") in
+three ways: at random, by interleaving positions, and by cutting the protein into 5 stretches.
+A new command attaches those folds to our cleaned mutations and refuses to run if any mutation
+has no fold, or more than one. The training loop then predicts each fold with a model trained
+on the other four, and scores the predictions the way ProteinGym does: one Spearman and one
+error (MSE) over all five folds' predictions together. A baseline that always predicts the
+average proves the loop runs on all 217 experiments in about 3 seconds. A "canary" test
+shuffles the labels the model trains on and checks that the score drops to about zero; if it
+does not, the test labels are leaking into the predictions. The reasoning is in ADR 0019.
+
+**The 3 most important design choices.**
+
+1. **Score the pooled predictions, as ProteinGym does, after reading the code that does it.**
+   ProteinGym's summary script only averages numbers it is given; the per-experiment number is
+   computed in `merge_supervised.py` (Spearman over all out-of-fold rows), on targets
+   standardised with the training folds' mean and standard deviation in ProteinNPT. Both are
+   copied into the tests as oracles, and our values match to 1e-12. *Evidence that it matters:*
+   on a small probe model, pooled and mean-of-folds Spearman differ by more than 0.05 in 45 of
+   217 experiments under the contiguous split, by up to 0.49, while their averages differ by
+   only 0.015.
+2. **Folds are joined on `(assay_id, mutant)` and checked twice; labels never come from the
+   fold files.** The fold files carry scores too, but with one digit fewer and with empty
+   labels in 6 assays (ADR 0005), so only keys and folds are kept. The schema also checks what
+   the position-based splits must satisfy: one fold per position, and contiguous folds in
+   sequence order. *Evidence:* all 696,311 variants matched exactly once.
+3. **The canary judges the mean over 20 permutations against its standard error.** One
+   shuffled run reached |ρ| = 0.165 on the canary assays, because random weights on informative
+   features still correlate with the truth by chance. The mean over 20 runs stays within 1.72
+   standard errors of 0 in all 9 assay × split cases, while a loop that fits on the test rows
+   gives +0.50 to +0.80. *Limit, measured and documented:* a label-derived feature (position
+   mean of the scores, test rows included) passes the canary, so feature builders are never
+   given the labels at all.
+
+**Problems encountered and how they were solved.**
+
+1. **A constant baseline got a "defined" Spearman, between −0.67 and +0.91.** *Found:* the
+   first full run printed a Spearman for all 217 assays, where a constant predictor must give
+   none. *Cause:* targets are standardised per fold, so the training mean is 0 only up to
+   rounding (median 5e-17, at most 4.1e-15, nonzero in 3,070 of 3,249 training sets). That
+   residue differs between folds, so the pooled predictions were five slightly different
+   constants, and Spearman ranked them; where folds differ in their average label, that ranking
+   can line up with the truth, hence values far from 0. *Fix:* the baseline rounds its
+   mean to 12 decimals (and turns −0.0 into 0.0). *Verified:* Spearman is undefined in all 217
+   assays and the MSE is unchanged; a regression test fails without the rounding.
+2. **The modulo split is not "residue number mod 5".** *Found:* checking the fold files before
+   writing the schema: `position % 5` matches only 53.0% of variants. *Cause:* ProteinGym takes
+   the rank of the position among the mutated positions, mod 5 (true in all 217 assays).
+   *Fix:* the schema does not assume either formula; it checks that a position never spans two
+   modulo folds, which holds under both. *Verified:* all 217 assays pass.
+3. **Two assays have only 4 folds.** *Found:* the same check: `F7YBW8_MESOW_Aakre_2015` (37
+   variants) and `SPG1_STRSG_Wu_2016` (76) mutate 4 positions, so every split has 4 folds.
+   *Fix:* the loop iterates over the folds present instead of 0–4. *Verified:* `data folds`
+   reports "2 assays with 4 folds, 215 assays with 5 folds" per split, and a unit test runs a
+   4-fold assay.
+4. **Training-label permutation cannot see a target-encoding leak.** *Found:* while choosing
+   the canary's statistic, by injecting the leak on purpose: the permuted mean stayed near 0
+   (all 9 cases within 1.70 standard errors). *Cause:* fit on shuffled labels, the model gives
+   the leaking feature a weight of random sign, so the leak shows up as spread, not as a shift.
+   *Fix:* not a canary change but a structural rule: feature builders receive only the variant
+   keys, enforced by `build_features` and a test. *Verified:* the test sees exactly
+   `assay_id, mutant, position, wt_aa, mt_aa`.
+
+**Supporting details.**
+- *Baseline (ProteinGym aggregate of pooled MSE, 217 assays):* random 1.0310, modulo 1.1182,
+  contiguous 1.1450. `results/supervised/cv_training_mean_none.parquet`; MLflow experiment
+  `supervised`.
+- *Canary assays:* `ERBB2_HUMAN_Elazar_2016` (Expression, 326), `OTU7A_HUMAN_Tsuboyama_2023_2L2D`
+  (Stability, 635), `NPC1_HUMAN_Erwood_2022_HEK293T` (Activity, 637). Probe Spearman with true
+  labels 0.265–0.763; permuted means within ±0.021.
+- *Not yet done:* the fold step is not a Nextflow process (it needs the fold files in the staged
+  layout); AUC/MCC/NDCG/recall, bootstrap CIs and paired comparisons for supervised results
+  come with the first real model.
+- *Tests:* `make lint` clean; `make test` 434 passed, 1 skipped (Foldseek not on PATH); 49 new.
