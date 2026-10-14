@@ -126,8 +126,11 @@ Goal: beat zero-shot using the assay data, under ProteinGym's supervised protoco
 ### Protocol
 - [x] Fold assignments joined and checked; CV loop with pooled Spearman/MSE as ProteinGym;
       label-permutation canary; training-mean baseline (ADR 0019)
-- [ ] Per-assay models, ProteinGym fold assignments, random / modulo / contiguous 5-fold
+- [x] Per-assay models, ProteinGym fold assignments, random / modulo / contiguous 5-fold; features
+      assembled one assay at a time from the store (ADR 0021)
 - [ ] Optuna hyperparameter search inside training folds only (nested CV); scalers fit on train folds only
+      (ridge: α by inner CV over the training folds, split like the outer scheme; scaling on the
+      fit rows only — ADR 0021)
 
 ### Features (variant at position i, wt → mt)
 Feature store for all 19 × L substitutions, sets `seq` (217 assays) and `seq_struct` (213) (ADR 0020).
@@ -139,7 +142,9 @@ Feature store for all 19 × L substitutions, sets `seq` (217 assays) and `seq_st
 - [x] Structure: pLDDT, relative SASA, contact count; relative position
 
 ### Model ladder
-- [ ] Augmented ridge (one-hot + zero-shot score; Hsu et al., 2022)
+- [x] Ridge rung (ADR 0021): one-hot ridge, augmented ridge (one-hot + unpenalised ESM-2 650M score;
+      Hsu et al., 2022), ridge on `seq` / `seq_struct`; zero-shot on the same test folds, paired
+      bootstrap, ProteinGym leaderboard sanity range, permutation canary on the real models
 - [ ] LightGBM on all features + SHAP
 - [ ] MLP head (Lightning): LayerNorm → 512 → GELU → Dropout 0.2 → 128 → GELU → 1; AdamW, early stopping;
       compare MSE vs ranking-aware loss
