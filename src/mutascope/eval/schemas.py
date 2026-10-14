@@ -11,10 +11,10 @@ import pandera.pandas as pa
 from pandera.typing.pandas import Series
 
 from mutascope.data.parse import SINGLE_MUTATION_PATTERN
-from mutascope.data.schemas import FUNCTION_TYPES
-from mutascope.eval.metrics import METRICS
+from mutascope.data.schemas import CV_SCHEMES, FUNCTION_TYPES
+from mutascope.eval.metrics import METRICS, SUPERVISED_METRICS
 
-SPLITS = ("random", "modulo", "contiguous")
+SPLITS = CV_SCHEMES
 """ProteinGym's supervised CV schemes (``fold_random_5``, ``fold_modulo_5``, ...)."""
 
 LEVELS = ("overall", "function")
@@ -34,6 +34,28 @@ class AssayMetricSchema(pa.DataFrameModel):
         strict = True
         ordered = True
         unique = ["model", "assay_id", "split", "fold", "metric"]  # noqa: RUF012 — read by pandera
+
+
+class SupervisedMetricSchema(pa.DataFrameModel):
+    """One metric of one supervised model on one assay under one CV scheme (ADR 0019).
+
+    ``fold`` null is the metric over the pooled out-of-fold predictions of every fold: the
+    number ProteinGym reports and the one to aggregate. ``fold`` k is the same metric on test
+    fold k alone, a diagnostic of spread across folds.
+    """
+
+    model: Series[str]
+    feature_set: Series[str]
+    assay_id: Series[str]
+    scheme: Series[str] = pa.Field(isin=list(CV_SCHEMES))
+    fold: Series[pd.Int64Dtype] = pa.Field(ge=0, nullable=True)
+    metric: Series[str] = pa.Field(isin=list(SUPERVISED_METRICS))
+    value: Series[float] = pa.Field(nullable=True)
+
+    class Config:  # pyright: ignore[reportIncompatibleVariableOverride]
+        strict = True
+        ordered = True
+        unique = ["model", "feature_set", "assay_id", "scheme", "fold", "metric"]  # noqa: RUF012 — read by pandera
 
 
 class SummarySchema(pa.DataFrameModel):
