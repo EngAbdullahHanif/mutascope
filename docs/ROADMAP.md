@@ -78,10 +78,12 @@ Goal: several pretrained models score every mutation; our numbers reproduce the 
 - [x] Benchmark run: `mutascope score zero-shot` + Nextflow `SCORE_ZERO_SHOT`, measured positions
       only, resumable from the cache (ADR 0013; 37,753 positions on MPS: 650M 1 h 41 min,
       150M 29 min, 35M 19 min), once per model and method, then `BENCHMARK_ZERO_SHOT` (ADR 0014)
-- [ ] Full masked landscapes at every position: the remaining 24,918 residues of the benchmark
-      entries for each ESM-2 size and 28,886 for SaProt, plus the full targets of the five
-      MSA-region assays; fills the same cache entries. Open at the Phase 2 close (ADR 0017): the
-      benchmark does not need it, the Phase 4 export does
+- [x] Full masked landscapes at every position (ADR 0018): the remaining 24,918 residues of the
+      benchmark entries for each ESM-2 size and 28,886 for SaProt, plus full-target landscapes
+      for the five MSA-region assays (ESM-2) and the three partial-structure assays (SaProt),
+      in the same cache. `mutascope score landscapes` (resumable inside a sequence) and
+      `mutascope score check-landscapes` (model-free; all 882 landscapes complete). 11 h 20 min
+      of model time; benchmark scores unchanged. Left open at the Phase 2 close (ADR 0017)
 - [x] Ensemble: per-assay z-score, then mean (ADR 0016: ESM-2 650M + SaProt on the 213 shared
       assays, Spearman 0.4663; +0.0519 over ESM-2 650M, +0.0063 over SaProt with a paired CI
       that includes zero)
@@ -112,6 +114,8 @@ Done when: full landscapes for all assays from ESM-2 (3 sizes) + SaProt; harness
 
 Closed 2026-10-13 (ADR 0017): gates pass and figures are generated; landscapes exist at the measured
 positions only, so the full-landscape item above stays open, with the stretch models.
+Full landscapes landed 2026-10-14 (ADR 0018), so the done-when line is met in full; only the
+stretch models remain open.
 
 ---
 
@@ -152,7 +156,7 @@ Goal: a tested, observable service deployed automatically.
 
 ### Export
 - [ ] Precomputed landscapes for all ProteinGym proteins → compressed JSON/Arrow (served statically by the frontend).
-      Needs the open Phase 2 item first: full masked landscapes at every position (ADR 0017)
+      Reads the full landscapes from the cache (ADR 0018); run `mutascope score check-landscapes` first
 - [ ] ESM-2 35M/150M → ONNX (`optimum`) → int8 dynamic quantization → onnxruntime CPU
 
 ### FastAPI

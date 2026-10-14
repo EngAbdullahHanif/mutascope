@@ -448,9 +448,33 @@ and exclude merge commits.
 - **Outputs:** none. The audit read `results/*.parquet`, `results/zero_shot/*.parquet` and the
   log-probability cache, and reran `make lint test` and `make test-slow`.
 
+## Step 18 — Full landscapes at every residue (Phase 2 leftover, 2026-10-13 to 10-14)
+
+- **What this step did:** filled every residue of every assay's landscape for ESM-2 35M, 150M,
+  650M and SaProt in the existing cache, added full-target landscapes where the benchmark region
+  is partial, and a model-free check that all 882 are complete (ADR 0018). No benchmark number
+  changed.
+- **Files created or modified:**
+
+| Path | What it does | Why it exists |
+|---|---|---|
+| `src/mutascope/eval/landscapes.py` | Which landscapes an assay has; fills them in slices with progress and time remaining; coverage from the cache | Website landscapes need every residue; resumable inside a long protein |
+| `src/mutascope/eval/schemas.py` | `LandscapeRunSchema`, `LandscapeCoverageSchema` | Every written table has a schema |
+| `src/mutascope/cli.py` | `score landscapes`, `score check-landscapes`; `_benchmark_inputs` shared with `score zero-shot` | Pipeline steps are CLI commands |
+| `src/mutascope/scoring/base.py` | Documents `positions=[]` (compute nothing, return what is known) | How the runner asks what is missing |
+| `conf/scoring/default.yaml` | `landscapes.checkpoint_tokens`, `landscapes.models` | No hard-coded settings |
+| `pipeline/modules/{landscapes,check_landscapes}.nf`, `pipeline/main.nf`, `pipeline/nextflow.config`, `pipeline/modules/score_zero_shot.nf`, `Makefile` | Two processes after scoring; `params.landscapes`, `params.cache_dir`; smoke test shares one cache, deleted first | The pipeline reproduces the landscapes |
+| `tests/eval/test_landscapes.py` | Toy scorer (slices, kill and resume, shared entries), coverage, real 8M CLI run with unchanged scores | Tests alongside the code |
+| `results/data/landscape_run_<model>.parquet`, `results/data/landscape_coverage.parquet` | Last invocation per model; coverage of all 882 landscapes | Committed evidence |
+| `docs/adr/0018-full-landscapes.md`, `CLAUDE.md`, `README.md`, `docs/ROADMAP.md`, `docs/BUILD_LOG.md` | Decisions and evidence; scoring rule; usage; item ticked; entry 18 | Decision record and docs |
+
+- **CLI commands added:** `mutascope score landscapes`, `mutascope score check-landscapes`.
+- **Outputs:** 18 new cache entries and the remaining rows of the benchmark entries (cache 37 →
+  41 MB, not in git); the five `results/data/landscape_*.parquet` files.
+
 ## Where Phase 2 left things
 
-A map of what exists after steps 9–17, by the question it answers.
+A map of what exists after steps 9–18, by the question it answers.
 
 | Question | Where to look |
 |---|---|
@@ -461,4 +485,5 @@ A map of what exists after steps 9–17, by the question it answers.
 | Which models, at which revisions? | `conf/model/*.yaml` |
 | Where are the numbers? | `results/zero_shot_<label>_single{,_summary}.parquet`, `results/zero_shot/{comparisons,shared_summary}.parquet`, `results/figures/`; summary in ADR 0017 |
 | What runs in the pipeline, and what by hand? | `pipeline/main.nf` runs `SCORE_ZERO_SHOT` and `BENCHMARK_ZERO_SHOT` per model and method. `score ensemble`, `eval compare`, `eval shared`, `eval figures` and the model gate are run by hand |
+| Where are the full landscapes? | The cache, one entry per model, sequence, structure tokens and region; `results/data/landscape_coverage.parquet` lists them; ADR 0018 |
 | What is not in git? | `data/cache/logprobs/` (cache and checkpoint), `data/processed/zero_shot/` (score sets), `mlruns/` (MLflow store) |
