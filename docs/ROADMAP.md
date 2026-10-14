@@ -130,11 +130,13 @@ Goal: beat zero-shot using the assay data, under ProteinGym's supervised protoco
 - [ ] Optuna hyperparameter search inside training folds only (nested CV); scalers fit on train folds only
 
 ### Features (variant at position i, wt → mt)
-- [ ] Zero-shot scores (each model + ensemble), benchmark scoring region (ADR 0012)
-- [ ] One-hot wt and mt, BLOSUM62
-- [ ] 20-dim log-probabilities at i (ESM-2, SaProt)
-- [ ] Position-i embeddings: ESM-2 650M (mean of last 4 layers, 1280-d) and SaProt
-- [ ] Structure: pLDDT, relative SASA, contact count; relative position
+Feature store for all 19 × L substitutions, sets `seq` (217 assays) and `seq_struct` (213) (ADR 0020).
+- [x] Zero-shot scores, benchmark scoring region (ADR 0012): ESM-2 650M and SaProt 650M. The ensemble
+      is left out: its z-score is defined over an assay's measured variants only (ADR 0020)
+- [x] One-hot wt and mt, BLOSUM62
+- [x] 20-dim log-probabilities at i (ESM-2, SaProt)
+- [x] Position-i embeddings: ESM-2 650M (mean of last 4 layers, 1280-d) and SaProt
+- [x] Structure: pLDDT, relative SASA, contact count; relative position
 
 ### Model ladder
 - [ ] Augmented ridge (one-hot + zero-shot score; Hsu et al., 2022)
