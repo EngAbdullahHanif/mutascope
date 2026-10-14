@@ -171,7 +171,9 @@ Run `make lint test` before declaring any task done.
 - Supervised: use ProteinGym's fold assignments for random, modulo and contiguous splits. Report all three.
 - **No leakage:** scalers, feature selection and hyperparameter search (Optuna) are fit on training folds only
   (nested CV). Test folds are touched exactly once per final evaluation.
-- Results go to `results/*.parquet` in long format (`model, assay_id, split, fold, metric, value`);
+- Results go to `results/*.parquet` in long format (`model, assay_id, split, fold, metric, value`;
+  supervised: `model, feature_set, assay_id, scheme, fold, metric, value`, `fold` null = pooled
+  out-of-fold, ADR 0019);
   figures are generated from these files only (`mutascope eval figures` → `results/figures/`,
   ADR 0016). Figure code computes nothing: a missing value or pair is an error. Score sets shown
   side by side use `results/zero_shot/shared_summary.parquet` (`mutascope eval shared`), and a
