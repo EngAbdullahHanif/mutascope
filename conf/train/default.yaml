@@ -29,13 +29,16 @@ canary:
   # since a model that learns nothing passes trivially. Such cases are reported, not failed.
   min_observed: 0.2
 # Paired bootstrap of pooled Spearman (`mutascope train compare`; ADR 0014): [A, B] by run
-# label <model>_<feature_set>. Every supervised model against zero-shot on the same test folds.
+# label <model>_<feature_set>. Every supervised model against zero-shot on the same test folds,
+# then neighbouring rungs of the ladder.
 comparisons:
   - [ridge_site_onehot, zero_shot_esm2_score]
   - [augmented_ridge_site_onehot_esm2, zero_shot_esm2_score]
   - [ridge_seq, zero_shot_esm2_score]
   - [ridge_seq_struct, zero_shot_esm2_score]
   - [ridge_seq_struct, zero_shot_saprot_score]
+  - [ridge_seq, augmented_ridge_site_onehot_esm2]
+  - [ridge_seq_struct, ridge_seq]
 # ProteinGym's supervised leaderboard (`mutascope train leaderboard`): run label -> published
 # baselines of the same type. A sanity range, not a gate: their features differ (ADR 0021).
 leaderboard:
