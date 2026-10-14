@@ -1637,3 +1637,79 @@ counted, 900 MB against the 0.9 GB estimated.
   processes yet.
 - *Dependencies:* none added (BLOSUM62 from biotite, already a dependency).
 - *Tests:* `make lint` clean; `make test` 465 passed, 1 skipped (Foldseek not on PATH); 31 new.
+
+## Entry 21 — Ridge rung: one-hot, augmented and all-feature ridge (Phase 3, 2026-10-14)
+
+**Plain-language summary.** The first real supervised models. Each experiment's measured
+mutations are split into ProteinGym's five folds three ways (random; by position, interleaved;
+by position, in contiguous blocks), and a model trained on four folds predicts the fifth. Three
+ridge regressions were trained on all 217 experiments: one that only knows "which amino acid at
+which position" (one-hot), the same plus the zero-shot score of ESM-2 650M (Hsu et al.'s
+"augmented" model), and one on every feature in the store (`seq`, 217 experiments; `seq_struct`
+with structure and SaProt, 213). How strongly each model is held back (the ridge penalty) is
+chosen by a second, inner cross-validation inside the four training folds, so the test fold
+never influences it. Each model is compared with the zero-shot score evaluated on exactly the
+same test folds, with a paired bootstrap. The headline: memorising positions works only when
+the test positions were seen (one-hot: 0.608 under random, ~0 otherwise); adding the zero-shot
+score does not help on unseen positions; the store features do (`seq`: 0.711 / 0.538 / 0.475,
+above zero-shot under every split). Structure and SaProt help most where it is hardest: `seq_struct` scores 0.721 / 0.593 /
+0.553 on 213 experiments, +0.076 over `seq` under contiguous. The reasoning is in ADR 0021.
+
+**The 3 most important design choices.**
+
+1. **The penalty is tuned on the training folds, split the way the test split is.** Models now
+   receive each training row's fold, and ridge holds each training fold out in turn to choose α.
+   Under the contiguous split, α is therefore tuned for predicting an unseen stretch of protein,
+   the same task the test fold sets. *Evidence:* a test replaces every label of one test fold
+   and requires its predictions to stay bit-identical (unit tests, all schemes; and 20 of 20
+   folds on 4 real assays). The canary passes on all 36 real cases.
+2. **The site one-hot is two numbers per variant, not a matrix.** Hsu et al.'s encoding has
+   20 × L columns (68,460 for ZIKV); a single mutant differs from the wild type in two of them.
+   Storing +1 at (position, mutant) and −1 at (position, wild type) and solving with conjugate
+   gradients makes one-hot ridge on all 217 assays take 107 s. *Evidence:* the solver matches
+   the closed-form solution on the densified matrix to 1e-6.
+3. **Zero-shot is run through the same loop.** The comparator is the zero-shot score scored on
+   the same test folds and pooled the same way, so a paired bootstrap compares like with like.
+   *Evidence:* it differs from the Phase 2 zero-shot number by at most 0.002 (ESM-2 0.412–0.414
+   vs 0.4125), but the pairing needs identical rows.
+
+**Problems encountered and how they were solved.**
+
+1. *Augmented ridge looked too good.* Under random it scored 0.676 against 0.523–0.565 for
+   ProteinGym's five "+ One-Hot" baselines (modulo and contiguous agreed within 0.03). Treated
+   as a leak until shown otherwise. Checked: replacing a test fold's labels with noise left its
+   predictions bit-identical in 20 of 20 real folds; the canary passed 9 of 9 informative cases;
+   our plain one-hot matches theirs (0.608 vs 0.582). The gap is theirs: their augmented
+   baselines score below their own one-hot under random (0.565 < 0.582), so their learner drops
+   one-hot signal, which ours, with the score unpenalised, cannot. Reported as a sanity range,
+   not a gate.
+2. *Many penalties landed on the ends of the grid* (one-hot: 1,196 low and 1,019 high of 3,249
+   fits). Found from the edge counts `train cv` prints. Widening the grid to 10⁻⁶ … 10⁹ changed
+   pooled Spearman by at most 0.0010 (augmented), 0.0003 (one-hot, random) and < 0.00005
+   (`seq`): flat ends, explained in ADR 0021, so the grid stayed 10⁻³ … 10⁶.
+3. *One-hot ridge's modulo and contiguous numbers looked like small real values* (0.006,
+   −0.014; ProteinGym 0.022, 0.059). All 1,083 of 1,083 test folds there are one constant
+   prediction: an unseen position's one-hot coefficients are exactly 0. The pooled value ranks
+   five fold constants; it is reported as zero and the canary marks those cases uninformative.
+4. *`train leaderboard` exited 1 after writing its table.* MLflow rejects `+` in metric names
+   ("ESM-1v + One-Hot Encodings"). The test ran with tracking off and missed it; the key is now
+   sanitised and the test runs with tracking on.
+5. *The fold loop's interface changed for every model.* `fit(x, y)` became
+   `fit(x, y, groups)` so ridge could see the training folds; the training mean, the test
+   probe, the canary's oracle and the spies were updated, and a test checks the groups passed
+   are exactly the training rows' folds and never the test fold.
+
+**Supporting details.**
+- *Runs* (M4 Pro, CPU): zero-shot 2 s each, one-hot 107 s, augmented 153 s, `seq` 1,037 s,
+  `seq_struct` 4,256 s. MLflow experiment `supervised`. Results in `results/supervised/`:
+  `cv_<label>.parquet`, `cv_<label>_hyperparameters.parquet`, `canary_<label>.parquet`,
+  `supervised_summary.parquet`, `supervised_comparisons.parquet`, `leaderboard.parquet`.
+- *Augmented ridge on unseen positions is zero-shot with a learned sign:* within-fold Spearman
+  equal to zero-shot's in 1,057 / 1,054 of 1,083 folds (contiguous / modulo), exactly negated in
+  the rest; paired difference −0.006 / −0.003.
+- *Leaderboard files:* ProteinGym's supervised Spearman summary and per-scheme assay-level
+  tables, pinned at the release commit, saved with a `Supervised_` prefix (the summary shares
+  the zero-shot summary's file name); sha256 in `data/manifest.yaml`.
+- *Not yet done:* the commands are not Nextflow processes; LightGBM, MLP, conformal intervals.
+- *Dependencies:* none added.
+- *Tests:* `make lint` clean; `make test` 492 passed, 1 skipped (Foldseek not on PATH); 27 new.
