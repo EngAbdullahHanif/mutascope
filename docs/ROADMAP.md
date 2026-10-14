@@ -124,6 +124,8 @@ stretch models remain open.
 Goal: beat zero-shot using the assay data, under ProteinGym's supervised protocol.
 
 ### Protocol
+- [x] Fold assignments joined and checked; CV loop with pooled Spearman/MSE as ProteinGym;
+      label-permutation canary; training-mean baseline (ADR 0019)
 - [ ] Per-assay models, ProteinGym fold assignments, random / modulo / contiguous 5-fold
 - [ ] Optuna hyperparameter search inside training folds only (nested CV); scalers fit on train folds only
 
