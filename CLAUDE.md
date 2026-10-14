@@ -184,6 +184,23 @@ Run `make lint test` before declaring any task done.
   masked marginals only; ProteinGym has no wild-type-marginal ESM-2 scores to compare with.
 - Never present zero-shot predictions as supervised, or either as clinical. Variants are "functional effect in DMS assays", not "pathogenic".
 
+## Feature rules (ADR 0020)
+
+- The feature store (`processed/features`, `mutascope features build`) holds all 19 × L
+  substitutions of every target: `variants/` (per-variant scalars), `positions/` (per-residue
+  structure features and source region), `arrays/` (per-residue log-probabilities and
+  embeddings, `.npy`). Per-residue data is stored once per residue and repeated only when
+  `features.sets.assemble` builds one assay's matrix.
+- Feature builders read variant keys only (`position, wt_aa, mt_aa`), never `DMS_score` or
+  `DMS_score_bin` (ADR 0019). A variant is `(position, mt_aa)`, 0-indexed; the store never
+  formats a mutation string.
+- A residue inside a model's benchmark region reads that model's benchmark landscape; outside
+  it, the full-target one. Every measured variant is inside.
+- Embeddings: mean of the last `features.embedding_layers` `hidden_states` from one unmasked
+  pass per cache entry (`mutascope features embed`), cached in `features.embedding_cache_dir`.
+- Feature sets are declared in `conf/features/default.yaml`: `seq` (217 assays) and
+  `seq_struct` (213). A structure set refuses an assay without a structure.
+
 ## API (`api/`)
 
 - FastAPI + Pydantic v2 + pydantic-settings. Models loaded once in the `lifespan` hook.
