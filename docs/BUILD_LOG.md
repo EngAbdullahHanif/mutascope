@@ -1410,3 +1410,87 @@ positions, so the rest was never computed, and the website export in Phase 4 wil
   file.
 - *Docs changed:* ADR 0017, CLAUDE.md (current phase), ROADMAP (open item, close note, Phase 4
   link), README (status line), PROJECT_MAP (step 17 and a Phase 2 index).
+
+---
+
+## Entry 18 — Full landscapes at every residue (Phase 2 leftover, 2026-10-13 to 10-14)
+
+**Plain-language summary.** Until now each model had scored only the mutations the experiments
+measured, about 60% of the residues. The website will show every possible mutation of a
+protein, so every residue needs a score. This task filled in the rest for all four models
+(ESM-2 35M, 150M, 650M and SaProt): 148,962 more positions, 11 h 20 min of laptop GPU time. For
+the few proteins where the benchmark scores only part of the sequence (five for ESM-2, three for
+SaProt), each model also scored the whole protein, stored separately and labelled `full`, so
+the benchmark's version and the website's version never mix. The scores the benchmark already
+used were not touched: every one of them is bit-identical afterwards, and the model gates pass
+as before. The run had to be stopped three times on request, and
+each restart continued exactly where it left off. A new command checks, without loading any
+model, that all 882 landscapes are complete.
+
+**The 3 most important design choices.**
+
+1. **Save every slice, not every protein.** The benchmark run saved a protein when it was done,
+   which lost at most 455 s. Full SaProt landscapes of 3,000+ residue proteins take up to 82
+   minutes each, so the runner now asks the model for about 131,000 tokens of work at a time
+   (128 positions of a 1,024-token ESM-2 window, 38 positions of a 3,423-residue SaProt input)
+   and each request is written to the cache before the next starts. The slicing lives in the
+   runner, not the scorer, so the code the model gates verified did not change. *Evidence:* four
+   stops (one deliberate `SIGKILL`, three for the laptop), and the positions in the cache log
+   add up to exactly the missing count for every model: nothing was scored twice.
+2. **Two landscapes where the benchmark region is partial, both complete.** The benchmark's
+   landscape of `KCNH2_HUMAN_Kozek_2020` covers residues 535–565, the website's covers all
+   1,159. They hold different numbers for the same residue (the model sees a different input),
+   so they are separate cache entries with different region labels, and the tables have a
+   `benchmark` and a `full_target` column. Finishing the benchmark-region one as well cost 52
+   minutes of SaProt time (BRCA2), and keeps "the landscape the gate verified" whole.
+3. **A check that loads no model.** `check-landscapes` rebuilds each landscape's cache key from
+   the config (Hub id, revision, sequence, structure tokens, method, region) and counts the
+   residues with all 20 values finite. It runs in seconds, so it can gate the pipeline and the
+   Phase 4 export, and it cannot be fooled by a run log that says "done".
+
+**Problems encountered and how they were solved.**
+
+1. **The run had to be stopped three times.** *Found:* the author asked for it to stop (once for
+   a flat laptop battery, twice more at set times). *What happened:* stops at ESM-2 150M
+   20,289 of 36,734 positions, ESM-2 650M 12,201 of 36,734 and then 19,072 of the 24,533 left.
+   *Fix:* none needed; each restart was the same command. *Verified:* the restarts planned
+   16,445, 24,533 and 5,461 positions, exactly the remainders; no `*.tmp` file was left; the
+   cache-log totals equal the missing counts (36,734 per ESM-2 size, 38,760 for SaProt).
+2. **The smoke test's cache was private to each task.** *Found:* while wiring
+   `CHECK_LANDSCAPES`: the test profile set `scoring.cache_dir=logprob_cache`, a path relative
+   to each Nextflow task's work directory, so the check would look at an empty cache and fail
+   although `LANDSCAPES` had filled its own. *Fix:* one cache for the run under
+   `pipeline/results/logprob_cache`, deleted by `make pipeline-test` first so the smoke test
+   still always runs the model. *Verified:* `make pipeline-test`, 13 tasks; the check reports
+   2/2 landscapes and 396/396 residues.
+3. **A cache path with a space would have split the command line.** *Found:* in review before
+   the first smoke run, not by a failure: the absolute cache path contains the project folder
+   `Developmet Projects`, and `params.hydra_overrides` is pasted into every command unquoted, so
+   the override would have become two arguments. *Fix:* a separate `params.cache_dir`, quoted on
+   its own in each of the three scoring modules. *Verified:* the smoke run above, from this
+   folder.
+4. **A Hydra list override cannot replace a mapping.** *Found:* the new CLI test failed with
+   "Error merging override eval.scoring_region.msa_region_assays=[C]"; the key holds a mapping
+   (assay → evidence), and `{C: toy}` was refused because the config is in struct mode.
+   *Fix:* delete the key, then add it: `~eval.scoring_region.msa_region_assays
+   +eval.scoring_region.msa_region_assays=[C]`. *Verified:* the test passes.
+
+**Supporting details.**
+- *Run, model time from the cache log:* 35M 2,123 s, 150M 2,931 s, 650M 9,926 s, SaProt
+  25,847 s (six entries over 2,000 residues took 74.7% of SaProt's time). Total 40,827 s.
+- *Coverage:* each ESM-2 size 222/222 landscapes of 217 assays (5 full-target beside a partial
+  benchmark region), SaProt 216/216 of 213 (3); `results/data/landscape_coverage.parquet`.
+- *Benchmark unchanged:* 337,403 previously scored cache rows bit-identical in 1,311 entries;
+  the four masked score sets rebuilt from the cache equal the committed ones exactly (0
+  positions computed); `make test-slow` 12 passed in 244 s; no tracked file in `results/`
+  changed.
+- *SaProt full targets:* the pLDDT rule leaves a 3Di letter at 6.0% (`POLG_HCVJF`), 13.8%
+  (ZIKV) and 16.5% (BRCA2) of residues, so these three landscapes are close to sequence-only.
+  They have no upstream scores to compare with.
+- *Time estimate:* first estimates within 10% of the actual time (SaProt 7 h 25 min against
+  7 h 10 min).
+- *Run reports:* `landscape_run_<model>.parquet` shows the last invocation only (35M 35,818,
+  150M 16,445, 650M 5,461, SaProt 38,760 positions); the cache log keeps the totals.
+- *Tests:* `make lint` clean; `make test` 385 passed, 1 skipped (12 new in
+  `tests/eval/test_landscapes.py`); `make pipeline-test` passes with the two new processes.
+- *Not done:* the Phase 4 export itself; the stretch models.

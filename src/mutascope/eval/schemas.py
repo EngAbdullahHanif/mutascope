@@ -154,6 +154,52 @@ class ScoringRunSchema(pa.DataFrameModel):
         ordered = True
 
 
+class LandscapeRunSchema(pa.DataFrameModel):
+    """What one ``mutascope score landscapes`` invocation did for one landscape of one assay.
+
+    ``region`` is the label of the scored region; ``benchmark`` and ``full_target`` say which
+    landscape of the assay it is (both true when the benchmark region is the full target).
+    ``positions_computed`` are the residues that went through the model in this invocation: 0
+    when the cache had them all, or when an earlier row filled the same cache entry.
+    """
+
+    assay_id: Series[str]
+    model: Series[str]
+    region: Series[str]
+    region_length: Series[int] = pa.Field(ge=1)
+    benchmark: Series[bool]
+    full_target: Series[bool]
+    positions_computed: Series[int] = pa.Field(ge=0)
+    seconds: Series[float] = pa.Field(ge=0)
+
+    class Config:  # pyright: ignore[reportIncompatibleVariableOverride]
+        strict = True
+        ordered = True
+        unique = ["assay_id", "region"]  # noqa: RUF012 — read by pandera
+
+
+class LandscapeCoverageSchema(pa.DataFrameModel):
+    """How much of one landscape of one assay the cache holds for one model.
+
+    ``positions_scored`` are the residues with all 20 values; ``complete`` means every residue
+    of the region (``mutascope score check-landscapes``).
+    """
+
+    assay_id: Series[str]
+    model: Series[str]
+    region: Series[str]
+    region_length: Series[int] = pa.Field(ge=1)
+    benchmark: Series[bool]
+    full_target: Series[bool]
+    positions_scored: Series[int] = pa.Field(ge=0)
+    complete: Series[bool]
+
+    class Config:  # pyright: ignore[reportIncompatibleVariableOverride]
+        strict = True
+        ordered = True
+        unique = ["assay_id", "model", "region"]  # noqa: RUF012 — read by pandera
+
+
 class AgreementSchema(pa.DataFrameModel):
     """Model gate, one assay: our scores against ProteinGym's on the same single mutants.
 

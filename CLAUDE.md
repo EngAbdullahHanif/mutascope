@@ -139,6 +139,10 @@ Run `make lint test` before declaring any task done.
   and results and the name of their directories and files; never build it anywhere else.
 - The cache is the checkpoint of a scoring run: it lives outside any output or Nextflow work
   directory, and a rerun must not recompute a finished sequence.
+- Full landscapes (ADR 0018) live in the same cache entries: each assay has its benchmark-region
+  landscape and, where that region is partial, a full-target one (region label `full`). They are
+  filled by `mutascope score landscapes`, a slice of `scoring.landscapes.checkpoint_tokens` at a
+  time, and `mutascope score check-landscapes` must pass before anything reads them.
 - Pin every Hugging Face model by `revision` in config.
 
 ## Evaluation rules (non-negotiable)
@@ -228,7 +232,8 @@ v1.3 pipeline producing 696,311 validated single mutants across 217 assays, stru
 3Di for 213 of them, an EDA notebook and a data card (ADR 0009). Phase 2 delivered zero-shot scores
 at every measured position from ESM-2 35M / 150M / 650M (217 assays, masked and wild-type marginal),
 SaProt 650M and the ESM-2 650M + SaProt ensemble (213 assays), the benchmark harness with paired
-comparisons and figures, and passing harness and model gates (ADR 0017). Still open from Phase 2:
-full masked landscapes at every position, which the Phase 4 export needs.
+comparisons and figures, and passing harness and model gates (ADR 0017). Full masked landscapes
+at every residue for all four models, plus full-target landscapes where the benchmark region is
+partial, landed after the close (ADR 0018); the Phase 4 export reads them from the cache.
 Update this section at the start of each phase.
 The per-phase task checklist lives in `docs/ROADMAP.md`; mark items `[x]` there as they land.
