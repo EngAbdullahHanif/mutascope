@@ -4,6 +4,7 @@ Every pipeline step is a command here; Nextflow only ever calls these commands.
 """
 
 import csv
+import re
 import time
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -74,12 +75,22 @@ from mutascope.eval.region import (
 )
 from mutascope.eval.schemas import (
     AgreementSchema,
+    CanarySchema,
     ComparisonSchema,
     LandscapeCoverageSchema,
     LandscapeRunSchema,
     ScoringRunSchema,
+    SelectedHyperparameterSchema,
     SummarySchema,
+    SupervisedLeaderboardSchema,
     SupervisedMetricSchema,
+)
+from mutascope.eval.supervised import (
+    hyperparameters_path,
+    leaderboard_table,
+    pooled_assay_metrics,
+    results_path,
+    supervised_label,
 )
 from mutascope.eval.zero_shot import (
     load_scores,
@@ -89,10 +100,19 @@ from mutascope.eval.zero_shot import (
     write_scores,
 )
 from mutascope.export.hub import PublishError, push_dataset, stage_dataset
-from mutascope.features.base import build_features
+from mutascope.features.base import FEATURE_SETS, KEY_COLUMNS, build_features
 from mutascope.features.embeddings import fill_embeddings, hidden_size
+from mutascope.features.matrix import FeatureMatrix
 from mutascope.features.schemas import EmbeddingRunSchema, FeatureStoreReportSchema
-from mutascope.features.sets import FeatureSetError, assays_of, feature_sets, width
+from mutascope.features.sets import (
+    FeatureSet,
+    FeatureSetError,
+    assays_of,
+    assemble,
+    feature_sets,
+    structured_assays,
+    width,
+)
 from mutascope.features.store import (
     FeatureStoreError,
     ModelSource,
@@ -100,8 +120,15 @@ from mutascope.features.store import (
     measured_keys,
     read_structure_features,
 )
-from mutascope.models.cv import CrossValidationError, cv_metrics_table
+from mutascope.models.canary import canary_record, permutation_canary
+from mutascope.models.cv import (
+    CrossValidationError,
+    DesignBuilder,
+    ModelFactory,
+    cv_metrics_table,
+)
 from mutascope.models.registry import model_factory
+from mutascope.models.ridge import RidgeError
 from mutascope.scoring.base import build_scorer
 from mutascope.scoring.cache import CacheError, LogProbCache
 from mutascope.scoring.ensemble import zscore_mean
@@ -614,6 +641,53 @@ def data_folds(
         typer.echo(f"  {scheme}: {summary}")
 
 
+StoreDir = Annotated[
+    Path | None,
+    typer.Option(
+        help="Feature store (`features build`); needed for any feature set but `none`.",
+        exists=True,
+        file_okay=False,
+    ),
+]
+TRAIN_ERRORS = (KeyError, FoldJoinError, CrossValidationError, FeatureSetError, FeatureStoreError)
+
+
+def _design(cfg: DictConfig, store_dir: Path | None) -> tuple[DesignBuilder, list[str] | None]:
+    """Feature builder for ``train.feature_set`` and the assays it covers (None: every assay).
+
+    A key-only set (``none``) is computed from the keys. Any other name is a feature-store set
+    in ``features.sets``, assembled one assay at a time (ADR 0020); a structure set covers
+    only the assays the store has structure features for.
+    """
+    name = str(cfg.train.feature_set)
+    if name in FEATURE_SETS:
+        return (lambda assay_id, keys: build_features(name, keys)), None
+    sets = feature_sets(
+        as_str_dict(OmegaConf.to_container(cfg.features.sets, resolve=True), "features.sets")
+    )
+    if name not in sets:
+        raise KeyError(f"unknown feature set {name!r}; known: {sorted([*FEATURE_SETS, *sets])}")
+    if store_dir is None:
+        raise FeatureSetError(f"feature set {name!r} is read from the store: pass --store-dir")
+    feature_set, store = sets[name], store_dir
+    covered = sorted(structured_assays(store)) if feature_set.structure else None
+
+    def design(assay_id: str, keys: pd.DataFrame) -> FeatureMatrix:
+        return assemble(store, feature_set, assay_id, keys).feature_matrix()
+
+    return design, covered
+
+
+def _model(cfg: DictConfig) -> ModelFactory:
+    """``train.model`` configured with ``train.params.<model>`` (if any)."""
+    name = str(cfg.train.model)
+    params = cfg.train.params.get(name)
+    config = (
+        {} if params is None else as_str_dict(OmegaConf.to_container(params, resolve=True), name)
+    )
+    return model_factory(name, config)
+
+
 @train_app.command("cv")
 def train_cv(
     variants_dir: Annotated[
@@ -625,43 +699,57 @@ def train_cv(
     ],
     reference: Reference,
     out_dir: Annotated[Path, typer.Option(help="Results directory.")],
+    store_dir: StoreDir = None,
     config_dir: ConfigDir = Path("conf"),
     overrides: Overrides = None,
 ) -> None:
-    """Cross-validate ``train.model`` on ``train.feature_set`` in every assay (ADR 0019).
+    """Cross-validate ``train.model`` on ``train.feature_set`` in every assay (ADR 0019, 0021).
 
-    Per assay and scheme, each fold is predicted by a model trained on the others. Writes
-    ``cv_<model>_<feature_set>.parquet`` to ``out_dir``: Spearman and MSE over the pooled
-    out-of-fold predictions (``fold`` null, ProteinGym's number) and per fold. Prints the
-    ProteinGym-style aggregate of the pooled values per scheme (no CI yet), and logs the run
-    to MLflow in the ``train.experiment`` experiment.
+    Per assay and scheme, each fold is predicted by a model trained on the others. Features
+    are assembled from the store one assay at a time. Writes ``cv_<model>_<feature_set>
+    .parquet`` to ``out_dir``: Spearman and MSE over the pooled out-of-fold predictions
+    (``fold`` null, ProteinGym's number) and per fold; for a model that tunes itself, also the
+    hyperparameters its inner CV chose per fold. Prints the ProteinGym-style aggregate of the
+    pooled values per scheme, and logs the run to MLflow in ``train.experiment``.
     """
     cfg = load_config(config_dir, overrides)
     model, feature_set = str(cfg.train.model), str(cfg.train.feature_set)
+    label = supervised_label(model, feature_set)
     schemes = [str(s) for s in cfg.train.schemes]
     unknown = sorted(set(schemes) - set(CV_SCHEMES))
     if unknown:
         typer.echo(f"error: train.schemes: unknown {unknown}; use {list(CV_SCHEMES)}", err=True)
         raise typer.Exit(code=1)
     seed_all(int(cfg.train.seed))
+    started = time.monotonic()
     try:
-        make_model = model_factory(model)
-        data = load_cv_table(variants_dir, folds_dir)
-        features = build_features(feature_set, data)
-        per_assay = cv_metrics_table(
-            data, features, make_model, model=model, feature_set=feature_set, schemes=schemes
+        make_model = _model(cfg)
+        design, covered = _design(cfg, store_dir)
+        data = load_cv_table(variants_dir, folds_dir, covered)
+        result = cv_metrics_table(
+            data, design, make_model, model=model, feature_set=feature_set, schemes=schemes
         )
-    except (KeyError, FoldJoinError, CrossValidationError) as exc:
+    except TRAIN_ERRORS as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
-    path = write_table(
-        per_assay, SupervisedMetricSchema, out_dir / f"cv_{model}_{feature_set}.parquet"
-    )
+    wall = time.monotonic() - started
+    per_assay = result.metrics
+    paths = [write_table(per_assay, SupervisedMetricSchema, results_path(out_dir, label))]
+    if not result.hyperparameters.empty:
+        paths.append(
+            write_table(
+                result.hyperparameters,
+                SelectedHyperparameterSchema,
+                hyperparameters_path(out_dir, label),
+            )
+        )
     assays = sorted(set(per_assay["assay_id"]))
-    typer.echo(f"{model} on {feature_set}: {len(assays)} assays, {len(data):,} variants")
+    typer.echo(
+        f"{model} on {feature_set}: {len(assays)} assays, {len(data):,} variants, {wall:.0f} s"
+    )
     groups = AssayGroups.from_reference(pd.read_csv(reference), assays)
     pooled = per_assay[per_assay["fold"].isna()]
-    undefined: dict[str, float] = {}
+    metrics: dict[str, float] = {"assays": float(len(assays)), "variants": float(len(data))}
     for scheme in schemes:
         for metric in SUPERVISED_METRICS:
             values = (
@@ -671,20 +759,334 @@ def train_cv(
                 .to_numpy(np.float64)
             )
             n_nan = int(np.isnan(values).sum())
-            undefined[f"undefined.{scheme}.{metric}"] = float(n_nan)
+            overall = aggregate(values, groups).overall
+            metrics[f"undefined.{scheme}.{metric}"] = float(n_nan)
+            metrics[f"{metric}.{scheme}"] = overall
             typer.echo(
-                f"  {scheme:<10} {metric:<8} {aggregate(values, groups).overall:.4f} "
-                f"({len(assays) - n_nan} assays defined)"
+                f"  {scheme:<10} {metric:<8} {overall:.4f} ({len(assays) - n_nan} assays defined)"
             )
-    typer.echo(f"results: {path}")
+    _echo_edges(result.hyperparameters, cfg)
+    for path in paths:
+        typer.echo(f"results: {path}")
     _log_run(
         cfg,
         "cross-validate",
         f"{model} {feature_set}",
-        {"train.model": model, "train.feature_set": feature_set, "train.schemes": schemes},
-        {"assays": float(len(assays)), "variants": float(len(data))} | undefined,
+        {
+            "train.model": model,
+            "train.feature_set": feature_set,
+            "train.schemes": schemes,
+            "train.params": as_str_dict(
+                OmegaConf.to_container(cfg.train.params, resolve=True), "train.params"
+            ).get(model, {}),
+        },
+        metrics,
+        paths,
+        {"model": model, "feature_set": feature_set, "kind": "supervised"},
+        experiment=str(cfg.train.experiment),
+    )
+
+
+def _echo_edges(chosen: pd.DataFrame, cfg: DictConfig) -> None:
+    """Print how often the inner CV chose the smallest or largest penalty on the grid."""
+    alphas = chosen[chosen["name"] == "alpha"]
+    if alphas.empty:
+        return
+    log10 = np.log10(alphas["value"].to_numpy(np.float64))
+    grid = cfg.train.params[str(cfg.train.model)].alphas
+    low, high = float(grid.log10_min), float(grid.log10_max)
+    typer.echo(
+        f"  alpha: median 10^{np.median(log10):.1f}; at the grid's low end in "
+        f"{int(np.isclose(log10, low).sum())} of {log10.size} fits, high end in "
+        f"{int(np.isclose(log10, high).sum())}"
+    )
+
+
+@train_app.command("canary")
+def train_canary(
+    variants_dir: Annotated[
+        Path, typer.Option(help="Processed variant partitions.", exists=True, file_okay=False)
+    ],
+    folds_dir: Annotated[
+        Path,
+        typer.Option(help="Fold partitions (`data folds`).", exists=True, file_okay=False),
+    ],
+    out_dir: Annotated[Path, typer.Option(help="Results directory.")],
+    store_dir: StoreDir = None,
+    config_dir: ConfigDir = Path("conf"),
+    overrides: Overrides = None,
+) -> None:
+    """Label-permutation canary of ``train.model`` on real assays (ADR 0019, 0021).
+
+    On each assay of ``train.canary.assays`` and each scheme, the CV loop runs once with true
+    labels and ``n_permutations`` times with shuffled training labels. Passes when the mean
+    permuted pooled Spearman is within ``max_standard_errors`` standard errors of 0. A case
+    whose true-label Spearman is below ``min_observed`` is marked uninformative: a model that
+    learns nothing there passes without proving anything. Writes ``canary_<label>.parquet``;
+    exits 1 if any case fails.
+    """
+    cfg = load_config(config_dir, overrides)
+    model, feature_set = str(cfg.train.model), str(cfg.train.feature_set)
+    canary = cfg.train.canary
+    label = supervised_label(model, feature_set)
+    seed_all(int(cfg.train.seed))
+    rng = np.random.default_rng(int(cfg.train.seed))
+    assays = [str(a) for a in canary.assays]
+    records: list[dict[str, object]] = []
+    try:
+        make_model = _model(cfg)
+        design, covered = _design(cfg, store_dir)
+        outside = sorted(set(assays) - set(covered or assays))
+        if outside:
+            raise FeatureSetError(f"{feature_set} does not cover canary assays {outside}")
+        data = load_cv_table(variants_dir, folds_dir, assays)
+        for assay_id in assays:
+            assay = data[data["assay_id"] == assay_id].reset_index(drop=True)
+            x = design(assay_id, assay[list(KEY_COLUMNS)])
+            for scheme in [str(s) for s in cfg.train.schemes]:
+                result = permutation_canary(
+                    x,
+                    assay["DMS_score"].to_numpy(np.float64),
+                    assay[f"fold_{scheme}"].to_numpy(np.int64),
+                    make_model,
+                    n_permutations=int(canary.n_permutations),
+                    rng=rng,
+                )
+                records.append(
+                    {"model": model, "feature_set": feature_set, "assay_id": assay_id}
+                    | canary_record(
+                        result,
+                        scheme=scheme,
+                        max_standard_errors=float(canary.max_standard_errors),
+                        min_observed=float(canary.min_observed),
+                    )
+                )
+    except (*TRAIN_ERRORS, RidgeError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    table = pd.DataFrame.from_records(records)
+    path = write_table(table, CanarySchema, out_dir / f"canary_{label}.parquet")
+    typer.echo(f"canary {label}: {int(canary.n_permutations)} permutations per case")
+    for row in table.itertuples(index=False):
+        verdict = "pass" if row.passed else "FAIL"
+        note = "" if row.informative else "  (uninformative: model learns little here)"
+        typer.echo(
+            f"  {row.assay_id:<34} {row.scheme:<10} observed {row.observed:+.3f}  permuted "
+            f"{row.permuted_mean:+.3f} ± {row.standard_error:.3f} (z {row.z:+.2f})  {verdict}{note}"
+        )
+    typer.echo(f"results: {path}")
+    failed = int((~table["passed"]).sum())
+    _log_run(
+        cfg,
+        "canary",
+        f"{model} {feature_set}",
+        {
+            "train.model": model,
+            "train.feature_set": feature_set,
+            "canary.assays": ", ".join(assays),
+            "canary.n_permutations": int(canary.n_permutations),
+            "canary.max_standard_errors": float(canary.max_standard_errors),
+        },
+        {
+            "cases": float(len(table)),
+            "failed": float(failed),
+            "uninformative": float((~table["informative"]).sum()),
+            "max_abs_z": float(table["z"].abs().max()),
+        },
         [path],
         {"model": model, "feature_set": feature_set, "kind": "supervised"},
+        experiment=str(cfg.train.experiment),
+    )
+    if failed:
+        typer.echo(f"error: {failed} canary case(s) failed", err=True)
+        raise typer.Exit(code=1)
+
+
+def _pooled_runs(results_dir: Path, labels: list[str]) -> dict[str, pd.DataFrame]:
+    """Pooled values of each run, read from ``cv_<label>.parquet``; exits 1 if one is missing."""
+    missing = [label for label in labels if not results_path(results_dir, label).exists()]
+    if missing:
+        typer.echo(f"error: no results for {missing} in {results_dir}", err=True)
+        raise typer.Exit(code=1)
+    return {
+        label: pooled_assay_metrics(read_results(results_path(results_dir, label)))
+        for label in labels
+    }
+
+
+@train_app.command("compare")
+def train_compare(
+    results_dir: Annotated[
+        Path,
+        typer.Option(help="Directory of cv_<label>.parquet.", exists=True, file_okay=False),
+    ],
+    reference: Reference,
+    out_dir: Annotated[Path, typer.Option(help="Where summary/comparisons Parquet go.")],
+    config_dir: ConfigDir = Path("conf"),
+    overrides: Overrides = None,
+) -> None:
+    """Bootstrap summaries and paired comparisons of pooled Spearman (ADR 0014, 0021).
+
+    For every run in ``train.comparisons``: the ProteinGym aggregate with a bootstrap CI over
+    its own assays, per scheme (``supervised_summary.parquet``). For every pair ``[A, B]``:
+    the paired bootstrap of ``A - B`` on the same resampled assays, per scheme
+    (``supervised_comparisons.parquet``). A structure set lacks
+    ``data.structure_exceptions``; a pair with one is compared on the shared assays.
+    """
+    cfg = load_config(config_dir, overrides)
+    pairs = [(str(a), str(b)) for a, b in cfg.train.comparisons]
+    labels = sorted({label for pair in pairs for label in pair})
+    if not pairs:
+        typer.echo("error: train.comparisons is empty", err=True)
+        raise typer.Exit(code=1)
+    pooled = _pooled_runs(results_dir, labels)
+    table = pd.read_csv(reference)
+    bootstrap = BootstrapParams(
+        int(cfg.eval.bootstrap.n_resamples), float(cfg.eval.bootstrap.confidence)
+    )
+    seed = int(cfg.eval.bootstrap.seed)
+    seed_all(seed)
+    exceptions = cfg.data.structure_exceptions
+    no_structure = [] if exceptions is None else [str(a) for a in exceptions]
+    try:
+        summary = pd.concat(
+            [
+                summarise(pooled[label], table, bootstrap, np.random.default_rng(seed))
+                for label in labels
+            ],
+            ignore_index=True,
+        )
+        frames = [
+            paired_bootstrap_diff(
+                pooled[a],
+                pooled[b],
+                table,
+                bootstrap,
+                np.random.default_rng(seed),
+                may_be_absent=no_structure,
+            )
+            for a, b in pairs
+        ]
+    except (ValueError, KeyError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    summary_path = write_table(summary, SummarySchema, out_dir / "supervised_summary.parquet")
+    comparisons = pd.concat(frames, ignore_index=True)
+    comparison_path = write_table(
+        comparisons, ComparisonSchema, out_dir / "supervised_comparisons.parquet"
+    )
+    metrics: dict[str, float] = {}
+    overall = summary[(summary["level"] == "overall") & (summary["metric"] == "spearman")]
+    typer.echo(f"pooled Spearman, {bootstrap.n_resamples:,} resamples:")
+    for row in overall.itertuples(index=False):
+        typer.echo(
+            f"  {row.model:<34} {row.split:<10} {row.value:.4f} "
+            f"[{row.ci_low:.4f}, {row.ci_high:.4f}] ({row.n_assays} assays)"
+        )
+    for model, split, value in zip(
+        overall["model"], overall["split"], overall["value"].to_numpy(np.float64), strict=True
+    ):
+        metrics[f"spearman/{model}/{split}"] = float(value)
+    typer.echo("paired, A - B:")
+    headline = comparisons[
+        (comparisons["level"] == "overall") & (comparisons["metric"] == "spearman")
+    ]
+    for row in headline.itertuples(index=False):
+        typer.echo(
+            f"  {row.model_a} - {row.model_b} ({row.split}): {row.diff:+.4f} "
+            f"[{row.ci_low:+.4f}, {row.ci_high:+.4f}], A better in {row.share_a_better:.1%} "
+            f"({row.n_assays} assays)"
+        )
+    for a, b, split, diff, low, high in zip(
+        headline["model_a"],
+        headline["model_b"],
+        headline["split"],
+        headline["diff"].to_numpy(np.float64),
+        headline["ci_low"].to_numpy(np.float64),
+        headline["ci_high"].to_numpy(np.float64),
+        strict=True,
+    ):
+        key = f"spearman_diff/{a}-vs-{b}/{split}"
+        metrics |= {key: float(diff), f"{key}/ci_low": float(low), f"{key}/ci_high": float(high)}
+    typer.echo(f"summary: {summary_path}\ncomparisons: {comparison_path}")
+    _log_run(
+        cfg,
+        "compare",
+        "supervised",
+        {
+            "pairs": ", ".join(f"{a} - {b}" for a, b in pairs),
+            "bootstrap.n_resamples": bootstrap.n_resamples,
+            "bootstrap.confidence": bootstrap.confidence,
+            "bootstrap.seed": seed,
+        },
+        metrics,
+        [summary_path, comparison_path],
+        {"kind": "supervised"},
+        experiment=str(cfg.train.experiment),
+    )
+
+
+@train_app.command("leaderboard")
+def train_leaderboard(
+    results_dir: Annotated[
+        Path,
+        typer.Option(help="Directory of cv_<label>.parquet.", exists=True, file_okay=False),
+    ],
+    reference: Reference,
+    out: Annotated[Path, typer.Option(help="Output Parquet file.")],
+    config_dir: ConfigDir = Path("conf"),
+    overrides: Overrides = None,
+) -> None:
+    """Our pooled Spearman next to ProteinGym's supervised baselines of the same type.
+
+    A sanity range, not a gate (ADR 0021): ProteinGym's one-hot baselines use other zero-shot
+    models and another learner. Reads ``train.leaderboard``; writes one table and logs a run.
+    """
+    cfg = load_config(config_dir, overrides)
+    board = cfg.train.leaderboard
+    baselines = {str(label): [str(n) for n in names] for label, names in board.baselines.items()}
+    pooled = _pooled_runs(results_dir, sorted(baselines))
+    try:
+        assay_level = {
+            scheme: pd.read_csv(Path(str(board.assay_level[scheme]))) for scheme in CV_SCHEMES
+        }
+        table = leaderboard_table(
+            pooled,
+            baselines,
+            pd.read_csv(Path(str(board.summary))),
+            assay_level,
+            pd.read_csv(reference),
+        )
+    except (FileNotFoundError, KeyError) as exc:
+        typer.echo(f"error: {exc} (run `mutascope data download`)", err=True)
+        raise typer.Exit(code=1) from exc
+    path = write_table(table, SupervisedLeaderboardSchema, out)
+    typer.echo("pooled Spearman: ours vs ProteinGym's published supervised baselines")
+    metrics: dict[str, float] = {}
+    for row in table.itertuples(index=False):
+        typer.echo(
+            f"  {row.run:<34} {row.scheme:<10} ours {row.ours:.3f}  {row.published_model:<36} "
+            f"{row.published:.3f}  diff {row.diff:+.3f}  per-assay rho {row.assay_spearman:.2f}"
+        )
+    for run, name, scheme, diff in zip(
+        table["run"],
+        table["published_model"],
+        table["scheme"],
+        table["diff"].to_numpy(np.float64),
+        strict=True,
+    ):
+        # MLflow metric names allow letters, digits, "_-. /" only ("ESM-1v + One-Hot ...").
+        safe = re.sub(r"[^\w\-. /]", "_", str(name))
+        metrics[f"diff/{run}/{safe}/{scheme}"] = float(diff)
+    typer.echo(f"results: {path}")
+    _log_run(
+        cfg,
+        "leaderboard",
+        "supervised",
+        {"runs": ", ".join(baselines)},
+        metrics,
+        [path],
+        {"kind": "supervised"},
         experiment=str(cfg.train.experiment),
     )
 
@@ -1916,6 +2318,17 @@ def features_build(
     for feature_set in sets.values():
         assays = assays_of(feature_set, store["assay_id"].tolist(), structured)
         rows = int(store.set_index("assay_id").loc[assays, "variants"].sum())
+        if "site_onehot" in feature_set.blocks:
+            dense = FeatureSet(
+                feature_set.name,
+                tuple(b for b in feature_set.blocks if b != "site_onehot"),
+                feature_set.structure,
+            )
+            typer.echo(
+                f"  set {feature_set.name}: {len(assays)} assays, {rows:,} variants x "
+                f"(20 x L site one-hot, 2 entries per row, + {width(dense, hidden)} features)"
+            )
+            continue
         columns = width(feature_set, hidden)
         typer.echo(
             f"  set {feature_set.name}: {len(assays)} assays, {rows:,} variants x {columns:,} "

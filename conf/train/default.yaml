@@ -3,8 +3,52 @@
 # Names are keys of mutascope.models.registry.MODELS and mutascope.features.base.FEATURE_SETS.
 model: training_mean
 feature_set: none
+# Hyperparameters by model name (mutascope.models.registry); a model not listed takes none.
+params:
+  ridge:
+    # Penalties the inner CV tries, evenly spaced in log10 (loss: sum of squared errors +
+    # alpha * |w|^2, penalised dense columns standardised; ADR 0021).
+    alphas: {log10_min: -3, log10_max: 6, num: 19}
+    unpenalized: []
+  augmented_ridge:
+    alphas: ${train.params.ridge.alphas}
+    # Hsu et al. (2022): the zero-shot score is not shrunk, only the one-hot terms are.
+    unpenalized: ["esm2_650m:score"]
 # ProteinGym's three schemes (fold_random_5, fold_modulo_5, fold_contiguous_5). Report all three.
 schemes: [random, modulo, contiguous]
 seed: 0
 # MLflow experiment for supervised runs, next to tracking.experiment (zero-shot).
 experiment: supervised
+# Label-permutation canary on real models (`mutascope train canary`, ADR 0019 / 0021): the
+# assays of tests/models/test_canary.py, judged on the mean permuted pooled Spearman.
+canary:
+  assays: [ERBB2_HUMAN_Elazar_2016, OTU7A_HUMAN_Tsuboyama_2023_2L2D, NPC1_HUMAN_Erwood_2022_HEK293T]
+  n_permutations: 20
+  max_standard_errors: 4.0
+  # Positive control: below this true-label Spearman the canary cannot vouch for the model,
+  # since a model that learns nothing passes trivially. Such cases are reported, not failed.
+  min_observed: 0.2
+# Paired bootstrap of pooled Spearman (`mutascope train compare`; ADR 0014): [A, B] by run
+# label <model>_<feature_set>. Every supervised model against zero-shot on the same test folds.
+comparisons:
+  - [ridge_site_onehot, zero_shot_esm2_score]
+  - [augmented_ridge_site_onehot_esm2, zero_shot_esm2_score]
+  - [ridge_seq, zero_shot_esm2_score]
+  - [ridge_seq_struct, zero_shot_esm2_score]
+  - [ridge_seq_struct, zero_shot_saprot_score]
+# ProteinGym's supervised leaderboard (`mutascope train leaderboard`): run label -> published
+# baselines of the same type. A sanity range, not a gate: their features differ (ADR 0021).
+leaderboard:
+  summary: ${data.raw_dir}/Supervised_Summary_performance_DMS_substitutions_Spearman.csv
+  assay_level:
+    random: ${data.raw_dir}/Supervised_DMS_substitutions_Spearman_DMS_level_fold_random_5.csv
+    modulo: ${data.raw_dir}/Supervised_DMS_substitutions_Spearman_DMS_level_fold_modulo_5.csv
+    contiguous: ${data.raw_dir}/Supervised_DMS_substitutions_Spearman_DMS_level_fold_contiguous_5.csv
+  baselines:
+    ridge_site_onehot: [One-Hot Encodings]
+    augmented_ridge_site_onehot_esm2:
+      - ESM-1v + One-Hot Encodings
+      - DeepSequence + One-Hot Encodings
+      - MSA_Transformer + One-Hot Encodings
+      - Tranception + One-Hot Encodings
+      - TranceptEVE + One-Hot Encodings

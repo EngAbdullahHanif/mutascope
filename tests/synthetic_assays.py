@@ -93,3 +93,70 @@ def write_fold_csvs(assays: list[pd.DataFrame], folds_dir: Path) -> Path:
                     ]
                 )
     return folds_dir
+
+
+def write_feature_store(
+    assays: list[pd.DataFrame], tmp_dir: Path, *, with_structure: list[str]
+) -> Path:
+    """A feature store (``features build``) for ``assays``, with real layout and fake models.
+
+    Two models, named as in ``conf/features/default.yaml`` so its sets apply: ``esm2_650m`` on
+    every assay and ``saprot_650m_af2`` on ``with_structure`` only, which also get structure
+    features. Each measured substitution's log-probability is its ``DMS_score`` plus noise
+    (the wild type's is 0), so the zero-shot score carries signal; every other number is
+    random. Embeddings are 4 wide.
+    """
+    from mutascope.eval.landscapes import LandscapeTarget
+    from mutascope.eval.region import ScoringRegion
+    from mutascope.features.embeddings import embedding_method
+    from mutascope.features.store import ModelSource, build_store
+    from mutascope.scoring.cache import CacheKey, LogProbCache
+
+    rng = np.random.default_rng(0)
+    log_probs = LogProbCache(tmp_dir / "logprobs")
+    embeddings = LogProbCache(tmp_dir / "embeddings", width=None)
+    targets = {
+        str(a["assay_id"].iat[0]): "".join(a.groupby("position")["wt_aa"].first()) for a in assays
+    }
+    sources: list[ModelSource] = []
+    for name, covered in (("esm2_650m", list(targets)), ("saprot_650m_af2", with_structure)):
+        by_assay: dict[str, list[LandscapeTarget]] = {}
+        for assay in assays:
+            assay_id = str(assay["assay_id"].iat[0])
+            if assay_id not in covered:
+                continue
+            seq = targets[assay_id]
+            region = ScoringRegion(assay_id, 0, len(seq), len(seq))
+            by_assay[assay_id] = [LandscapeTarget(assay_id, region, seq, None, benchmark=True)]
+            lp = rng.normal(size=(len(seq), 20)).astype(np.float32)
+            for pos, wt in enumerate(seq):
+                lp[pos, AA_ORDER.index(wt)] = 0.0
+            for position, mt, score in zip(
+                assay["position"].to_numpy(np.int64),
+                assay["mt_aa"].astype(str),
+                assay["DMS_score"].to_numpy(np.float64),
+                strict=True,
+            ):
+                lp[position, AA_ORDER.index(mt)] = score + rng.normal()
+            key = CacheKey(f"hub/{name}", "r" * 40, seq, None, "masked", "full")
+            log_probs.put(key, lp)
+            emb_key = CacheKey(f"hub/{name}", "r" * 40, seq, None, embedding_method(4), "full")
+            embeddings.put(emb_key, rng.normal(size=(len(seq), 4)).astype(np.float32))
+        sources.append(ModelSource(name, f"hub/{name}", "r" * 40, by_assay, embeddings, 4))
+    structures = {
+        assay_id: pd.DataFrame(
+            {
+                "position": np.arange(len(targets[assay_id])),
+                "residue": list(targets[assay_id]),
+                "plddt": rng.uniform(50, 100, len(targets[assay_id])),
+                "rel_sasa": rng.uniform(0, 1, len(targets[assay_id])),
+                "contact_count": rng.integers(0, 20, len(targets[assay_id])),
+            }
+        )
+        for assay_id in with_structure
+    }
+    reference = pd.DataFrame({"DMS_id": list(targets), "target_seq": list(targets.values())})
+    keys = pd.concat(assays)[["assay_id", "position", "wt_aa", "mt_aa"]]
+    out = tmp_dir / "features"
+    build_store(reference, sources, log_probs, structures, keys, out)
+    return out

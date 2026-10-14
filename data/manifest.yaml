@@ -64,6 +64,26 @@ proteingym_v1.3:
     size_bytes: 43541
     md5: 612cbd9725668e8ff8a6ddd8919900ad
     sha256: 679b582cc21ac379f2bd3aba2f5acd1c7f092b1a560a249edf7014ff9faa2e30
+  Supervised_DMS_substitutions_Spearman_DMS_level_fold_contiguous_5.csv:
+    url: https://raw.githubusercontent.com/OATML-Markslab/ProteinGym/1f8de974dead8ff7501eff087b725d14a965e9f9/benchmarks/DMS_supervised/substitutions/Spearman/DMS_substitutions_Spearman_DMS_level_fold_contiguous_5.csv
+    size_bytes: 20506
+    md5: 9294d336a6c12232cae572ce1c89cd7b
+    sha256: 94f0c739b3dd55a83513929ec0aa9ab039bb69dadc53772df419bee6807b2bd8
+  Supervised_DMS_substitutions_Spearman_DMS_level_fold_modulo_5.csv:
+    url: https://raw.githubusercontent.com/OATML-Markslab/ProteinGym/1f8de974dead8ff7501eff087b725d14a965e9f9/benchmarks/DMS_supervised/substitutions/Spearman/DMS_substitutions_Spearman_DMS_level_fold_modulo_5.csv
+    size_bytes: 20486
+    md5: 081af56c2397d4c370af50bbc0b4c102
+    sha256: 4a4e97c3359172f20612248790c2dab918113e33f70d9f0cb95cac6abc8b30ac
+  Supervised_DMS_substitutions_Spearman_DMS_level_fold_random_5.csv:
+    url: https://raw.githubusercontent.com/OATML-Markslab/ProteinGym/1f8de974dead8ff7501eff087b725d14a965e9f9/benchmarks/DMS_supervised/substitutions/Spearman/DMS_substitutions_Spearman_DMS_level_fold_random_5.csv
+    size_bytes: 20404
+    md5: f3134f2b1cad5cf490ec87d45ab4155c
+    sha256: 9ec9288d0f5e1530f90403d8070e4203501aa2a8aedbb6100b7499c5623e8e7c
+  Supervised_Summary_performance_DMS_substitutions_Spearman.csv:
+    url: https://raw.githubusercontent.com/OATML-Markslab/ProteinGym/1f8de974dead8ff7501eff087b725d14a965e9f9/benchmarks/DMS_supervised/substitutions/Spearman/Summary_performance_DMS_substitutions_Spearman.csv
+    size_bytes: 7329
+    md5: 2e2566d11075295a28cbaa448b3f0035
+    sha256: 1672851e72d2352bfc8b0f3c0ffe0bf7d98f2ee91f0ba1ae8fa1ed3b7ee7a944
   cv_folds_singles_substitutions.zip:
     url: https://marks.hms.harvard.edu/proteingym/ProteinGym_v1.3/cv_folds_singles_substitutions.zip
     size_bytes: 13412036
