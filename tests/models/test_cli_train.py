@@ -64,13 +64,16 @@ def folds(inputs: dict[str, Path]) -> tuple[int, str]:
     )  # fmt: skip
 
 
-def train(inputs: dict[str, Path], *overrides: str, store: bool = False) -> tuple[int, str]:
+def train(
+    inputs: dict[str, Path], *overrides: str, store: bool = False, jobs: int = 1
+) -> tuple[int, str]:
     return run(
         "train", "cv",
         "--variants-dir", str(inputs["variants"]),
         "--folds-dir", str(inputs["folds"]),
         "--reference", str(inputs["reference"]),
         "--out-dir", str(inputs["results"]),
+        "--jobs", str(jobs),
         *(["--store-dir", str(inputs["store"])] if store else []),
         NO_TRACKING, *overrides,
     )  # fmt: skip
@@ -157,6 +160,46 @@ def test_store_feature_sets_one_assay_at_a_time(inputs: dict[str, Path]) -> None
     pooled = read_results(results / "cv_augmented_ridge_site_onehot_esm2.parquet")
     pooled = pooled[pooled["fold"].isna() & (pooled["metric"] == "spearman")]
     assert (pooled["value"] > 0.4).all()
+
+
+def test_jobs_do_not_change_the_results(inputs: dict[str, Path]) -> None:
+    """Assays run in worker processes give the same files as one process, row for row."""
+    assert folds(inputs)[0] == 0
+    tables: dict[int, list[pd.DataFrame]] = {}
+    for jobs in (1, 2):
+        code, output = train(
+            inputs, "train.model=ridge", "train.feature_set=seq", store=True, jobs=jobs
+        )
+        assert code == 0, output
+        assert f"with {jobs} job(s)" in output
+        tables[jobs] = [
+            pd.read_parquet(inputs["results"] / f"cv_ridge_seq{suffix}.parquet")
+            for suffix in ("", "_hyperparameters")
+        ]
+    for serial, parallel in zip(tables[1], tables[2], strict=True):
+        pd.testing.assert_frame_equal(serial, parallel)
+    # The checkpoint of finished assays is removed once the results are written.
+    assert not (inputs["results"] / ".cv_ridge_seq_checkpoint").exists()
+
+
+def test_an_assay_subset_runs_only_those_assays(inputs: dict[str, Path]) -> None:
+    assert folds(inputs)[0] == 0
+    code, output = train(inputs, "train.assays=[A_TEST,C_TEST]")
+    assert code == 0, output
+    table = read_results(inputs["results"] / "cv_training_mean_none.parquet")
+    assert set(table["assay_id"]) == {"A_TEST", "C_TEST"}
+    code, output = train(inputs, "train.assays=[A_TEST,NOPE]")
+    assert code == 1
+    assert "assays without variants: ['NOPE']" in output
+    code, output = train(
+        inputs,
+        "train.model=ridge",
+        "train.feature_set=seq_struct",
+        "train.assays=[C_TEST]",
+        store=True,
+    )
+    assert code == 1
+    assert "does not cover train.assays ['C_TEST']" in output
 
 
 def test_store_set_needs_the_store(inputs: dict[str, Path]) -> None:

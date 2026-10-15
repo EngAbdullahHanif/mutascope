@@ -14,9 +14,51 @@ params:
     alphas: ${train.params.ridge.alphas}
     # Hsu et al. (2022): the zero-shot score is not shrunk, only the one-hot terms are.
     unpenalized: ["esm2_650m:score"]
+  # Gradient-boosted trees (ADR 0022). Per outer fold: `n_trials` Optuna trials (TPE, seeded),
+  # each scored by the pooled squared error of an inner CV over the training folds; boosting
+  # rounds from the inner curves (early stopping, `patience`); refit on all training rows.
+  lgbm:
+    n_trials: 10
+    max_rounds: 1000
+    patience: 50
+    seed: ${train.seed}
+    # Principal components kept per 1,280-column embedding block, fitted on training rows only;
+    # null keeps the raw embedding columns.
+    pca_components: null
+    # Not searched. One thread per booster: `train cv --jobs` parallelises across assays.
+    fixed:
+      objective: regression
+      metric: l2
+      bagging_freq: 1
+      num_threads: 1
+      deterministic: true
+      force_col_wise: true
+      verbose: -1
+    # Searched, by LightGBM parameter name: {low, high, log?, int?}.
+    search:
+      learning_rate: {low: 0.01, high: 0.2, log: true}
+      num_leaves: {low: 4, high: 64, log: true, int: true}
+      min_data_in_leaf: {low: 5, high: 100, log: true, int: true}
+      feature_fraction: {low: 0.1, high: 1.0}
+      bagging_fraction: {low: 0.5, high: 1.0}
+      lambda_l2: {low: 0.001, high: 10.0, log: true}
+  lgbm_pca:
+    n_trials: ${train.params.lgbm.n_trials}
+    max_rounds: ${train.params.lgbm.max_rounds}
+    patience: ${train.params.lgbm.patience}
+    seed: ${train.params.lgbm.seed}
+    pca_components: 32
+    fixed: ${train.params.lgbm.fixed}
+    search: ${train.params.lgbm.search}
 # ProteinGym's three schemes (fold_random_5, fold_modulo_5, fold_contiguous_5). Report all three.
 schemes: [random, modulo, contiguous]
 seed: 0
+# Assays `train cv` runs (null: every assay the feature set covers). For pilots and timing runs.
+assays: null
+# `train cv --jobs N` runs assays in N processes. Memory, not cores, is the limit: ridge on the
+# largest `seq_struct` assay (16,897 variants) peaks near 2 GB per worker, and the 13 largest at
+# once swapped a 24 GB machine. At most this many variants' assays run at once (ADR 0022).
+max_variants_in_flight: 80000
 # MLflow experiment for supervised runs, next to tracking.experiment (zero-shot).
 experiment: supervised
 # Label-permutation canary on real models (`mutascope train canary`, ADR 0019 / 0021): the
@@ -28,6 +70,16 @@ canary:
   # Positive control: below this true-label Spearman the canary cannot vouch for the model,
   # since a model that learns nothing passes trivially. Such cases are reported, not failed.
   min_observed: 0.2
+# SHAP of one model fit on all of an assay's variants (`mutascope train shap`, ADR 0022): the
+# model's own search, tuned over `scheme`'s folds, then TreeSHAP on every variant. Assays: the
+# 5th percentile, median and 98th percentile of size among the 213 structure assays.
+shap:
+  model: lgbm
+  feature_set: seq_struct
+  scheme: random
+  assays: [SCN5A_HUMAN_Glazer_2019, NUSA_ECOLI_Tsuboyama_2023_1WCL, HSP82_YEAST_Flynn_2019]
+  # Blocks shown per assay in the figure (`mutascope train figures`).
+  top_blocks: 10
 # Paired bootstrap of pooled Spearman (`mutascope train compare`; ADR 0014): [A, B] by run
 # label <model>_<feature_set>. Every supervised model against zero-shot on the same test folds,
 # then neighbouring rungs of the ladder.

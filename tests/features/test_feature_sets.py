@@ -10,7 +10,6 @@ from omegaconf import OmegaConf
 from mutascope.alphabet import AA_ORDER
 from mutascope.eval.landscapes import LandscapeTarget
 from mutascope.eval.region import ScoringRegion
-from mutascope.features.embeddings import embedding_method
 from mutascope.features.sets import (
     FeatureSet,
     FeatureSetError,
@@ -20,7 +19,7 @@ from mutascope.features.sets import (
     width,
 )
 from mutascope.features.store import ModelSource, build_store
-from mutascope.scoring.cache import CacheKey, LogProbCache
+from mutascope.scoring.cache import CacheKey, LogProbCache, embedding_method
 from mutascope.utils.config import as_str_dict, load_config
 
 CONF = Path(__file__).parents[2] / "conf"

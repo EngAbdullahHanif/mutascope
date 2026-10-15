@@ -32,7 +32,7 @@ import torch
 
 from mutascope.eval.landscapes import LandscapeTarget
 from mutascope.features.schemas import EmbeddingRunSchema
-from mutascope.scoring.cache import CacheKey, LogProbCache
+from mutascope.scoring.cache import CacheKey, LogProbCache, embedding_method
 from mutascope.scoring.masked_lm import RESIDUE_OFFSET, MaskedLMScorer
 from mutascope.scoring.windows import tiled_windows
 from mutascope.utils.logging import get_logger
@@ -40,13 +40,6 @@ from mutascope.utils.logging import get_logger
 log = get_logger(__name__)
 
 Embedding = npt.NDArray[np.float32]
-
-
-def embedding_method(layers: int) -> str:
-    """The cache key's method for a mean over the last ``layers`` layers."""
-    if layers < 1:
-        raise ValueError(f"layers must be at least 1, got {layers}")
-    return f"embedding_mean_last{layers}"
 
 
 def hidden_size(scorer: MaskedLMScorer) -> int:
