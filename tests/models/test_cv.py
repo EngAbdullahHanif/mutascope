@@ -1,26 +1,32 @@
 """Cross-validation loop: every variant predicted once, by a model that never saw it."""
 
+import pickle
+import sys
 from collections import Counter
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
 import pytest
-from tests.models.probe import probe_features, probe_model
+from tests.models.probe import probe_design, probe_features, probe_model
 from tests.models.proteingym_reference import merge_supervised_metrics, proteinnpt_standardise
 from tests.synthetic_assays import synthetic_assay
 
 from mutascope.eval.schemas import SupervisedMetricSchema
-from mutascope.features.base import KEY_COLUMNS, build_features
+from mutascope.features.base import KEY_COLUMNS, KeyDesign, build_features
 from mutascope.features.matrix import FeatureMatrix
+from mutascope.features.sets import FeatureSet, StoreDesign
 from mutascope.models.baselines import TrainingMean
 from mutascope.models.cv import (
+    Checkpoint,
     CrossValidationError,
     DesignBuilder,
     cross_validate,
     cv_metrics_table,
     oof_metrics,
 )
+from mutascope.models.registry import model_factory
 
 
 class Spy:
@@ -238,3 +244,103 @@ def test_a_model_refusing_its_input_names_the_assay(assay: pd.DataFrame) -> None
 def test_unknown_feature_set_fails(assay: pd.DataFrame) -> None:
     with pytest.raises(KeyError, match="unknown feature set"):
         build_features("nope", assay)
+
+
+@pytest.fixture
+def three_assays(monkeypatch: pytest.MonkeyPatch) -> pd.DataFrame:
+    # Worker processes unpickle the test's probe from `tests.models.probe`. Pytest imports test
+    # modules without putting the repo root on sys.path (--import-mode=importlib); spawned
+    # workers copy the parent's sys.path, so it goes there.
+    monkeypatch.setattr(sys, "path", [str(Path(__file__).parents[2]), *sys.path])
+    return pd.concat([synthetic_assay(f"{name}_TEST", seed=i) for i, name in enumerate("ABC")])
+
+
+def test_parallel_assays_give_the_serial_table(three_assays: pd.DataFrame) -> None:
+    """``jobs`` changes where each assay runs, never what it computes or the row order."""
+    make_model = model_factory("ridge", {"alphas": {"log10_min": -2, "log10_max": 3, "num": 6}})
+    runs = {
+        jobs: cv_metrics_table(
+            three_assays,
+            probe_design,
+            make_model,
+            model="ridge",
+            feature_set="probe",
+            schemes=["random", "contiguous"],
+            jobs=jobs,
+        )
+        for jobs in (1, 3)
+    }
+    pd.testing.assert_frame_equal(runs[1].metrics, runs[3].metrics)
+    pd.testing.assert_frame_equal(runs[1].hyperparameters, runs[3].hyperparameters)
+    assert list(runs[3].metrics["assay_id"].unique()) == ["A_TEST", "B_TEST", "C_TEST"]
+
+
+def test_a_worker_error_names_the_assay(three_assays: pd.DataFrame) -> None:
+    """An assay failing in a worker process fails the run, named as in a serial run."""
+    flat = three_assays.copy()
+    flat.loc[flat["assay_id"] == "B_TEST", "DMS_score"] = 1.0
+    with pytest.raises(CrossValidationError, match="B_TEST, random: fold 0: training targets"):
+        cv_metrics_table(
+            flat,
+            probe_design,
+            probe_model,
+            model="probe",
+            feature_set="probe",
+            schemes=["random"],
+            jobs=2,
+        )
+
+
+def test_jobs_must_be_positive(assay: pd.DataFrame) -> None:
+    with pytest.raises(CrossValidationError, match="jobs must be at least 1"):
+        cv_metrics_table(
+            assay, probe_design, probe_model, model="m", feature_set="f", schemes=["random"], jobs=0
+        )
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        model_factory("ridge", {"alphas": {"log10_min": 0, "log10_max": 1, "num": 2}}),
+        model_factory("training_mean"),
+        model_factory("zero_shot"),
+        KeyDesign("none"),
+        StoreDesign(Path("store"), FeatureSet("s", ("onehot",), structure=False)),
+    ],
+    ids=["ridge", "training_mean", "zero_shot", "key_design", "store_design"],
+)
+def test_factories_and_designs_pickle(factory: object) -> None:
+    """Worker processes receive the model factory and the design by pickling."""
+    assert pickle.loads(pickle.dumps(factory)) is not None
+
+
+def test_a_resumed_run_loads_finished_assays_and_gives_the_same_table(
+    three_assays: pd.DataFrame, tmp_path: Path
+) -> None:
+    """A run killed after some assays resumes from the checkpoint without redoing them."""
+    make_model = model_factory("ridge", {"alphas": {"log10_min": -2, "log10_max": 3, "num": 6}})
+    common: dict[str, Any] = {"model": "ridge", "feature_set": "probe", "schemes": ["random"]}
+    full = cv_metrics_table(three_assays, probe_design, make_model, **common)
+
+    checkpoint = Checkpoint(tmp_path / "ckpt", "settings-1")
+    first_two = three_assays[three_assays["assay_id"] != "C_TEST"]
+    cv_metrics_table(first_two, probe_design, make_model, checkpoint=checkpoint, **common)
+    built: list[str] = []
+
+    def design(assay_id: str, keys: pd.DataFrame) -> FeatureMatrix:
+        built.append(assay_id)
+        return probe_features(keys)
+
+    resumed = cv_metrics_table(three_assays, design, make_model, checkpoint=checkpoint, **common)
+    assert built == ["C_TEST"]  # A and B came from the checkpoint
+    pd.testing.assert_frame_equal(resumed.metrics, full.metrics)
+    pd.testing.assert_frame_equal(resumed.hyperparameters, full.hyperparameters)
+
+    with pytest.raises(CrossValidationError, match="other settings"):
+        cv_metrics_table(
+            three_assays,
+            probe_design,
+            make_model,
+            checkpoint=Checkpoint(checkpoint.directory, "x"),
+            **common,
+        )

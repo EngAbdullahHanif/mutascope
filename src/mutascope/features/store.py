@@ -39,14 +39,13 @@ from biotite.sequence.align import SubstitutionMatrix  # pyright: ignore[reportM
 from mutascope.alphabet import AA_ORDER
 from mutascope.data.db import literal
 from mutascope.eval.landscapes import LandscapeTarget
-from mutascope.features.embeddings import embedding_method
 from mutascope.features.schemas import (
     SUBSTITUTIONS_PER_RESIDUE,
     FeaturePositionSchema,
     FeatureStoreReportSchema,
     FeatureVariantSchema,
 )
-from mutascope.scoring.cache import CacheKey, LogProbCache
+from mutascope.scoring.cache import CacheKey, LogProbCache, embedding_method
 from mutascope.utils.io import fresh_tmp_dir, replace_dir
 from mutascope.utils.logging import get_logger
 

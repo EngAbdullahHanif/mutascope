@@ -20,8 +20,13 @@ fmt:
 # Extra pytest flags, e.g. CI's coverage: make test PYTEST_ARGS="--cov=mutascope"
 PYTEST_ARGS ?=
 
+# LightGBM tests run in a second process, from files that never import torch: on macOS the two
+# libraries' OpenMP runtimes crash when loaded together (ADR 0022). Coverage appends across both.
+LIGHTGBM_TESTS = tests/models/test_lgbm.py tests/models/test_cli_train.py
 test:
 	uv run pytest -q $(PYTEST_ARGS)
+	uv run pytest -q -m "lightgbm and not slow" $(PYTEST_ARGS) \
+		$(if $(findstring --cov,$(PYTEST_ARGS)),--cov-append) $(LIGHTGBM_TESTS)
 
 test-slow:
 	uv run pytest -m slow
