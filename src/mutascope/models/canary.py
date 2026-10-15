@@ -23,14 +23,8 @@ from dataclasses import dataclass
 import numpy as np
 
 from mutascope.eval.metrics import spearman
-from mutascope.models.cv import (
-    FloatArray,
-    FloatMatrix,
-    IntArray,
-    ModelFactory,
-    OutOfFold,
-    cross_validate,
-)
+from mutascope.features.matrix import FeatureMatrix, FloatArray, IntArray
+from mutascope.models.cv import ModelFactory, OutOfFold, cross_validate
 
 
 @dataclass(frozen=True)
@@ -60,7 +54,7 @@ class CanaryResult:
 
 
 def permutation_canary(
-    x: FloatMatrix,
+    x: FeatureMatrix,
     y: FloatArray,
     folds: IntArray,
     make_model: ModelFactory,
@@ -79,6 +73,23 @@ def permutation_canary(
         ]
     )
     return CanaryResult(observed=_pooled_spearman(observed), permuted=permuted)
+
+
+def canary_record(
+    result: CanaryResult, *, scheme: str, max_standard_errors: float, min_observed: float
+) -> dict[str, object]:
+    """One :class:`~mutascope.eval.schemas.CanarySchema` row (without model and assay)."""
+    error = result.standard_error
+    return {
+        "scheme": scheme,
+        "observed": result.observed,
+        "permuted_mean": result.mean,
+        "standard_error": error,
+        "z": result.mean / error if error > 0 else float("nan"),
+        "n_permutations": int(result.permuted.size),
+        "passed": result.passed(max_standard_errors),
+        "informative": bool(result.observed >= min_observed),
+    }
 
 
 def _pooled_spearman(oof: OutOfFold) -> float:

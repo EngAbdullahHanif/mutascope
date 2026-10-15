@@ -58,6 +58,74 @@ class SupervisedMetricSchema(pa.DataFrameModel):
         unique = ["model", "feature_set", "assay_id", "scheme", "fold", "metric"]  # noqa: RUF012 — read by pandera
 
 
+class SelectedHyperparameterSchema(pa.DataFrameModel):
+    """A hyperparameter a supervised model chose by inner CV in one outer fold (ADR 0021)."""
+
+    model: Series[str]
+    feature_set: Series[str]
+    assay_id: Series[str]
+    scheme: Series[str] = pa.Field(isin=list(CV_SCHEMES))
+    fold: Series[int] = pa.Field(ge=0)
+    name: Series[str]
+    value: Series[float]
+
+    class Config:  # pyright: ignore[reportIncompatibleVariableOverride]
+        strict = True
+        ordered = True
+        unique = ["model", "feature_set", "assay_id", "scheme", "fold", "name"]  # noqa: RUF012 — read by pandera
+
+
+class SupervisedLeaderboardSchema(pa.DataFrameModel):
+    """Our aggregate pooled Spearman next to a published supervised baseline (ADR 0021).
+
+    A sanity range, not a gate. ``assay_spearman`` ranks our per-assay values against theirs
+    over the ``n_shared`` assays both define.
+    """
+
+    run: Series[str]
+    published_model: Series[str]
+    scheme: Series[str] = pa.Field(isin=list(CV_SCHEMES))
+    ours: Series[float]
+    published: Series[float]
+    diff: Series[float]
+    n_assays: Series[int] = pa.Field(ge=0)
+    n_shared: Series[int] = pa.Field(ge=0)
+    assay_spearman: Series[float] = pa.Field(nullable=True)
+
+    class Config:  # pyright: ignore[reportIncompatibleVariableOverride]
+        strict = True
+        ordered = True
+        unique = ["run", "published_model", "scheme"]  # noqa: RUF012 — read by pandera
+
+
+class CanarySchema(pa.DataFrameModel):
+    """Label-permutation canary of one model on one real assay and scheme (ADR 0019 / 0021).
+
+    ``observed`` is the pooled Spearman with true labels; ``permuted_mean`` and
+    ``standard_error`` summarise ``n_permutations`` runs with shuffled training labels, and
+    ``z`` is their ratio. ``passed``: ``|z| <= max_standard_errors``. ``informative``: the
+    model learns something (``observed >= min_observed``), without which passing proves
+    nothing.
+    """
+
+    model: Series[str]
+    feature_set: Series[str]
+    assay_id: Series[str]
+    scheme: Series[str] = pa.Field(isin=list(CV_SCHEMES))
+    observed: Series[float] = pa.Field(nullable=True)
+    permuted_mean: Series[float] = pa.Field(nullable=True)
+    standard_error: Series[float] = pa.Field(nullable=True)
+    z: Series[float] = pa.Field(nullable=True)
+    n_permutations: Series[int] = pa.Field(ge=2)
+    passed: Series[bool]
+    informative: Series[bool]
+
+    class Config:  # pyright: ignore[reportIncompatibleVariableOverride]
+        strict = True
+        ordered = True
+        unique = ["model", "feature_set", "assay_id", "scheme"]  # noqa: RUF012 — read by pandera
+
+
 class SummarySchema(pa.DataFrameModel):
     """A ProteinGym-style aggregate with its bootstrap CI, overall or for one function type.
 

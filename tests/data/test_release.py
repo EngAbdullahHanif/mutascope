@@ -22,9 +22,15 @@ def test_committed_config_loads(monkeypatch: pytest.MonkeyPatch) -> None:
     keys = {f.key for f in release.files}
     assert {"reference", "dms_substitutions", "cv_folds_singles", "af2_structures"} <= keys
     assert {"zero_shot_scores", "zero_shot_summary_spearman"} <= keys
+    assert {"supervised_summary_spearman", "supervised_dms_level_spearman_modulo"} <= keys
     marks = [f for f in release.files if f.url.startswith("https://marks.hms.harvard.edu/")]
     assert marks and all(f.md5 is not None for f in marks)  # every upstream file is verifiable
-    assert all(f.url.endswith(f.filename) for f in release.files)
+    # Each local file is the upstream file under its own name. The supervised leaderboard's
+    # files take a "Supervised_" prefix: its summary has the zero-shot summary's name.
+    for f in release.files:
+        upstream = f.url.rsplit("/", 1)[1]
+        expected = f"Supervised_{upstream}" if f.key.startswith("supervised_") else upstream
+        assert f.filename == expected, f.key
     assert len({f.filename for f in release.files}) == len(release.files)
 
     assert len(release.structure_exceptions) == 4

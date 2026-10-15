@@ -3,6 +3,8 @@
 A feature set is a list of blocks, declared in ``conf/features/default.yaml``:
 
 - ``onehot``: wild type and mutant, one-hot in ``AA_ORDER`` (40 columns);
+- ``site_onehot``: the one-hot sequence of Hsu et al. (2022), ``20 * L`` columns, kept as two
+  entries per row (:class:`~mutascope.features.matrix.SiteOneHot`) and never stored;
 - ``blosum62``, ``rel_position``: one column each;
 - ``structure``: pLDDT, relative SASA, contact count (3 columns);
 - ``<model>:score``: the model's masked-marginal score of the substitution (1 column);
@@ -28,6 +30,7 @@ import numpy.typing as npt
 import pandas as pd
 
 from mutascope.alphabet import AA_ORDER
+from mutascope.features.matrix import SITE_WIDTH, FeatureMatrix, SiteOneHot
 from mutascope.features.store import (
     ARRAY_KINDS,
     STRUCTURE_COLUMNS,
@@ -38,7 +41,7 @@ from mutascope.utils.io import PARTITION_FILE
 
 Float32Matrix = npt.NDArray[np.float32]
 
-FIXED_BLOCKS = ("onehot", "blosum62", "rel_position", "structure")
+FIXED_BLOCKS = ("onehot", "site_onehot", "blosum62", "rel_position", "structure")
 MODEL_KINDS = ("score", *ARRAY_KINDS)
 _AA_INDEX = {aa: i for i, aa in enumerate(AA_ORDER)}
 
@@ -93,6 +96,14 @@ class AssayMatrix:
     features: Float32Matrix
     names: list[str]
     """One name per column, e.g. ``onehot_wt_A`` or ``esm2_650m:embedding_17``."""
+    site: SiteOneHot | None = None
+    """The ``site_onehot`` block, if the set has one; it is not part of ``features``."""
+
+    def feature_matrix(self) -> FeatureMatrix:
+        """The model input: dense columns in float64, plus the site one-hot."""
+        return FeatureMatrix(
+            dense=self.features.astype(np.float64), names=tuple(self.names), site=self.site
+        )
 
 
 def assemble(
@@ -126,9 +137,15 @@ def assemble(
     if feature_set.structure and not has_structure:
         raise FeatureSetError(f"{feature_set.name} needs a structure; {assay_id} has none")
     residue = variants["position"].to_numpy(np.int64)
-    columns: list[Float32Matrix] = []
+    columns: list[Float32Matrix] = [np.zeros((len(variants), 0), dtype=np.float32)]
     names: list[str] = []
+    site: SiteOneHot | None = None
     for block in feature_set.blocks:
+        if block == "site_onehot":
+            site = SiteOneHot.from_keys(
+                residue, variants["wt_aa"].to_numpy(), variants["mt_aa"].to_numpy(), len(positions)
+            )
+            continue
         values, labels = _block(block, store_dir / "arrays" / part, variants, positions, residue)
         if not np.isfinite(values).all() and block != "structure":
             raise FeatureSetError(f"{feature_set.name}: {block} has no input for {assay_id}")
@@ -136,7 +153,7 @@ def assemble(
         names += labels
     features = np.hstack(columns).astype(np.float32, copy=False)
     return AssayMatrix(
-        keys=variants[["position", "wt_aa", "mt_aa"]], features=features, names=names
+        keys=variants[["position", "wt_aa", "mt_aa"]], features=features, names=names, site=site
     )
 
 
@@ -196,17 +213,36 @@ def _block(
     return array[residue], [f"{block}_{j}" for j in range(array.shape[1])]
 
 
-def width(feature_set: FeatureSet, hidden: Mapping[str, int]) -> int:
-    """Columns of ``feature_set``, given each model's hidden size."""
+def width(feature_set: FeatureSet, hidden: Mapping[str, int], length: int | None = None) -> int:
+    """Columns of ``feature_set``, given each model's hidden size.
+
+    Raises:
+        FeatureSetError: The set has a ``site_onehot`` block, whose width is ``20 * L``, and
+            no target ``length`` is given.
+    """
     sizes = {"onehot": 2 * len(AA_ORDER), "blosum62": 1, "rel_position": 1, "structure": 3}
     total = 0
     for block in feature_set.blocks:
         model, _, kind = block.partition(":")
-        if block in sizes:
+        if block == "site_onehot":
+            if length is None:
+                raise FeatureSetError(f"{feature_set.name}: site_onehot width needs the length")
+            total += SITE_WIDTH * length
+        elif block in sizes:
             total += sizes[block]
         else:
             total += {"score": 1, "log_probs": len(AA_ORDER), "embedding": hidden[model]}[kind]
     return total
+
+
+def structured_assays(store_dir: Path) -> set[str]:
+    """The assays of the store with structure features (213 of 217 on v1.3; ADR 0003)."""
+    found: set[str] = set()
+    for path in sorted((store_dir / "positions").glob(f"assay_id=*/{PARTITION_FILE}")):
+        plddt = pd.read_parquet(path, columns=["plddt"])["plddt"]
+        if bool(plddt.notna().any()):
+            found.add(path.parent.name.removeprefix("assay_id="))
+    return found
 
 
 def assays_of(
