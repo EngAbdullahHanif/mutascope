@@ -73,10 +73,18 @@ COMPUTATION_LOG = "computations.jsonl"
 
 
 class LogProbCache:
-    """Directory of ``<sha256>.npy`` entries, sharded by the first two hex digits."""
+    """Directory of ``<sha256>.npy`` entries, sharded by the first two hex digits.
 
-    def __init__(self, root: Path) -> None:
+    ``width`` is the number of columns per residue: 20 log-probabilities (the default), or the
+    hidden size when the same layout holds per-residue embeddings
+    (:mod:`mutascope.features.embeddings`, which keeps them in a cache of their own). None
+    accepts any width, for a reader that does not load the model to learn it; the row count is
+    still checked.
+    """
+
+    def __init__(self, root: Path, width: int | None = len(AA_ORDER)) -> None:
         self.root = root
+        self.width = width
 
     def record(self, key: CacheKey, *, positions: int, seconds: float) -> None:
         """Append one computation (``positions`` residues of ``key``'s entry) to the log."""
@@ -107,7 +115,7 @@ class LogProbCache:
         return self.root / digest[:2] / f"{digest}.npy"
 
     def get(self, key: CacheKey) -> npt.NDArray[np.float32] | None:
-        """The cached ``(L, 20)`` array (NaN rows: residues not scored yet), or None if absent.
+        """The cached ``(L, width)`` array (NaN rows: residues not scored yet), or None if absent.
 
         Raises:
             CacheError: The entry's shape does not match the key's sequence (never trusted).
@@ -116,7 +124,7 @@ class LogProbCache:
         if not path.exists():
             return None
         array = np.load(path)
-        expected = (len(key.sequence), len(AA_ORDER))
+        expected = (len(key.sequence), array.shape[-1] if self.width is None else self.width)
         if array.shape != expected or array.dtype != np.float32:
             raise CacheError(f"{path}: {array.dtype}{array.shape}, expected float32{expected}")
         log.debug("cache_hit", model=key.model_id, method=key.method, length=len(key.sequence))
@@ -124,7 +132,7 @@ class LogProbCache:
 
     def put(self, key: CacheKey, array: npt.NDArray[np.float32]) -> Path:
         """Store ``array`` atomically and return its path."""
-        expected = (len(key.sequence), len(AA_ORDER))
+        expected = (len(key.sequence), array.shape[-1] if self.width is None else self.width)
         if array.shape != expected:
             raise CacheError(f"refusing to cache shape {array.shape}, expected {expected}")
         path = self.path(key)
