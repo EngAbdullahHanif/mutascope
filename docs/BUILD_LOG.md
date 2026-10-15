@@ -1574,3 +1574,66 @@ does not, the test labels are leaking into the predictions. The reasoning is in 
   layout); AUC/MCC/NDCG/recall, bootstrap CIs and paired comparisons for supervised results
   come with the first real model.
 - *Tests:* `make lint` clean; `make test` 434 passed, 1 skipped (Foldseek not on PATH); 49 new.
+
+## Entry 20 — Feature store for the supervised models (Phase 3, 2026-10-14)
+
+**Plain-language summary.** The supervised models need numbers that describe each mutation,
+and the final models will predict every possible mutation of a protein, not only the ones an
+experiment measured. This task computed those numbers for all 1,637,401 single substitutions
+of the 217 experiments' proteins (19 per residue). Per mutation: which amino acid is replaced
+and by which, how similar the two are (BLOSUM62), where in the protein it is, the zero-shot
+score of ESM-2 650M and SaProt, the 20 amino-acid probabilities both models give at that
+position, a 1,280-number summary ("embedding") of the position from each model, and its
+structure (pLDDT, surface exposure, contacts). The embeddings needed one model run per
+protein, 380 in total and about a minute of model time; everything else came from the existing
+caches. A residue's numbers are stored once, not 19 times, so the store is 900 MB where a plain
+table would be 8.8 GB (sequence features) and 16.8 GB (with structure). No step reads the
+measured fitness values. The reasoning is in ADR 0020.
+
+**The 3 most important design choices.**
+
+1. **Per-residue data is stored once and expanded per assay when a model asks for it.** 98%
+   of a row (log-probabilities, embedding, structure) depends only on the residue. Storing it
+   per residue and repeating it for that residue's 19 variants only when one assay's matrix is
+   built keeps the store at 900 MB. *Evidence:* the largest assay (ZIKV, 65,037 variants)
+   assembles in 0.2 s, 0.69 GB for `seq_struct`, against 16.8 GB for all assays at once.
+2. **Inside the benchmark region, the benchmark landscape; outside it, the full target.** Five
+   ESM-2 and three SaProt assays score only part of their target (ADR 0012, 0015), and their
+   full-target landscapes hold different numbers for the same residue (ADR 0018). Training rows
+   must see the numbers the model gate verified. *Evidence:* every measured variant is inside
+   its model's benchmark region (0 of 696,311 outside for ESM-2, 0 of 665,793 for SaProt), and
+   the stored scores of all of them equal the committed benchmark score sets exactly. The
+   10,868 residues that read a full-target landscape have no measured variant.
+3. **The store reads keys, never labels, and names variants by `(position, mt_aa)`.** The
+   leakage guard of ADR 0019 is structural: `features build` selects only
+   `assay_id, position, wt_aa, mt_aa` from the processed variants, to check every measured
+   variant is in the store with the same wild type. Using the 0-indexed position as the key
+   also means no 1-indexed mutation string is ever formatted, so `parse_mutation` stays the
+   only place positions are converted. *Evidence:* a test builds the store from two variant
+   tables with different labels and gets byte-identical files.
+
+**Problems encountered and how they were solved.**
+
+None worth documenting. The estimate made before building held: 192 and 188 passes as
+counted, 900 MB against the 0.9 GB estimated.
+
+**Supporting details.**
+- *Embedding:* mean of the last 4 `hidden_states` (blocks 30–32 plus block 33 after the final
+  LayerNorm, as in fair-esm) at token i + 1, one unmasked pass per cache entry; ESM-2
+  sequences over 1,022 residues use the wild-type marginal's tiles. Alignment check: a linear
+  probe recovers the wild type from row i with 99.8% (ESM-2) and 100.0% (SaProt) accuracy on
+  held-out proteins, against 77.8% and 82.7% from row i + 1.
+- *Runs:* `features embed` 31 s (ESM-2 650M) and 27 s (SaProt) of model time, MLflow
+  experiment `features`; `features build` 8.5 s. Reports:
+  `results/data/embedding_run_{esm2_650m,saprot_650m_af2}.parquet`,
+  `results/data/feature_store.parquet`.
+- *Feature sets* (`conf/features/default.yaml`): `seq` 1,343 columns on 217 assays,
+  `seq_struct` 2,647 columns on 213. In `seq_struct`, structure features are NaN at 6,294
+  unmeasured residues outside the structure of 3 assays; imputing them belongs inside the
+  training folds.
+- *Not yet done:* `train cv` still runs the `none` set; it needs per-assay assembly inside
+  `cv_metrics_table`, which comes with the augmented ridge. The ensemble score is not a feature
+  (its z-score is defined over measured variants only). The two commands are not Nextflow
+  processes yet.
+- *Dependencies:* none added (BLOSUM62 from biotite, already a dependency).
+- *Tests:* `make lint` clean; `make test` 465 passed, 1 skipped (Foldseek not on PATH); 31 new.
