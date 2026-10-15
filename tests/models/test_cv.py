@@ -1,5 +1,6 @@
 """Cross-validation loop: every variant predicted once, by a model that never saw it."""
 
+from collections import Counter
 from typing import Any
 
 import numpy as np
@@ -11,21 +12,28 @@ from tests.synthetic_assays import synthetic_assay
 
 from mutascope.eval.schemas import SupervisedMetricSchema
 from mutascope.features.base import KEY_COLUMNS, build_features
+from mutascope.features.matrix import FeatureMatrix
 from mutascope.models.baselines import TrainingMean
-from mutascope.models.cv import CrossValidationError, cross_validate, cv_metrics_table, oof_metrics
+from mutascope.models.cv import (
+    CrossValidationError,
+    DesignBuilder,
+    cross_validate,
+    cv_metrics_table,
+    oof_metrics,
+)
 
 
 class Spy:
     """Records what it is trained on; predicts the row id (column 0) so tests can trace rows."""
 
-    fitted: list[tuple[np.ndarray, np.ndarray]] = []  # noqa: RUF012 — shared on purpose
+    fitted: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []  # noqa: RUF012 — shared on purpose
 
-    def fit(self, x: np.ndarray, y: np.ndarray) -> "Spy":
-        Spy.fitted.append((x[:, 0].astype(int), y.copy()))
+    def fit(self, x: FeatureMatrix, y: np.ndarray, groups: np.ndarray) -> "Spy":
+        Spy.fitted.append((x.dense[:, 0].astype(int), y.copy(), groups.copy()))
         return self
 
-    def predict(self, x: np.ndarray) -> np.ndarray:
-        return x[:, 0].astype(np.float64)
+    def predict(self, x: FeatureMatrix) -> np.ndarray:
+        return x.dense[:, 0].astype(np.float64)
 
 
 @pytest.fixture
@@ -38,8 +46,12 @@ def reset_spy() -> None:
     Spy.fitted = []
 
 
-def row_ids(n: int) -> np.ndarray:
-    return np.arange(n, dtype=np.float64)[:, None]
+def row_ids(n: int) -> FeatureMatrix:
+    return FeatureMatrix.of(np.arange(n, dtype=np.float64)[:, None])
+
+
+def key_design(name: str) -> DesignBuilder:
+    return lambda assay_id, keys: build_features(name, keys)
 
 
 @pytest.mark.parametrize("scheme", ["random", "modulo", "contiguous"])
@@ -48,8 +60,11 @@ def test_each_fold_trains_on_the_others_only(assay: pd.DataFrame, scheme: str) -
     y = assay["DMS_score"].to_numpy()
     oof = cross_validate(row_ids(len(y)), y, folds, Spy)
     assert len(Spy.fitted) == 5  # one fresh model per fold
-    for fold, (seen, _) in zip(range(5), Spy.fitted, strict=True):
+    for fold, (seen, _, groups) in zip(range(5), Spy.fitted, strict=True):
         assert set(seen) == set(np.flatnonzero(folds != fold))
+        # The model gets its training rows' folds (for an inner CV), never the test fold.
+        np.testing.assert_array_equal(groups, folds[seen])
+        assert fold not in set(groups)
     # Spy predicts the row id: every row is predicted once, in its own fold.
     assert (oof.prediction == np.arange(len(y))).all()
     assert (oof.fold == folds).all()
@@ -60,7 +75,7 @@ def test_targets_use_training_statistics_only(assay: pd.DataFrame) -> None:
     folds = assay["fold_contiguous"].to_numpy()
     y = assay["DMS_score"].to_numpy()
     oof = cross_validate(row_ids(len(y)), y, folds, Spy)
-    for fold, (_, trained_on) in zip(range(5), Spy.fitted, strict=True):
+    for fold, (_, trained_on, _) in zip(range(5), Spy.fitted, strict=True):
         train, test = folds != fold, folds == fold
         expected_train, expected_test = proteinnpt_standardise(y[train], y[test])
         np.testing.assert_array_equal(trained_on, expected_train)
@@ -91,11 +106,11 @@ def test_bad_inputs_fail(folds: np.ndarray, y: np.ndarray, model: Any, message: 
 
 
 class NaNModel:
-    def fit(self, x: np.ndarray, y: np.ndarray) -> "NaNModel":
+    def fit(self, x: FeatureMatrix, y: np.ndarray, groups: np.ndarray) -> "NaNModel":
         return self
 
-    def predict(self, x: np.ndarray) -> np.ndarray:
-        prediction = np.empty(x.shape[0])
+    def predict(self, x: FeatureMatrix) -> np.ndarray:
+        prediction = np.empty(x.n_rows)
         prediction.fill(np.nan)
         return prediction
 
@@ -133,18 +148,18 @@ def test_training_mean_spearman_is_undefined_and_mse_is_the_mean_square() -> Non
     assays = pd.concat([synthetic_assay(f"A{i}_TEST", seed=i) for i in range(4)])
     table = cv_metrics_table(
         assays,
-        build_features("none", assays),
+        key_design("none"),
         TrainingMean,
         model="training_mean",
         feature_set="none",
         schemes=["random", "modulo", "contiguous"],
-    )
+    ).metrics
     SupervisedMetricSchema.validate(table)
     assert table.loc[table["metric"] == "spearman", "value"].isna().all()
     for (assay_id, scheme), rows in table[table["fold"].isna()].groupby(["assay_id", "scheme"]):
         one = assays[assays["assay_id"] == assay_id]
         oof = cross_validate(
-            np.zeros((len(one), 0)),
+            FeatureMatrix.of(np.zeros((len(one), 0))),
             one["DMS_score"].to_numpy(),
             one[f"fold_{scheme}"].to_numpy(),
             TrainingMean,
@@ -154,14 +169,16 @@ def test_training_mean_spearman_is_undefined_and_mse_is_the_mean_square() -> Non
 
 
 def test_results_table_is_long_format(assay: pd.DataFrame) -> None:
-    table = cv_metrics_table(
+    result = cv_metrics_table(
         assay,
-        build_features("none", assay),
+        key_design("none"),
         TrainingMean,
         model="training_mean",
         feature_set="none",
         schemes=["modulo"],
     )
+    table = result.metrics
+    assert result.hyperparameters.empty  # the baseline tunes nothing
     assert list(table.columns) == [
         "model",
         "feature_set",
@@ -181,14 +198,41 @@ def test_feature_builders_never_see_labels(assay: pd.DataFrame) -> None:
 
     seen: list[list[str]] = []
 
-    def spy(keys: pd.DataFrame) -> np.ndarray:
+    def spy(keys: pd.DataFrame) -> FeatureMatrix:
         seen.append(list(keys.columns))
-        return np.zeros((len(keys), 0))
+        return FeatureMatrix.of(np.zeros((len(keys), 0)))
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setitem(base.FEATURE_SETS, "spy", spy)  # pyright: ignore[reportArgumentType]
         build_features("spy", assay)
     assert seen == [list(KEY_COLUMNS)]
+
+
+def test_the_loop_gives_designs_keys_only_one_assay_at_a_time() -> None:
+    """``cv_metrics_table`` builds each assay's features from its keys, never its labels."""
+    assays = pd.concat([synthetic_assay(f"A{i}_TEST", seed=i) for i in range(3)])
+    calls: list[tuple[str, list[str], int]] = []
+
+    def design(assay_id: str, keys: pd.DataFrame) -> FeatureMatrix:
+        calls.append((assay_id, list(keys.columns), len(keys)))
+        return probe_features(keys)
+
+    cv_metrics_table(
+        assays, design, probe_model, model="probe", feature_set="spy", schemes=["random"]
+    )
+    sizes = Counter(assays["assay_id"].astype(str).tolist())
+    assert calls == [(a, list(KEY_COLUMNS), sizes[a]) for a in sorted(sizes)]
+
+
+def test_a_model_refusing_its_input_names_the_assay(assay: pd.DataFrame) -> None:
+    class Refuses(TrainingMean):
+        def fit(self, x: FeatureMatrix, y: np.ndarray, groups: np.ndarray) -> "Refuses":
+            raise ValueError("no thanks")
+
+    with pytest.raises(CrossValidationError, match="A_TEST, random: no thanks"):
+        cv_metrics_table(
+            assay, key_design("none"), Refuses, model="m", feature_set="none", schemes=["random"]
+        )
 
 
 def test_unknown_feature_set_fails(assay: pd.DataFrame) -> None:

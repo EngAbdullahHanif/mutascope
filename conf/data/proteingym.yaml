@@ -15,6 +15,7 @@ release:
 
 base_url: https://marks.hms.harvard.edu/proteingym/ProteinGym_v1.3
 benchmarks_url: https://raw.githubusercontent.com/OATML-Markslab/ProteinGym/${data.release.git_commit}/benchmarks/DMS_zero_shot/substitutions
+supervised_benchmarks_url: https://raw.githubusercontent.com/OATML-Markslab/ProteinGym/${data.release.git_commit}/benchmarks/DMS_supervised/substitutions
 data_dir: ${oc.env:MUTASCOPE_DATA_DIR,data}
 raw_dir: ${data.data_dir}/raw/proteingym_${data.release.version}
 manifest_path: ${data.data_dir}/manifest.yaml
@@ -142,6 +143,35 @@ files:
     filename: DMS_substitutions_Top_recall_DMS_level.csv
     url: ${data.benchmarks_url}/Top_recall/DMS_substitutions_Top_recall_DMS_level.csv
     size_bytes: 137549
+    md5: null
+    archive: false
+
+  # Supervised leaderboard (Spearman of the pooled out-of-fold predictions, ADR 0019), pinned
+  # by the same commit. A sanity range for our one-hot and augmented ridges, not a gate: the
+  # baselines there use other zero-shot models and another learner (ADR 0021). Saved with a
+  # "Supervised_" prefix: upstream's summary has the zero-shot summary's file name.
+  supervised_summary_spearman:
+    filename: Supervised_Summary_performance_DMS_substitutions_Spearman.csv
+    url: ${data.supervised_benchmarks_url}/Spearman/Summary_performance_DMS_substitutions_Spearman.csv
+    size_bytes: 7329
+    md5: null
+    archive: false
+  supervised_dms_level_spearman_random:
+    filename: Supervised_DMS_substitutions_Spearman_DMS_level_fold_random_5.csv
+    url: ${data.supervised_benchmarks_url}/Spearman/DMS_substitutions_Spearman_DMS_level_fold_random_5.csv
+    size_bytes: 20404
+    md5: null
+    archive: false
+  supervised_dms_level_spearman_modulo:
+    filename: Supervised_DMS_substitutions_Spearman_DMS_level_fold_modulo_5.csv
+    url: ${data.supervised_benchmarks_url}/Spearman/DMS_substitutions_Spearman_DMS_level_fold_modulo_5.csv
+    size_bytes: 20486
+    md5: null
+    archive: false
+  supervised_dms_level_spearman_contiguous:
+    filename: Supervised_DMS_substitutions_Spearman_DMS_level_fold_contiguous_5.csv
+    url: ${data.supervised_benchmarks_url}/Spearman/DMS_substitutions_Spearman_DMS_level_fold_contiguous_5.csv
+    size_bytes: 20506
     md5: null
     archive: false
 

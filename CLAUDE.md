@@ -200,6 +200,19 @@ Run `make lint test` before declaring any task done.
   pass per cache entry (`mutascope features embed`), cached in `features.embedding_cache_dir`.
 - Feature sets are declared in `conf/features/default.yaml`: `seq` (217 assays) and
   `seq_struct` (213). A structure set refuses an assay without a structure.
+- `site_onehot` (Hsu et al. one-hot sequence, 20 × L columns) is never stored or densified: it is
+  two entries per row (`features.matrix.SiteOneHot`, ADR 0021).
+- `train cv` assembles one assay's features at a time (`DesignBuilder`); never all assays at once.
+
+## Supervised rules (ADR 0019, 0021)
+
+- A model's `fit(x, y, groups)` gets its training rows' outer folds; any hyperparameter search is
+  an inner CV over those folds (split like the outer scheme). The test fold is never passed in.
+- A supervised run is named by `eval.supervised.supervised_label` (`<model>_<feature_set>`).
+- The zero-shot comparator of a supervised model is the `zero_shot` model run through the same
+  loop on the same test folds (`esm2_score`, `saprot_score`); compare with `train compare`
+  (paired bootstrap of pooled Spearman), never with the Phase 2 zero-shot numbers.
+- ProteinGym's supervised leaderboard (`train leaderboard`) is a sanity range, not a gate.
 
 ## API (`api/`)
 

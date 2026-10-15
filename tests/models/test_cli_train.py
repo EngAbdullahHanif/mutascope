@@ -1,15 +1,27 @@
-"""``mutascope data folds`` then ``mutascope train cv``, end to end on synthetic assays."""
+"""``mutascope data folds`` then the ``train`` commands, end to end on synthetic assays."""
 
 from pathlib import Path
 
 import pandas as pd
 import pytest
-from tests.synthetic_assays import synthetic_assay, write_fold_csvs, write_variants
+from tests.synthetic_assays import (
+    synthetic_assay,
+    write_feature_store,
+    write_fold_csvs,
+    write_variants,
+)
 from typer.testing import CliRunner
 
 from mutascope.cli import app
 from mutascope.eval.benchmark import read_results
-from mutascope.eval.schemas import SupervisedMetricSchema
+from mutascope.eval.schemas import (
+    CanarySchema,
+    ComparisonSchema,
+    SelectedHyperparameterSchema,
+    SummarySchema,
+    SupervisedLeaderboardSchema,
+    SupervisedMetricSchema,
+)
 
 CONF = Path(__file__).parents[2] / "conf"
 NO_TRACKING = "tracking.enabled=false"
@@ -27,6 +39,9 @@ def inputs(tmp_path: Path) -> dict[str, Path]:
         }
     ).to_csv(reference, index=False)
     return {
+        "store": write_feature_store(
+            assays, tmp_path / "store", with_structure=["A_TEST", "B_TEST"]
+        ),
         "variants": write_variants(assays, tmp_path / "variants"),
         "cv": write_fold_csvs(assays, tmp_path / "cv"),
         "folds": tmp_path / "folds",
@@ -49,15 +64,39 @@ def folds(inputs: dict[str, Path]) -> tuple[int, str]:
     )  # fmt: skip
 
 
-def train(inputs: dict[str, Path], *overrides: str) -> tuple[int, str]:
+def train(inputs: dict[str, Path], *overrides: str, store: bool = False) -> tuple[int, str]:
     return run(
         "train", "cv",
         "--variants-dir", str(inputs["variants"]),
         "--folds-dir", str(inputs["folds"]),
         "--reference", str(inputs["reference"]),
         "--out-dir", str(inputs["results"]),
+        *(["--store-dir", str(inputs["store"])] if store else []),
         NO_TRACKING, *overrides,
     )  # fmt: skip
+
+
+SCHEMES = ("random", "modulo", "contiguous")
+RUNS = [
+    ("ridge", "site_onehot"),
+    ("augmented_ridge", "site_onehot_esm2"),
+    ("ridge", "seq"),
+    ("ridge", "seq_struct"),
+    ("zero_shot", "esm2_score"),
+    ("zero_shot", "saprot_score"),
+]
+
+
+def train_all(inputs: dict[str, Path]) -> dict[str, str]:
+    assert folds(inputs)[0] == 0
+    outputs: dict[str, str] = {}
+    for model, feature_set in RUNS:
+        code, output = train(
+            inputs, f"train.model={model}", f"train.feature_set={feature_set}", store=True
+        )
+        assert code == 0, output
+        outputs[f"{model}_{feature_set}"] = output
+    return outputs
 
 
 def test_folds_then_cv_writes_long_results(inputs: dict[str, Path]) -> None:
@@ -91,3 +130,124 @@ def test_bad_train_config_fails(inputs: dict[str, Path], override: str, message:
     assert code == 1
     assert message in output
     assert not inputs["results"].exists()
+
+
+def test_store_feature_sets_one_assay_at_a_time(inputs: dict[str, Path]) -> None:
+    outputs = train_all(inputs)
+    results = inputs["results"]
+    for model, feature_set in RUNS:
+        label = f"{model}_{feature_set}"
+        table = SupervisedMetricSchema.validate(read_results(results / f"cv_{label}.parquet"))
+        expected = {"A_TEST", "B_TEST"} if feature_set.endswith(("struct", "saprot_score")) else {
+            "A_TEST", "B_TEST", "C_TEST"
+        }  # fmt: skip
+        assert set(table["assay_id"]) == expected, label
+        # Pooled values are defined. Per fold, the one-hot ridge predicts one constant for
+        # positions it never saw (modulo, contiguous), so that fold's Spearman is undefined.
+        assert table.loc[table["fold"].isna(), "value"].notna().all(), label
+        tuned = results / f"cv_{label}_hyperparameters.parquet"
+        assert tuned.exists() == (model != "zero_shot"), label
+    chosen = SelectedHyperparameterSchema.validate(
+        pd.read_parquet(results / "cv_ridge_seq_hyperparameters.parquet")
+    )
+    assert len(chosen) == 3 * 3 * 5  # assays x schemes x folds
+    assert set(chosen["name"]) == {"alpha"}
+    assert "alpha: median 10^" in outputs["ridge_seq"]
+    # Position memorisation cannot reach unseen positions; the unpenalised score can.
+    pooled = read_results(results / "cv_augmented_ridge_site_onehot_esm2.parquet")
+    pooled = pooled[pooled["fold"].isna() & (pooled["metric"] == "spearman")]
+    assert (pooled["value"] > 0.4).all()
+
+
+def test_store_set_needs_the_store(inputs: dict[str, Path]) -> None:
+    assert folds(inputs)[0] == 0
+    code, output = train(inputs, "train.model=ridge", "train.feature_set=seq")
+    assert code == 1
+    assert "pass --store-dir" in output
+
+
+def test_canary_on_a_real_model(inputs: dict[str, Path]) -> None:
+    assert folds(inputs)[0] == 0
+    code, output = run(
+        "train", "canary",
+        "--variants-dir", str(inputs["variants"]),
+        "--folds-dir", str(inputs["folds"]),
+        "--out-dir", str(inputs["results"]),
+        "--store-dir", str(inputs["store"]),
+        NO_TRACKING, "train.model=augmented_ridge", "train.feature_set=site_onehot_esm2",
+        "train.canary.assays=[A_TEST,C_TEST]", "train.canary.n_permutations=6",
+    )  # fmt: skip
+    assert code == 0, output
+    table = CanarySchema.validate(
+        pd.read_parquet(inputs["results"] / "canary_augmented_ridge_site_onehot_esm2.parquet")
+    )
+    assert len(table) == 2 * 3
+    assert table["passed"].all() and table["informative"].all()
+    assert (table["n_permutations"] == 6).all()
+
+
+def test_compare_and_leaderboard(inputs: dict[str, Path], tmp_path: Path) -> None:
+    train_all(inputs)
+    pairs = (
+        "[[augmented_ridge_site_onehot_esm2,zero_shot_esm2_score],"
+        "[ridge_seq_struct,zero_shot_esm2_score]]"
+    )
+    code, output = run(
+        "train", "compare",
+        "--results-dir", str(inputs["results"]),
+        "--reference", str(inputs["reference"]),
+        "--out-dir", str(inputs["results"]),
+        NO_TRACKING, f"train.comparisons={pairs}", "eval.bootstrap.n_resamples=200",
+        "+data.structure_exceptions.C_TEST=no structure",
+    )  # fmt: skip
+    assert code == 0, output
+    comparisons = ComparisonSchema.validate(
+        read_results(inputs["results"] / "supervised_comparisons.parquet")
+    )
+    overall = comparisons[(comparisons["level"] == "overall")]
+    structured = overall[overall["model_a"] == "ridge_seq_struct"]
+    assert set(structured["n_assays"]) == {2}  # C_TEST has no structure: shared assays only
+    assert set(overall["split"]) == {"random", "modulo", "contiguous"}
+    summary = SummarySchema.validate(read_results(inputs["results"] / "supervised_summary.parquet"))
+    assert set(summary["model"]) == {
+        "augmented_ridge_site_onehot_esm2", "ridge_seq_struct", "zero_shot_esm2_score"
+    }  # fmt: skip
+
+    published = tmp_path / "published"
+    published.mkdir()
+    names = ["One-Hot Encodings", "ESM-1v + One-Hot Encodings"]
+    pd.DataFrame(
+        {
+            "Model_name": names,
+            **{
+                f"Average_Spearman_fold_{s}_5": [0.5, 0.4]
+                for s in ("random", "modulo", "contiguous")
+            },
+        }
+    ).to_csv(published / "summary.csv", index=False)
+    for scheme in ("random", "modulo", "contiguous"):
+        pd.DataFrame(
+            {
+                "DMS_id": ["A_TEST", "B_TEST", "C_TEST"],
+                names[0]: [0.1, 0.2, 0.3],
+                names[1]: [0.3, 0.2, 0.1],
+            }
+        ).to_csv(published / f"level_{scheme}.csv", index=False)
+    code, output = run(
+        "train", "leaderboard",
+        "--results-dir", str(inputs["results"]),
+        "--reference", str(inputs["reference"]),
+        "--out", str(inputs["results"] / "leaderboard.parquet"),
+        f"tracking.dir={tmp_path / 'mlruns'}",
+        f"train.leaderboard.summary={published / 'summary.csv'}",
+        *(f"train.leaderboard.assay_level.{s}={published}/level_{s}.csv" for s in SCHEMES),
+        "train.leaderboard.baselines={ridge_site_onehot:['One-Hot Encodings'],"
+        "augmented_ridge_site_onehot_esm2:['ESM-1v + One-Hot Encodings']}",
+    )  # fmt: skip
+    assert code == 0, output
+    board = SupervisedLeaderboardSchema.validate(
+        pd.read_parquet(inputs["results"] / "leaderboard.parquet")
+    )
+    assert len(board) == 2 * 3
+    assert (board["published"].isin([0.5, 0.4])).all()
+    assert (board["n_shared"] == 3).all()

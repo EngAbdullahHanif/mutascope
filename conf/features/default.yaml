@@ -12,9 +12,10 @@ embedding_cache_dir: ${data.data_dir}/cache/embeddings
 store_dir: ${data.processed_dir}/features
 # MLflow experiment for `features embed` runs.
 experiment: features
-# Feature sets by name (mutascope.features.sets). Blocks: onehot, blosum62, rel_position,
-# structure, <model>:score, <model>:log_probs, <model>:embedding. structure: true = defined only
-# on the assays with a structure (213 of 217; ADR 0003).
+# Feature sets by name (mutascope.features.sets). Blocks: onehot, site_onehot, blosum62,
+# rel_position, structure, <model>:score, <model>:log_probs, <model>:embedding. structure: true =
+# defined only on the assays with a structure (213 of 217; ADR 0003). site_onehot is the one-hot
+# sequence of Hsu et al. (2022), 20 x L columns, assembled on demand and never stored (ADR 0021).
 sets:
   seq:
     structure: false
@@ -26,3 +27,17 @@ sets:
              esm2_650m:score, esm2_650m:log_probs, esm2_650m:embedding,
              saprot_650m_af2:score, saprot_650m_af2:log_probs, saprot_650m_af2:embedding,
              structure]
+  # Hsu et al. (2022): one-hot ridge, and augmented ridge with ESM-2 650M's score (ADR 0021).
+  site_onehot:
+    structure: false
+    blocks: [site_onehot]
+  site_onehot_esm2:
+    structure: false
+    blocks: [site_onehot, esm2_650m:score]
+  # One zero-shot score, for the zero_shot model: zero-shot scored on the supervised test folds.
+  esm2_score:
+    structure: false
+    blocks: [esm2_650m:score]
+  saprot_score:
+    structure: true
+    blocks: [saprot_650m_af2:score]
