@@ -52,7 +52,7 @@ Always use these; do not invent alternatives.
 make setup        # uv sync --all-extras && pre-commit install
 make lint         # ruff check . && ruff format --check . && pyright
 make fmt          # ruff format . && ruff check --fix .
-make test         # pytest -q (uses esm2_t6_8M; must stay fast, < 2 min)
+make test         # pytest -q, then LightGBM tests in their own process (esm2_t6_8M; < 2 min)
 make test-slow    # pytest -m slow (real 650M models, MPS; run locally only)
 make pipeline     # nextflow run pipeline/main.nf -profile local
 make pipeline-test# nextflow run pipeline/main.nf -profile local,test (docker,test once the image exists, Phase 4)
@@ -204,7 +204,7 @@ Run `make lint test` before declaring any task done.
   two entries per row (`features.matrix.SiteOneHot`, ADR 0021).
 - `train cv` assembles one assay's features at a time (`DesignBuilder`); never all assays at once.
 
-## Supervised rules (ADR 0019, 0021)
+## Supervised rules (ADR 0019, 0021, 0022)
 
 - A model's `fit(x, y, groups)` gets its training rows' outer folds; any hyperparameter search is
   an inner CV over those folds (split like the outer scheme). The test fold is never passed in.
@@ -213,6 +213,14 @@ Run `make lint test` before declaring any task done.
   loop on the same test folds (`esm2_score`, `saprot_score`); compare with `train compare`
   (paired bootstrap of pooled Spearman), never with the Phase 2 zero-shot numbers.
 - ProteinGym's supervised leaderboard (`train leaderboard`) is a sanity range, not a gate.
+- `train cv|shap|canary --jobs N` run assays (or canary cases) in spawned, single-threaded
+  workers via `utils.parallel.run_parallel`, under `train.max_variants_in_flight` (memory, not
+  cores, is the limit). Work sent to workers must be picklable; results never depend on `--jobs`.
+- **Torch and LightGBM never share a process** (their OpenMP runtimes segfault together on
+  macOS). Importing the CLI, the registry or `models.lgbm` loads neither; LightGBM tests carry
+  the `lightgbm` marker and `make test` runs them in a second process.
+- A post-hoc diagnostic run is labelled post-hoc in config, results and ADR and is never a
+  headline model.
 
 ## API (`api/`)
 

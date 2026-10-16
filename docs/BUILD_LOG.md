@@ -1713,3 +1713,92 @@ above zero-shot under every split). Structure and SaProt help most where it is h
 - *Not yet done:* the commands are not Nextflow processes; LightGBM, MLP, conformal intervals.
 - *Dependencies:* none added.
 - *Tests:* `make lint` clean; `make test` 492 passed, 1 skipped (Foldseek not on PATH); 27 new.
+
+---
+
+## Entry 22 — LightGBM rung, parallel `train cv`, SHAP (Phase 3, 2026-10-15 to 10-16)
+
+**Plain-language summary.** The second supervised model is gradient-boosted trees (LightGBM) on
+the feature store. Its settings are tuned by Optuna, with 10 tries per test fold. Every try is
+scored only on the training folds, split the same way as the test split, so the test fold never
+influences tuning. A second version first compresses each 1,280-number embedding to 32 numbers
+(PCA), learned only from the rows the model trains on. Because this is hundreds of times more work
+than ridge, `train cv` first learned to run experiments in parallel on all 13 spare cores, under a
+memory budget, and to resume after an interruption. The headline is not the expected one:
+LightGBM beats ridge only when test mutations sit at positions seen in training (random split,
++0.013 to +0.024); on unseen positions (modulo, contiguous) it is significantly worse than ridge
+(−0.011 to −0.025). It beats zero-shot ESM-2 and SaProt everywhere. A post-hoc run without
+embeddings shows the embeddings are not to blame. SHAP shows LightGBM leans on the zero-shot
+scores and SaProt's structure-aware blocks, and almost not at all on the explicit structure
+features. The reasoning is in ADR 0022.
+
+**The 3 most important design choices.**
+
+1. **Tuning stays inside the training folds, per test fold.** Each outer fold runs its own 10
+   Optuna trials, scored by an inner CV over the training folds split like the outer scheme; the
+   PCA is refitted for every inner split and for the final fit. Sharing one search across the
+   outer folds would leak, because another fold's training rows contain this fold's test rows.
+   *Evidence:* changing every label of a test fold leaves its predictions bit-identical (all
+   schemes, with and without PCA); changing a test fold's embeddings leaves that fold's PCA
+   bit-identical while every other fold's changes; the canary passes on both models.
+2. **Parallelism across assays, limited by memory, not cores.** Assays run in spawned,
+   single-threaded workers, largest first, with at most 160,000 variants in flight; results are
+   independent of the number of workers. *Evidence:* ridge `seq_struct` with 13 jobs reproduced
+   the committed results (same 3,189 penalties, Spearman within 1.2e-7) in 1,913 s instead of
+   4,256 s, and the 8.9-hour LightGBM run peaked at 6.6 GB with no swapping.
+3. **The budget was cut where it cost no accuracy, and nothing was tuned on test results.** The
+   pilot projected 35–85 hours. Profiling one fold showed row-wise histograms give identical
+   models 1.3× faster and a learning-rate floor of 0.05 (300 rounds) gives 3.8× at test Spearman
+   0.899 vs 0.901; the trial budget stayed at 10 per fold. After the first results, no
+   hyperparameter was changed; the shortfall against ridge is reported as found.
+
+**Problems encountered and how they were solved.**
+
+1. *The first parallel run swapped.* Found when the workers sat at 3–17% CPU with an empty log
+   after 10 minutes. Largest-first scheduling put the 13 biggest assays (10,972–16,897 variants)
+   in flight at once; ridge peaks near 2 GB per worker there, ~26 GB on a 24 GB machine. Fix: a
+   memory budget in variants; when a large assay does not fit, smaller ones fill the free
+   workers. Verified: the rerun used 9.1 GB with 51% of memory free and finished in 1,913 s.
+2. *LightGBM and torch segfaulted together.* LightGBM tests passed alone and crashed after the CLI
+   tests. Torch loaded first → LightGBM exit 139 on `Dataset.construct()`; the first fix, loading
+   LightGBM first, moved the crash into ESM-2's forward pass in `test_landscapes.py`. Cause: two
+   OpenMP runtimes (Homebrew's `libomp` for LightGBM, torch's own). Fix: no process loads both —
+   the CLI imports neither at import time, LightGBM tests run in their own pytest process, and a
+   conftest guard fails a test that breaks the rule. Verified: the regression test fails with
+   SIGSEGV (−11) when the fix is removed; `make test` passes.
+3. *LightGBM would not import on macOS.* `Library not loaded: @rpath/libomp.dylib`: the wheel
+   expects Homebrew's OpenMP. Fix: `brew install libomp` (recorded in ADR 0022).
+4. *Spawned test workers could not import the test helpers.* `ModuleNotFoundError: No module
+   named 'tests'`: pytest's importlib mode does not put the repository on `sys.path`, and a
+   `PYTHONPATH` set for the children was overwritten, because spawn copies the parent's
+   `sys.path`. Fix: the parallel tests prepend the repository to the parent's `sys.path`.
+5. *The pilot projected 35–85 hours against a 12-hour budget.* 0.55–2.25 s per variant per
+   worker on 7 finished pilot assays. Profiled one outer fold (table in ADR 0022), adopted
+   row-wise histograms and the learning-rate floor, and re-piloted: about 3× faster on every
+   assay (RBP1 1,992 → 535 s, OTC 4,308 → 1,580 s). The full `lgbm` `seq_struct` run still took
+   8.9 h rather than the estimated 6.5 h: with all 13 workers busy each ran at 0.63 s per variant
+   instead of 0.45 (shared memory bandwidth, 4 efficiency cores). `lgbm` on `seq` was dropped.
+6. *The parallel speedup was 2.2×, not 13×.* Not a bug: the "serial" ridge run already used
+   several cores through Accelerate's BLAS (the parallel run used 18,187 CPU-seconds).
+7. *SHAP gave the ESM-2 embedding 27% on the smallest assay.* Investigated before reporting, as
+   overfitting was suspected: the share comes from 17 of 1,280 columns, and no supervised model
+   learns SCN5A (out-of-fold Spearman 0.013–0.095 under random, below SaProt zero-shot's 0.221).
+   Reported as memorisation of 224 noisy labels, not as feature biology.
+
+**Supporting details.**
+- *Results* (pooled Spearman, random / modulo / contiguous): `lgbm_pca` `seq_struct` 0.745 /
+  0.582 / 0.532; `lgbm` `seq_struct` 0.734 / 0.568 / 0.530; `lgbm_pca` `seq` 0.731 / 0.531 /
+  0.465; post-hoc `seq_struct_noemb` 0.741 / 0.560 / 0.520. Paired against ridge `seq_struct`:
+  `lgbm_pca` +0.024 / −0.011 / −0.020, `lgbm` +0.013 / −0.025 / −0.023 (all CIs exclude 0).
+  Against zero-shot SaProt: `lgbm_pca` +0.287 / +0.124 / +0.072.
+- *Runs* (13 jobs): `lgbm_pca` `seq_struct` 1,832 s, `lgbm_pca` `seq` 876 s, `lgbm` `seq_struct`
+  32,054 s, post-hoc 544 s. Canary: `lgbm_pca` 9 / 9 passed, all informative, max |z| 1.76;
+  `lgbm` 9 / 9, all informative, max |z| 2.16.
+- *Files:* `results/supervised/cv_{lgbm,lgbm_pca}_*.parquet`, `shap_lgbm_seq_struct.parquet`,
+  `canary_lgbm*_seq_struct.parquet`, updated `supervised_summary.parquet` and
+  `supervised_comparisons.parquet`; `results/figures/shap_lgbm_seq_struct.{svg,png}`.
+- *Dependencies:* `lightgbm` 4.7.0 (gradient boosting; its TreeSHAP replaces the `shap`
+  package), `optuna` 5.0.0 (seeded search). macOS needs `brew install libomp`.
+- *Not yet done:* MLP rung; the `train` commands are not Nextflow processes.
+- *Tests:* `make lint` clean; `make test` 520 passed, 1 skipped (Foldseek not on PATH), then 15
+  LightGBM tests in their own process; 43 new.

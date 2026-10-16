@@ -368,6 +368,100 @@ def difference_figure(
     return fig
 
 
+MODEL_NAMES = {"esm2_650m": "ESM-2 650M", "saprot_650m_af2": "SaProt 650M"}
+BLOCK_NAMES = {
+    "onehot": "wild type / mutant one-hot",
+    "blosum62": "BLOSUM62",
+    "rel_position": "relative position",
+    "structure": "structure (pLDDT, SASA, contacts)",
+    "score": "zero-shot score",
+    "log_probs": "log-probabilities",
+    "embedding": "embedding",
+}
+
+
+def _block_name(block: str) -> str:
+    model, _, kind = block.partition(":")
+    if not kind:
+        return BLOCK_NAMES.get(block, block)
+    return f"{MODEL_NAMES.get(model, model)} {BLOCK_NAMES.get(kind, kind)}"
+
+
+def _block_kind(block: str) -> int:
+    """Colour slot: 0 zero-shot score, 1 embedding, 2 any other feature."""
+    kind = block.partition(":")[2]
+    return 0 if kind == "score" else 1 if kind == "embedding" else 2
+
+
+def shap_figure(
+    importance: pd.DataFrame,
+    assays: Sequence[str],
+    function_types: Mapping[str, str],
+    *,
+    top: int,
+    dataset: str,
+) -> Figure:
+    """Block-level SHAP importance of one model, one panel per assay (``train shap``).
+
+    Bars are each block's share of the summed block importance (mean ``|sum of the block's
+    SHAP values|``, :class:`~mutascope.eval.schemas.ShapImportanceSchema`), the ``top``
+    largest per assay. Nothing is computed: shares are read from the table.
+    """
+    blocks = importance[importance["level"] == "block"]
+    labels = set(zip(importance["model"], importance["feature_set"], strict=True))
+    if len(labels) != 1:
+        raise FigureDataError(f"expected one model and feature set, got {sorted(labels)}")
+    ((model, feature_set),) = labels
+    with matplotlib.rc_context(_RC):
+        fig = Figure(figsize=(4.0 * len(assays) + 1.0, 0.32 * top + 2.3))
+        left, right, gap = 0.015, 0.985, 0.05
+        width = (right - left - gap * (len(assays) - 1)) / len(assays)
+        for k, assay_id in enumerate(assays):
+            rows = blocks[blocks["assay_id"] == assay_id]
+            if rows.empty:
+                raise FigureDataError(f"no SHAP importance for {assay_id}")
+            rows = rows.sort_values("share", ascending=False).head(top)
+            ax = fig.add_axes((left + k * (width + gap), 0.17, width, 0.62))
+            ax.set_xlim(0, max(0.6, float(rows["share"].max()) + 0.25))
+            for j, row in enumerate(rows.itertuples(index=False)):
+                share = float(str(row.share))
+                ax.barh(j, share, height=0.7, color=SERIES[_block_kind(str(row.name))])
+                ax.text(
+                    share + 0.015,
+                    j,
+                    f"{_block_name(str(row.name))}  {share:.0%}",
+                    va="center",
+                    fontsize=7.5,
+                    color=TEXT,
+                )
+            ax.set_ylim(top - 0.5, -0.6)
+            ax.set_yticks([])
+            ax.grid(axis="x", color=GRID, linewidth=0.8)
+            ax.set_axisbelow(True)
+            ax.spines["left"].set_visible(False)
+            ax.xaxis.set_major_locator(MaxNLocator(nbins=4))
+            ax.xaxis.set_major_formatter(lambda value, _: f"{value:.0%}")  # pyright: ignore[reportUnknownLambdaType]
+            n = int(str(rows["n_variants"].iloc[0]))
+            ax.set_title(
+                f"{assay_id}\n{n:,} variants, {_group_name(function_types[assay_id])}",
+                fontsize=8.5,
+                loc="left",
+                color=TEXT,
+                pad=6,
+            )
+            ax.set_xlabel("Share of block importance")
+        _titles(
+            fig,
+            f"What LightGBM uses: SHAP importance by feature block ({model}, {feature_set})",
+            f"{dataset}; one model per assay, fit on all its variants",
+            "Block importance: mean over variants of |sum of the block's SHAP values| "
+            "(TreeSHAP), as a share of all blocks. Colour: blue zero-shot score,\n"
+            "orange embedding, aqua other features. Explains what the model uses; it is not "
+            "a performance estimate.",
+        )
+    return fig
+
+
 def save_figure(
     figure: Figure, out_dir: Path, name: str, formats: Sequence[str], dpi: int
 ) -> list[Path]:

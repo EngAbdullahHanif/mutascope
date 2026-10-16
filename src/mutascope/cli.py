@@ -4,7 +4,10 @@ Every pipeline step is a command here; Nextflow only ever calls these commands.
 """
 
 import csv
+import hashlib
+import json
 import re
+import shutil
 import time
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -81,6 +84,7 @@ from mutascope.eval.schemas import (
     LandscapeRunSchema,
     ScoringRunSchema,
     SelectedHyperparameterSchema,
+    ShapImportanceSchema,
     SummarySchema,
     SupervisedLeaderboardSchema,
     SupervisedMetricSchema,
@@ -100,15 +104,13 @@ from mutascope.eval.zero_shot import (
     write_scores,
 )
 from mutascope.export.hub import PublishError, push_dataset, stage_dataset
-from mutascope.features.base import FEATURE_SETS, KEY_COLUMNS, build_features
-from mutascope.features.embeddings import fill_embeddings, hidden_size
-from mutascope.features.matrix import FeatureMatrix
+from mutascope.features.base import FEATURE_SETS, KeyDesign
 from mutascope.features.schemas import EmbeddingRunSchema, FeatureStoreReportSchema
 from mutascope.features.sets import (
     FeatureSet,
     FeatureSetError,
+    StoreDesign,
     assays_of,
-    assemble,
     feature_sets,
     structured_assays,
     width,
@@ -120,23 +122,26 @@ from mutascope.features.store import (
     measured_keys,
     read_structure_features,
 )
-from mutascope.models.canary import canary_record, permutation_canary
+from mutascope.models.canary import canary_case, canary_record
 from mutascope.models.cv import (
+    Checkpoint,
     CrossValidationError,
     DesignBuilder,
     ModelFactory,
     cv_metrics_table,
 )
+from mutascope.models.importance import shap_assay
+from mutascope.models.pca import PCAError
 from mutascope.models.registry import model_factory
 from mutascope.models.ridge import RidgeError
 from mutascope.scoring.base import build_scorer
 from mutascope.scoring.cache import CacheError, LogProbCache
 from mutascope.scoring.ensemble import zscore_mean
-from mutascope.scoring.masked_lm import MaskedLMScorer
 from mutascope.scoring.struct_tokens import AssayStructure, StructTokenError, load_struct_tokens
 from mutascope.utils.config import as_str_dict, load_config
 from mutascope.utils.io import write_table
 from mutascope.utils.logging import configure_logging
+from mutascope.utils.parallel import default_jobs, run_parallel
 from mutascope.utils.seeding import seed_all
 from mutascope.utils.tracking import TrackedRun, TrackingError, TrackingSettings, log_run
 
@@ -649,6 +654,12 @@ StoreDir = Annotated[
         file_okay=False,
     ),
 ]
+Jobs = Annotated[
+    int | None,
+    typer.Option(
+        help="Worker processes, one assay each at a time (default: all cores but one).", min=1
+    ),
+]
 TRAIN_ERRORS = (KeyError, FoldJoinError, CrossValidationError, FeatureSetError, FeatureStoreError)
 
 
@@ -661,7 +672,7 @@ def _design(cfg: DictConfig, store_dir: Path | None) -> tuple[DesignBuilder, lis
     """
     name = str(cfg.train.feature_set)
     if name in FEATURE_SETS:
-        return (lambda assay_id, keys: build_features(name, keys)), None
+        return KeyDesign(name), None
     sets = feature_sets(
         as_str_dict(OmegaConf.to_container(cfg.features.sets, resolve=True), "features.sets")
     )
@@ -669,13 +680,9 @@ def _design(cfg: DictConfig, store_dir: Path | None) -> tuple[DesignBuilder, lis
         raise KeyError(f"unknown feature set {name!r}; known: {sorted([*FEATURE_SETS, *sets])}")
     if store_dir is None:
         raise FeatureSetError(f"feature set {name!r} is read from the store: pass --store-dir")
-    feature_set, store = sets[name], store_dir
-    covered = sorted(structured_assays(store)) if feature_set.structure else None
-
-    def design(assay_id: str, keys: pd.DataFrame) -> FeatureMatrix:
-        return assemble(store, feature_set, assay_id, keys).feature_matrix()
-
-    return design, covered
+    feature_set = sets[name]
+    covered = sorted(structured_assays(store_dir)) if feature_set.structure else None
+    return StoreDesign(store_dir, feature_set), covered
 
 
 def _model(cfg: DictConfig) -> ModelFactory:
@@ -700,17 +707,20 @@ def train_cv(
     reference: Reference,
     out_dir: Annotated[Path, typer.Option(help="Results directory.")],
     store_dir: StoreDir = None,
+    jobs: Jobs = None,
     config_dir: ConfigDir = Path("conf"),
     overrides: Overrides = None,
 ) -> None:
     """Cross-validate ``train.model`` on ``train.feature_set`` in every assay (ADR 0019, 0021).
 
     Per assay and scheme, each fold is predicted by a model trained on the others. Features
-    are assembled from the store one assay at a time. Writes ``cv_<model>_<feature_set>
-    .parquet`` to ``out_dir``: Spearman and MSE over the pooled out-of-fold predictions
-    (``fold`` null, ProteinGym's number) and per fold; for a model that tunes itself, also the
-    hyperparameters its inner CV chose per fold. Prints the ProteinGym-style aggregate of the
-    pooled values per scheme, and logs the run to MLflow in ``train.experiment``.
+    are assembled from the store one assay at a time per worker; assays run in ``--jobs``
+    processes (ADR 0022), and the results do not depend on how many. Writes
+    ``cv_<model>_<feature_set>.parquet`` to ``out_dir``: Spearman and MSE over the pooled
+    out-of-fold predictions (``fold`` null, ProteinGym's number) and per fold; for a model
+    that tunes itself, also the hyperparameters its inner CV chose per fold. Prints the
+    ProteinGym-style aggregate of the pooled values per scheme, and logs the run to MLflow in
+    ``train.experiment``.
     """
     cfg = load_config(config_dir, overrides)
     model, feature_set = str(cfg.train.model), str(cfg.train.feature_set)
@@ -721,13 +731,35 @@ def train_cv(
         typer.echo(f"error: train.schemes: unknown {unknown}; use {list(CV_SCHEMES)}", err=True)
         raise typer.Exit(code=1)
     seed_all(int(cfg.train.seed))
+    jobs = default_jobs() if jobs is None else jobs
+    params = as_str_dict(OmegaConf.to_container(cfg.train.params, resolve=True), "train.params")
+    settings = {"model": model, "feature_set": feature_set, "schemes": schemes}
+    fingerprint = json.dumps(settings | {"params": params.get(model, {})}, sort_keys=True)
+    # Finished assays are kept here until the results file is written: a killed run resumes.
+    checkpoint = Checkpoint(
+        out_dir / f".cv_{label}_checkpoint", hashlib.sha256(fingerprint.encode()).hexdigest()
+    )
     started = time.monotonic()
     try:
         make_model = _model(cfg)
         design, covered = _design(cfg, store_dir)
+        if cfg.train.assays is not None:
+            subset = [str(a) for a in cfg.train.assays]
+            outside = sorted(set(subset) - set(covered or subset))
+            if outside:
+                raise FeatureSetError(f"{feature_set} does not cover train.assays {outside}")
+            covered = subset
         data = load_cv_table(variants_dir, folds_dir, covered)
         result = cv_metrics_table(
-            data, design, make_model, model=model, feature_set=feature_set, schemes=schemes
+            data,
+            design,
+            make_model,
+            model=model,
+            feature_set=feature_set,
+            schemes=schemes,
+            jobs=jobs,
+            max_variants=int(cfg.train.max_variants_in_flight),
+            checkpoint=checkpoint,
         )
     except TRAIN_ERRORS as exc:
         typer.echo(f"error: {exc}", err=True)
@@ -743,9 +775,11 @@ def train_cv(
                 hyperparameters_path(out_dir, label),
             )
         )
+    shutil.rmtree(checkpoint.directory)
     assays = sorted(set(per_assay["assay_id"]))
     typer.echo(
-        f"{model} on {feature_set}: {len(assays)} assays, {len(data):,} variants, {wall:.0f} s"
+        f"{model} on {feature_set}: {len(assays)} assays, {len(data):,} variants, "
+        f"{wall:.0f} s with {jobs} job(s)"
     )
     groups = AssayGroups.from_reference(pd.read_csv(reference), assays)
     pooled = per_assay[per_assay["fold"].isna()]
@@ -776,9 +810,9 @@ def train_cv(
             "train.model": model,
             "train.feature_set": feature_set,
             "train.schemes": schemes,
-            "train.params": as_str_dict(
-                OmegaConf.to_container(cfg.train.params, resolve=True), "train.params"
-            ).get(model, {}),
+            "train.jobs": jobs,
+            "train.max_variants_in_flight": int(cfg.train.max_variants_in_flight),
+            "train.params": params.get(model, {}),
         },
         metrics,
         paths,
@@ -813,26 +847,28 @@ def train_canary(
     ],
     out_dir: Annotated[Path, typer.Option(help="Results directory.")],
     store_dir: StoreDir = None,
+    jobs: Jobs = None,
     config_dir: ConfigDir = Path("conf"),
     overrides: Overrides = None,
 ) -> None:
-    """Label-permutation canary of ``train.model`` on real assays (ADR 0019, 0021).
+    """Label-permutation canary of ``train.model`` on real assays (ADR 0019, 0021, 0022).
 
     On each assay of ``train.canary.assays`` and each scheme, the CV loop runs once with true
     labels and ``n_permutations`` times with shuffled training labels. Passes when the mean
     permuted pooled Spearman is within ``max_standard_errors`` standard errors of 0. A case
     whose true-label Spearman is below ``min_observed`` is marked uninformative: a model that
-    learns nothing there passes without proving anything. Writes ``canary_<label>.parquet``;
+    learns nothing there passes without proving anything. The (assay, scheme) cases run in
+    ``--jobs`` processes, each with its own seeded generator. Writes ``canary_<label>.parquet``;
     exits 1 if any case fails.
     """
     cfg = load_config(config_dir, overrides)
     model, feature_set = str(cfg.train.model), str(cfg.train.feature_set)
     canary = cfg.train.canary
     label = supervised_label(model, feature_set)
-    seed_all(int(cfg.train.seed))
-    rng = np.random.default_rng(int(cfg.train.seed))
+    seed = int(cfg.train.seed)
+    seed_all(seed)
     assays = [str(a) for a in canary.assays]
-    records: list[dict[str, object]] = []
+    schemes = [str(s) for s in cfg.train.schemes]
     try:
         make_model = _model(cfg)
         design, covered = _design(cfg, store_dir)
@@ -840,30 +876,33 @@ def train_canary(
         if outside:
             raise FeatureSetError(f"{feature_set} does not cover canary assays {outside}")
         data = load_cv_table(variants_dir, folds_dir, assays)
-        for assay_id in assays:
-            assay = data[data["assay_id"] == assay_id].reset_index(drop=True)
-            x = design(assay_id, assay[list(KEY_COLUMNS)])
-            for scheme in [str(s) for s in cfg.train.schemes]:
-                result = permutation_canary(
-                    x,
-                    assay["DMS_score"].to_numpy(np.float64),
-                    assay[f"fold_{scheme}"].to_numpy(np.int64),
-                    make_model,
-                    n_permutations=int(canary.n_permutations),
-                    rng=rng,
-                )
-                records.append(
-                    {"model": model, "feature_set": feature_set, "assay_id": assay_id}
-                    | canary_record(
-                        result,
-                        scheme=scheme,
-                        max_standard_errors=float(canary.max_standard_errors),
-                        min_observed=float(canary.min_observed),
-                    )
-                )
-    except (*TRAIN_ERRORS, RidgeError) as exc:
+        cases = [(a, s) for a in assays for s in schemes]
+        tasks = [
+            (
+                a,
+                data[data["assay_id"] == a].reset_index(drop=True),
+                design,
+                make_model,
+                s,
+                int(canary.n_permutations),
+                (seed, assays.index(a), schemes.index(s)),
+            )
+            for a, s in cases
+        ]
+        results = run_parallel(canary_case, tasks, jobs=default_jobs() if jobs is None else jobs)
+    except (*TRAIN_ERRORS, RidgeError, PCAError, ValueError) as exc:  # ValueError: LightGBMError
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
+    records: list[dict[str, object]] = [
+        {"model": model, "feature_set": feature_set, "assay_id": a}
+        | canary_record(
+            result,
+            scheme=s,
+            max_standard_errors=float(canary.max_standard_errors),
+            min_observed=float(canary.min_observed),
+        )
+        for (a, s), result in zip(cases, results, strict=True)
+    ]
     table = pd.DataFrame.from_records(records)
     path = write_table(table, CanarySchema, out_dir / f"canary_{label}.parquet")
     typer.echo(f"canary {label}: {int(canary.n_permutations)} permutations per case")
@@ -900,6 +939,139 @@ def train_canary(
     if failed:
         typer.echo(f"error: {failed} canary case(s) failed", err=True)
         raise typer.Exit(code=1)
+
+
+@train_app.command("shap")
+def train_shap(
+    variants_dir: Annotated[
+        Path, typer.Option(help="Processed variant partitions.", exists=True, file_okay=False)
+    ],
+    folds_dir: Annotated[
+        Path,
+        typer.Option(help="Fold partitions (`data folds`).", exists=True, file_okay=False),
+    ],
+    out_dir: Annotated[Path, typer.Option(help="Results directory.")],
+    store_dir: StoreDir = None,
+    jobs: Jobs = None,
+    config_dir: ConfigDir = Path("conf"),
+    overrides: Overrides = None,
+) -> None:
+    """Global SHAP importance of ``train.shap.model`` fit on all of each SHAP assay (ADR 0022).
+
+    Per assay of ``train.shap.assays``: ``DMS_score`` is standardised over all variants, the
+    model runs its own hyperparameter search over the folds of ``train.shap.scheme`` and is
+    refit on every variant, and LightGBM's TreeSHAP gives each variant's contributions.
+    Writes ``shap_<label>.parquet`` (feature and block level, :class:`ShapImportanceSchema`).
+    There is no test fold: this explains what the model uses, it does not evaluate it.
+    """
+    cfg = load_config(config_dir, overrides)
+    spec = cfg.train.shap
+    model, feature_set = str(spec.model), str(spec.feature_set)
+    label = supervised_label(model, feature_set)
+    assays = [str(a) for a in spec.assays]
+    seed_all(int(cfg.train.seed))
+    cfg.train.model, cfg.train.feature_set = model, feature_set
+    try:
+        make_model = _model(cfg)
+        design, covered = _design(cfg, store_dir)
+        outside = sorted(set(assays) - set(covered or assays))
+        if outside:
+            raise FeatureSetError(f"{feature_set} does not cover SHAP assays {outside}")
+        data = load_cv_table(variants_dir, folds_dir, assays)
+        tasks = [
+            (
+                a,
+                data[data["assay_id"] == a].reset_index(drop=True),
+                design,
+                make_model,
+                str(spec.scheme),
+                model,
+                feature_set,
+            )
+            for a in assays
+        ]
+        frames = run_parallel(
+            shap_assay,
+            tasks,
+            jobs=default_jobs() if jobs is None else jobs,
+            weights=[len(task[1]) for task in tasks],
+            budget=float(cfg.train.max_variants_in_flight),
+        )
+    except (*TRAIN_ERRORS, PCAError, ValueError) as exc:  # ValueError: LightGBMError
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    table = pd.concat(frames, ignore_index=True)
+    path = write_table(table, ShapImportanceSchema, out_dir / f"shap_{label}.parquet")
+    blocks = table[table["level"] == "block"]
+    typer.echo(f"SHAP {label}, fit on all variants ({spec.scheme} folds for the search):")
+    for assay_id, rows in blocks.groupby("assay_id", sort=False):
+        top = rows.nlargest(5, "value")
+        listed = ", ".join(f"{r.name} {r.share:.0%}" for r in top.itertuples(index=False))
+        typer.echo(f"  {assay_id} ({int(rows['n_variants'].iloc[0]):,} variants): {listed}")
+    typer.echo(f"results: {path}")
+    shares = {
+        f"share/{a}/{n}": float(v)
+        for a, n, v in zip(
+            blocks["assay_id"], blocks["name"], blocks["share"].to_numpy(np.float64), strict=True
+        )
+    }
+    _log_run(
+        cfg,
+        "shap",
+        f"{model} {feature_set}",
+        {
+            "train.model": model,
+            "train.feature_set": feature_set,
+            "shap.assays": ", ".join(assays),
+            "shap.scheme": str(spec.scheme),
+        },
+        shares,
+        [path],
+        {"model": model, "feature_set": feature_set, "kind": "supervised"},
+        experiment=str(cfg.train.experiment),
+    )
+
+
+@train_app.command("figures")
+def train_figures(
+    results_dir: Annotated[
+        Path,
+        typer.Option(help="Directory of shap_<label>.parquet.", exists=True, file_okay=False),
+    ],
+    out_dir: Annotated[Path, typer.Option(help="Figure directory.")],
+    reference: Reference,
+    config_dir: ConfigDir = Path("conf"),
+    overrides: Overrides = None,
+) -> None:
+    """Supervised figures, drawn from results files only: SHAP block importance (ADR 0022)."""
+    # matplotlib is the optional `figures` extra; no other command needs it.
+    from mutascope.eval.figures import FigureDataError, save_figure, shap_figure
+
+    cfg = load_config(config_dir, overrides)
+    spec, style = cfg.train.shap, cfg.eval.figures
+    label = supervised_label(str(spec.model), str(spec.feature_set))
+    source = results_dir / f"shap_{label}.parquet"
+    if not source.exists():
+        typer.echo(f"error: no {source.name} in {results_dir} (run `train shap`)", err=True)
+        raise typer.Exit(code=1)
+    importance = ShapImportanceSchema.validate(pd.read_parquet(source))
+    selection = pd.read_csv(reference).set_index("DMS_id")["coarse_selection_type"]
+    try:
+        figure = shap_figure(
+            importance,
+            [str(a) for a in spec.assays],
+            {str(a): str(selection[a]) for a in spec.assays},
+            top=int(spec.top_blocks),
+            dataset=f"ProteinGym {cfg.data.release.version}",
+        )
+    except (FigureDataError, KeyError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    paths = save_figure(
+        figure, out_dir, f"shap_{label}", [str(f) for f in style.formats], int(style.dpi)
+    )
+    for path in paths:
+        typer.echo(f"figure: {path}")
 
 
 def _pooled_runs(results_dir: Path, labels: list[str]) -> dict[str, pd.DataFrame]:
@@ -2161,6 +2333,11 @@ def features_embed(
     written to ``features.embedding_cache_dir`` before the next starts, so a rerun computes
     only what is missing. Logged to MLflow in the ``features.experiment`` experiment.
     """
+    # torch is imported here, not at the top: a process that trains LightGBM must never load
+    # it (two OpenMP runtimes in one process crash on macOS; ADR 0022).
+    from mutascope.features.embeddings import fill_embeddings, hidden_size
+    from mutascope.scoring.masked_lm import MaskedLMScorer
+
     cfg = load_config(config_dir, overrides)
     if cfg.model.get("members"):
         typer.echo(f"error: {cfg.model.name} is an ensemble: it has no embedding", err=True)

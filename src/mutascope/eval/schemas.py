@@ -126,6 +126,31 @@ class CanarySchema(pa.DataFrameModel):
         unique = ["model", "feature_set", "assay_id", "scheme"]  # noqa: RUF012 — read by pandera
 
 
+class ShapImportanceSchema(pa.DataFrameModel):
+    """Global SHAP importance of one model fit on all of one assay's variants (ADR 0022).
+
+    ``level = feature``: ``value`` is the mean over variants of ``|SHAP|`` of one column.
+    ``level = block``: the mean over variants of ``|sum of SHAP over the block's columns|``,
+    the block's combined contribution (a 1,280-column embedding is one block). ``share`` is
+    ``value`` over the sum of ``value`` at that level, per assay.
+    """
+
+    model: Series[str]
+    feature_set: Series[str]
+    assay_id: Series[str]
+    n_variants: Series[int] = pa.Field(ge=1)
+    level: Series[str] = pa.Field(isin=["feature", "block"])
+    name: Series[str]
+    block: Series[str]
+    value: Series[float] = pa.Field(ge=0)
+    share: Series[float] = pa.Field(ge=0, le=1)
+
+    class Config:  # pyright: ignore[reportIncompatibleVariableOverride]
+        strict = True
+        ordered = True
+        unique = ["model", "feature_set", "assay_id", "level", "name"]  # noqa: RUF012 — read by pandera
+
+
 class SummarySchema(pa.DataFrameModel):
     """A ProteinGym-style aggregate with its bootstrap CI, overall or for one function type.
 

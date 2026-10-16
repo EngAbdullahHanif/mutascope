@@ -11,6 +11,7 @@ inside the training folds, as a model is.
 """
 
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from typing import Final
 
 import numpy as np
@@ -44,3 +45,17 @@ def build_features(name: str, variants: pd.DataFrame) -> FeatureMatrix:
     if features.n_rows != len(variants):
         raise ValueError(f"feature set {name!r} returned {features.n_rows} rows")
     return features
+
+
+@dataclass(frozen=True)
+class KeyDesign:
+    """``(assay_id, keys) -> features`` for a key-only set: a picklable design builder.
+
+    ``train cv --jobs`` sends the design to worker processes, so it cannot be a closure.
+    """
+
+    name: str
+
+    def __call__(self, assay_id: str, keys: pd.DataFrame) -> FeatureMatrix:
+        del assay_id  # key-only sets are the same function in every assay
+        return build_features(self.name, keys)
