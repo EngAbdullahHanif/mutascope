@@ -165,10 +165,17 @@ Feature store for all 19 × L substitutions, sets `seq` (217 assays) and `seq_st
 - [x] All-data calibration rows for Task 8 (`train calibrate` → `data/processed/calibration/`)
 
 ### Final models (Task 8)
-- [ ] Choose and train the deployed model. Model selection for deployment uses modulo and contiguous
-      splits, not random: the website's landscapes are predictions at unmeasured positions. Current
-      leader: ridge `seq_struct` (ADR 0022, "Consequence for the deployed model"). Intervals: CV+
-      with scheme-like calibration folds, constant width (ADR 0024, "Consequences").
+- [x] Final results table (`train final-table`, ADR 0025): every run vs the best zero-shot model on
+      the same assays (SaProt on structure sets, ESM-2 650M otherwise), paired, by function type
+      and assay size
+- [x] Final figures (`train final-figures`): model ladder per scheme, supervised vs zero-shot by
+      assay size; calibration plot from Task 7
+- [x] Deployed model (`train final`, ADR 0025): ridge `seq_struct` on the 198 assays with a structure
+      and ≥ 300 variants, two fits per assay (penalty by random / contiguous inner CV) matched to the
+      position, 19 × L landscapes with out-of-fold values at measured variants and constant-width
+      CV+ intervals; checks against `train calibrate` and `train cv` passed
+- [ ] Publish (`train publish --push`, `data publish --landscapes --push`): staged in `build/`;
+      needs `hf auth login` with a write token
 
 Done when: Spearman table (3 splits × 4 rungs vs zero-shot, bootstrap CIs), SHAP figure, calibration plot, model cards on the HF Hub.
 

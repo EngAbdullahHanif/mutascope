@@ -83,6 +83,35 @@ ProteinGym's 1-based numbering (`A123G` is `position` 122).
 **`three_di`**: one row per (assay, residue), 77,338 rows: `position`, `residue` and `three_di`,
 the Foldseek 3Di structural state (20 letters), from Foldseek 10-941cd33.
 
+**`supervised_landscapes`** (added in the Phase 3 revision): every single substitution (19 × L)
+of the 198 assays with a structure and at least 300 measured variants, 1,379,989 rows, predicted
+by MutaScope's per-assay ridge model (model repo
+[engAbdullahHanif/mutascope-ridge-seq-struct](https://huggingface.co/engAbdullahHanif/mutascope-ridge-seq-struct),
+whose card describes the model and its evaluation). These are **predictions**, not measurements,
+except `dms_score`.
+
+| Column | Meaning |
+|---|---|
+| `assay_id`, `position`, `wt_aa`, `mt_aa` | The substitution (0-based position) |
+| `position_status` | `measured` (all 19 substitutions measured), `partially_measured` or `unmeasured` |
+| `measured`, `dms_score` | Whether this substitution was measured, and its `DMS_score` if so |
+| `prediction` | Predicted `DMS_score`. **Out-of-fold** for a measured variant (from a model that never saw it), the final model's for an unmeasured one |
+| `prediction_source` | `out_of_fold` or `final_model` |
+| `calibration_scheme` | `random` if the position has (other) measured variants, else `contiguous`: which fit and which calibration folds the row comes from |
+| `lower_80`, `upper_80`, `lower_90`, `upper_90` | Constant-width CV+ prediction intervals, `DMS_score` units |
+| `structure_imputed` | A structure feature was missing at this residue (outside a partial structure) and set to its mean over measured variants |
+| `code_version`, `config_sha256`, `manifest_sha256` | What produced the row: git commit, resolved-config hash, input-manifest hash |
+
+Of the 1,379,989 rows, 663,263 are measured; 585,637 are at positions with no measurement, where
+the model extrapolates (aggregate Spearman 0.553 on ProteinGym's contiguous split, against 0.721
+on positions seen in training). The intervals were checked on held-out folds: 0.908–0.911 mean
+coverage at 90%, 0.815–0.818 at 80%.
+
+**`supervised_landscape_assays`**: one row per ProteinGym assay (217): `eligible`, `reason` (why
+not: no structure, 4 assays; fewer than 300 measured variants, 15), `default_model` (what MutaScope
+shows: the ridge, or SaProt 650M / ESM-2 650M zero-shot), `has_structure`, `n_measured`,
+`target_length`, `landscape_rows` and the same three version columns.
+
 Also included: `reports/` (per-assay cleaning and structure reports, Parquet and Markdown),
 `provenance.json` (release pin, input checksums, Foldseek version, row counts) and `SHA256SUMS`.
 
@@ -166,6 +195,11 @@ comparison of raw `DMS_score` values across assays.
 - **Assays share proteins.** 217 assays cover 186 UniProt IDs (up to 4 assays per protein), so
   splitting by assay does not separate proteins.
 - **Single substitutions only.** Multi-mutants, insertions and deletions are not included.
+- **`supervised_landscapes` are predictions.** Use `dms_score` for measurements. Predictions at
+  unmeasured positions are extrapolations with wide intervals (median 90% width 2.7 assay standard
+  deviations); for `A0A140D2T1_ZIKV_Sourisseau_2019` and `POLG_HCVJF_Qi_2014` most residues lie
+  outside the structure (`structure_imputed`). Intervals hold their level on average, not per
+  variant. Never use them as clinical predictions.
 - **Organism and selection bias.** 96 of 217 assays are of human proteins, and the set reflects
   which proteins and functions DMS studies chose to measure. It is not a random sample of
   proteins or functions.
@@ -205,6 +239,12 @@ structure = load_dataset(
 )
 ```
 
+```python
+landscapes = load_dataset(
+    "engAbdullahHanif/mutascope-proteingym-v1.3", "supervised_landscapes", split="train"
+)
+```
+
 ```sql
 -- DuckDB, straight from the Hub
 SELECT v.*, s.plddt, s.rel_sasa
@@ -220,6 +260,8 @@ git clone https://github.com/EngAbdullahHanif/mutascope && cd mutascope
 make setup
 make pipeline                # download, verify, validate, clean, structure features, 3Di
 uv run mutascope data publish  # stage this dataset in build/hf_dataset (no upload)
+# with the supervised landscapes (Phase 3: train cv, train calibrate, train final first):
+uv run mutascope data publish --landscapes
 ```
 
 `provenance.json` records the inputs and versions; `SHA256SUMS` lets you compare a rebuilt copy
