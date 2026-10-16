@@ -13,11 +13,13 @@ sorted, so staging the same data twice gives identical tables.
 import hashlib
 import json
 import shutil
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import duckdb
+import pandas as pd
 import pandera.pandas as pa
 from huggingface_hub import HfApi
 from omegaconf import OmegaConf
@@ -29,6 +31,7 @@ from mutascope.data.schemas import (
     StructureFeatureSchema,
     ThreeDiSchema,
 )
+from mutascope.eval.schemas import FinalLandscapeSchema, FinalManifestSchema
 from mutascope.utils.io import fresh_tmp_dir, replace_dir
 from mutascope.utils.logging import get_logger
 
@@ -106,12 +109,16 @@ class StagedDataset:
     rows: dict[str, int]
 
 
-def card_front_matter(metadata: dict[str, Any]) -> str:
-    """YAML front matter for the Hub card: the configured metadata plus one config per table."""
+def card_front_matter(metadata: dict[str, Any], extra: Sequence[str] = ()) -> str:
+    """YAML front matter for the Hub card: the configured metadata plus one config per table.
+
+    ``extra`` names further tables, published as ``data/<name>.parquet`` (the landscapes).
+    """
     configs = [
         {"config_name": t.name, "data_files": t.path, **({"default": True} if i == 0 else {})}
         for i, t in enumerate(TABLES)
     ]
+    configs += [{"config_name": name, "data_files": f"data/{name}.parquet"} for name in extra]
     body = OmegaConf.to_yaml(OmegaConf.create({**metadata, "configs": configs}))
     return f"---\n{body}---\n\n"
 
@@ -124,6 +131,7 @@ def stage_dataset(
     reports_dir: Path,
     provenance: dict[str, Any],
     out_dir: Path,
+    landscapes_dir: Path | None = None,
 ) -> StagedDataset:
     """Write the Hub-ready folder to ``out_dir``, replacing any previous staging.
 
@@ -135,6 +143,8 @@ def stage_dataset(
         reports_dir: Directory holding the cleaning and structure reports.
         provenance: Facts recorded in ``provenance.json`` (release pin, input checksums).
         out_dir: Folder to stage into. Built in ``<out_dir>.tmp`` and swapped in when complete.
+        landscapes_dir: A ``train final`` bundle; if given, its landscapes and manifest are
+            published too, as :data:`LANDSCAPE_TABLES` (ADR 0025).
 
     Raises:
         PublishError: A report is missing, or the assay table and variant table disagree.
@@ -154,6 +164,10 @@ def stage_dataset(
             con.from_df(frame).write_parquet(str(tmp / table.path))
             rows[table.name] = len(frame)
             log.info("table_staged", table=table.name, rows=len(frame), path=table.path)
+        extra: list[str] = []
+        if landscapes_dir is not None:
+            rows |= _stage_landscapes(con, landscapes_dir, tmp / "data")
+            extra = list(LANDSCAPE_TABLES)
         (tmp / "reports").mkdir()
         for name in REPORT_FILES:
             shutil.copyfile(reports_dir / name, tmp / "reports" / name)
@@ -161,13 +175,80 @@ def stage_dataset(
             json.dumps({**provenance, "mutascope_version": __version__, "rows": rows}, indent=2)
             + "\n"
         )
-        (tmp / CARD_FILE).write_text(card_front_matter(card_metadata) + card.read_text())
+        (tmp / CARD_FILE).write_text(card_front_matter(card_metadata, extra) + card.read_text())
         (tmp / CHECKSUMS_FILE).write_text(checksums(tmp))
     except BaseException:
         shutil.rmtree(tmp)
         raise
     replace_dir(tmp, out_dir)
     return StagedDataset(out_dir, rows)
+
+
+LANDSCAPE_TABLES = ("supervised_landscapes", "supervised_landscape_assays")
+"""Hub configs of a ``train final`` bundle: every substitution of every eligible assay, and
+every assay's entry (eligible, or why not and which zero-shot model the website shows)."""
+
+
+def _stage_landscapes(
+    con: duckdb.DuckDBPyConnection, bundle: Path, data_dir: Path
+) -> dict[str, int]:
+    """Write the bundle's landscapes (one file, ``assay_id`` a column) and manifest."""
+    manifest = FinalManifestSchema.validate(pd.read_parquet(bundle / "manifest.parquet"))
+    pattern = str((bundle / "assay_id=*" / "*.parquet").resolve()).replace("'", "''")
+    landscapes = con.sql(
+        f"SELECT * FROM read_parquet('{pattern}', hive_partitioning = true, "
+        "hive_types = {'assay_id': 'VARCHAR'}) ORDER BY assay_id, position, mt_aa"
+    ).df()
+    columns = list(FinalLandscapeSchema.to_schema().columns)
+    landscapes = FinalLandscapeSchema.validate(landscapes[columns], lazy=True)
+    expected = int(manifest["landscape_rows"].sum())
+    if len(landscapes) != expected:
+        raise PublishError(f"{bundle}: {len(landscapes)} landscape rows, manifest says {expected}")
+    for name, frame in zip(LANDSCAPE_TABLES, (landscapes, manifest), strict=True):
+        con.from_df(frame).write_parquet(str(data_dir / f"{name}.parquet"))
+        log.info("table_staged", table=name, rows=len(frame))
+    return {LANDSCAPE_TABLES[0]: len(landscapes), LANDSCAPE_TABLES[1]: len(manifest)}
+
+
+def stage_model(
+    *,
+    bundle: Path,
+    files: Mapping[str, Path],
+    card: Path,
+    card_metadata: dict[str, Any],
+    out_dir: Path,
+) -> Path:
+    """Write the Hub model repo folder for the final ridges (ADR 0025).
+
+    Args:
+        bundle: The ``train final`` bundle: its ``fits``, ``coefficients``, ``manifest`` and
+            ``version.json`` are the model.
+        files: Published path -> local file (configs, results tables).
+        card: Markdown body of the model card.
+        card_metadata: Hub front matter.
+        out_dir: Folder to stage into, replaced whole.
+
+    Raises:
+        PublishError: A bundle file or a listed file is missing.
+    """
+    model_files = ("fits.parquet", "coefficients.parquet", "manifest.parquet", "version.json")
+    sources = {f"model/{name}": bundle / name for name in model_files} | dict(files)
+    missing = sorted(str(p) for p in sources.values() if not p.is_file())
+    if missing:
+        raise PublishError(f"missing files to publish: {missing}")
+    tmp = fresh_tmp_dir(out_dir)
+    try:
+        for target, source in sources.items():
+            (tmp / target).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, tmp / target)
+        front = OmegaConf.to_yaml(OmegaConf.create(card_metadata))
+        (tmp / CARD_FILE).write_text(f"---\n{front}---\n\n" + card.read_text())
+        (tmp / CHECKSUMS_FILE).write_text(checksums(tmp))
+    except BaseException:
+        shutil.rmtree(tmp)
+        raise
+    replace_dir(tmp, out_dir)
+    return out_dir
 
 
 def _check_single_counts(con: duckdb.DuckDBPyConnection) -> None:
@@ -214,16 +295,43 @@ def push_dataset(stage_dir: Path, repo_id: str, *, private: bool, token: str | N
     Raises:
         PublishError: The staged folder was changed after staging.
     """
+    return push_folder(
+        stage_dir,
+        repo_id,
+        repo_type="dataset",
+        private=private,
+        message=f"Publish processed ProteinGym data (mutascope {__version__})",
+        delete_patterns=["data/*", "reports/*"],
+        token=token,
+    )
+
+
+def push_folder(
+    stage_dir: Path,
+    repo_id: str,
+    *,
+    repo_type: str,
+    private: bool,
+    message: str,
+    delete_patterns: Sequence[str],
+    token: str | None = None,
+) -> str:
+    """Re-verify a staged folder's checksums, create the repo if needed and upload it as one
+    commit (a new revision); ``delete_patterns`` remove remote files the folder no longer has.
+
+    Raises:
+        PublishError: The staged folder was changed after staging.
+    """
     expected = (stage_dir / CHECKSUMS_FILE).read_text()
     if checksums(stage_dir) != expected:
         raise PublishError(f"{stage_dir} changed since it was staged; stage it again")
     api = HfApi(token=token)
-    api.create_repo(repo_id, repo_type="dataset", private=private, exist_ok=True)
+    api.create_repo(repo_id, repo_type=repo_type, private=private, exist_ok=True)
     commit = api.upload_folder(
         folder_path=stage_dir,
         repo_id=repo_id,
-        repo_type="dataset",
-        commit_message=f"Publish processed ProteinGym data (mutascope {__version__})",
-        delete_patterns=["data/*", "reports/*"],
+        repo_type=repo_type,
+        commit_message=message,
+        delete_patterns=list(delete_patterns),
     )
     return commit.commit_url
