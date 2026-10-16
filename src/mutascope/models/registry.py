@@ -43,6 +43,26 @@ def _lgbm(params: Mapping[str, Any]) -> ModelFactory:
     )
 
 
+def _mlp(params: Mapping[str, Any]) -> ModelFactory:
+    # mlp imports torch only inside fit, so the registry still loads neither library.
+    from mutascope.models.mlp import EarlyStoppedMLP
+
+    components = params.get("pca_components")
+    return partial(
+        EarlyStoppedMLP,
+        loss=str(params["loss"]),
+        hidden=[int(h) for h in params["hidden"]],
+        dropout=float(params["dropout"]),
+        learning_rate=float(params["learning_rate"]),
+        weight_decay=float(params["weight_decay"]),
+        batch_size=int(params["batch_size"]),
+        max_epochs=int(params["max_epochs"]),
+        patience=int(params["patience"]),
+        pca_components=None if components is None else int(components),
+        seed=int(params["seed"]),
+    )
+
+
 MODELS: Final[Mapping[str, Callable[[Mapping[str, Any]], ModelFactory]]] = {
     "training_mean": lambda params: TrainingMean,
     "zero_shot": lambda params: ZeroShot,
@@ -50,10 +70,13 @@ MODELS: Final[Mapping[str, Callable[[Mapping[str, Any]], ModelFactory]]] = {
     "augmented_ridge": _ridge,
     "lgbm": _lgbm,
     "lgbm_pca": _lgbm,
+    "mlp_mse": _mlp,
+    "mlp_rank": _mlp,
 }
 """Name -> builder of a model factory from that model's params. ``ridge`` and
 ``augmented_ridge`` are one class; the latter's params leave the zero-shot score unpenalised.
-``lgbm`` and ``lgbm_pca`` are one class; the latter's params reduce each embedding by PCA."""
+``lgbm`` and ``lgbm_pca`` are one class; the latter's params reduce each embedding by PCA.
+``mlp_mse`` and ``mlp_rank`` are one class, trained with MSE or the RankNet loss (ADR 0023)."""
 
 
 def model_factory(name: str, params: Mapping[str, Any] | None = None) -> ModelFactory:

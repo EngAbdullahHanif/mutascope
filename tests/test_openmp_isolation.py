@@ -22,7 +22,8 @@ def python(code: str) -> str:
 
 
 @pytest.mark.parametrize(
-    "module", ["mutascope.cli", "mutascope.models.registry", "mutascope.models.lgbm"]
+    "module",
+    ["mutascope.cli", "mutascope.models.registry", "mutascope.models.lgbm", "mutascope.models.mlp"],
 )
 def test_importing_loads_neither_torch_nor_lightgbm(module: str) -> None:
     loaded = python(

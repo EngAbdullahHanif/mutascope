@@ -90,6 +90,7 @@ from mutascope.eval.schemas import (
     SupervisedMetricSchema,
 )
 from mutascope.eval.supervised import (
+    below_minimum,
     hyperparameters_path,
     leaderboard_table,
     pooled_assay_metrics,
@@ -695,6 +696,15 @@ def _model(cfg: DictConfig) -> ModelFactory:
     return model_factory(name, config)
 
 
+def _min_variants(cfg: DictConfig, model: str) -> int:
+    """``train.min_variants.<model>``: the smallest assay ``model`` runs on (0 if not listed)."""
+    minimum = cfg.train.get("min_variants")
+    if minimum is None:
+        return 0
+    table = as_str_dict(OmegaConf.to_container(minimum, resolve=True), "train.min_variants")
+    return int(table.get(model, 0))
+
+
 @train_app.command("cv")
 def train_cv(
     variants_dir: Annotated[
@@ -750,6 +760,15 @@ def train_cv(
                 raise FeatureSetError(f"{feature_set} does not cover train.assays {outside}")
             covered = subset
         data = load_cv_table(variants_dir, folds_dir, covered)
+        minimum = _min_variants(cfg, model)
+        sizes = data.groupby("assay_id").size()
+        skipped = below_minimum({str(a): int(n) for a, n in sizes.items()}, minimum)
+        data = data[~data["assay_id"].isin(skipped)].reset_index(drop=True)
+        if skipped:
+            typer.echo(
+                f"skipped {len(skipped)} of {len(sizes)} assays with fewer than {minimum} "
+                f"variants (train.min_variants): {', '.join(skipped)}"
+            )
         result = cv_metrics_table(
             data,
             design,
@@ -783,7 +802,11 @@ def train_cv(
     )
     groups = AssayGroups.from_reference(pd.read_csv(reference), assays)
     pooled = per_assay[per_assay["fold"].isna()]
-    metrics: dict[str, float] = {"assays": float(len(assays)), "variants": float(len(data))}
+    metrics: dict[str, float] = {
+        "assays": float(len(assays)),
+        "variants": float(len(data)),
+        "skipped_assays": float(len(skipped)),
+    }
     for scheme in schemes:
         for metric in SUPERVISED_METRICS:
             values = (
@@ -813,6 +836,7 @@ def train_cv(
             "train.jobs": jobs,
             "train.max_variants_in_flight": int(cfg.train.max_variants_in_flight),
             "train.params": params.get(model, {}),
+            "train.min_variants": minimum,
         },
         metrics,
         paths,
@@ -876,6 +900,10 @@ def train_canary(
         if outside:
             raise FeatureSetError(f"{feature_set} does not cover canary assays {outside}")
         data = load_cv_table(variants_dir, folds_dir, assays)
+        sizes = data.groupby("assay_id").size()
+        small = below_minimum({str(a): int(n) for a, n in sizes.items()}, _min_variants(cfg, model))
+        if small:
+            raise CrossValidationError(f"canary assays below train.min_variants: {small}")
         cases = [(a, s) for a in assays for s in schemes]
         tasks = [
             (
@@ -1086,6 +1114,14 @@ def _pooled_runs(results_dir: Path, labels: list[str]) -> dict[str, pd.DataFrame
     }
 
 
+def _run_model(results_dir: Path, label: str) -> str:
+    """The ``model`` column of ``cv_<label>.parquet`` (a run label may hold underscores)."""
+    models = sorted(set(read_results(results_path(results_dir, label))["model"].astype(str)))
+    if len(models) != 1:
+        raise typer.BadParameter(f"cv_{label}.parquet holds models {models}")
+    return models[0]
+
+
 @train_app.command("compare")
 def train_compare(
     results_dir: Annotated[
@@ -1120,6 +1156,13 @@ def train_compare(
     seed_all(seed)
     exceptions = cfg.data.structure_exceptions
     no_structure = [] if exceptions is None else [str(a) for a in exceptions]
+    # A run of a model with train.min_variants lacks exactly the assays below it (ADR 0023).
+    minimums = {label: _min_variants(cfg, _run_model(results_dir, label)) for label in labels}
+    sizes: dict[str, int] = {}
+    if any(minimums.values()):
+        counts = table.set_index("DMS_id")["DMS_number_single_mutants"]
+        sizes = {str(a): int(n) for a, n in counts.items()}
+    skipped = {label: below_minimum(sizes, minimums[label]) for label in labels}
     try:
         summary = pd.concat(
             [
@@ -1135,7 +1178,7 @@ def train_compare(
                 table,
                 bootstrap,
                 np.random.default_rng(seed),
-                may_be_absent=no_structure,
+                may_be_absent=[*no_structure, *skipped[a], *skipped[b]],
             )
             for a, b in pairs
         ]
