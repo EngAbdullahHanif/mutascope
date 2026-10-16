@@ -128,9 +128,11 @@ Goal: beat zero-shot using the assay data, under ProteinGym's supervised protoco
       label-permutation canary; training-mean baseline (ADR 0019)
 - [x] Per-assay models, ProteinGym fold assignments, random / modulo / contiguous 5-fold; features
       assembled one assay at a time from the store (ADR 0021)
-- [ ] Optuna hyperparameter search inside training folds only (nested CV); scalers fit on train folds only
+- [x] Optuna hyperparameter search inside training folds only (nested CV); scalers fit on train folds only
       (ridge: α by inner CV over the training folds, split like the outer scheme; scaling on the
-      fit rows only — ADR 0021)
+      fit rows only — ADR 0021; LightGBM: 10 Optuna trials per outer fold, PCA fit on training rows
+      only — ADR 0022)
+- [x] `train cv --jobs` across assays under a memory budget, per-assay checkpoints (ADR 0022)
 
 ### Features (variant at position i, wt → mt)
 Feature store for all 19 × L substitutions, sets `seq` (217 assays) and `seq_struct` (213) (ADR 0020).
@@ -145,7 +147,9 @@ Feature store for all 19 × L substitutions, sets `seq` (217 assays) and `seq_st
 - [x] Ridge rung (ADR 0021): one-hot ridge, augmented ridge (one-hot + unpenalised ESM-2 650M score;
       Hsu et al., 2022), ridge on `seq` / `seq_struct`; zero-shot on the same test folds, paired
       bootstrap, ProteinGym leaderboard sanity range, permutation canary on the real models
-- [ ] LightGBM on all features + SHAP
+- [x] LightGBM on all features + SHAP (ADR 0022): `lgbm` / `lgbm_pca` on `seq_struct`, `lgbm_pca` on
+      `seq`; beats ridge under random only, below it under modulo / contiguous; post-hoc run without
+      embeddings; TreeSHAP on 3 assays; canary
 - [ ] MLP head (Lightning): LayerNorm → 512 → GELU → Dropout 0.2 → 128 → GELU → 1; AdamW, early stopping;
       compare MSE vs ranking-aware loss
 - [ ] [stretch] LoRA fine-tuning of ESM-2 150M on Kaggle T4 (`peft`)
