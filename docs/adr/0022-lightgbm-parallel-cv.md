@@ -182,6 +182,18 @@ Per assay, `lgbm_pca` beats ridge `seq_struct` in 179 / 213 assays under random 
 - Nothing here is "surprisingly good": the random-split gain over ridge is small, and the canary
   (below) passes.
 
+## Consequence for the deployed model
+
+Deployment-time metrics should be measured on the split that matches the deployment input
+distribution, not the split that is easiest to pass. (1) The website's main output, the full
+(L, 20) landscape, is by definition a prediction at positions that were never measured: the
+unseen-position case that the modulo and contiguous splits test. (2) On unseen positions ridge
+`seq_struct` beat LightGBM (−0.011 to −0.025, every interval excluding 0), so the deployed model is
+chosen by the modulo and contiguous splits, not the random one. (3) The deployed model will
+therefore likely be ridge `seq_struct`, a linear model on rich features, even though LightGBM is
+the stronger method on random splits. The finding is trusted because the leakage tests, the
+permutation canary and the rule against retuning after seeing results all held.
+
 ## SHAP (`lgbm`, `seq_struct`, fit on all variants)
 
 | Block | HSP82 (13,294) | NUSA (1,306) | SCN5A (224) |
