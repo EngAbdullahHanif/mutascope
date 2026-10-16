@@ -18,6 +18,7 @@ from mutascope.eval.schemas import (
     CanarySchema,
     ComparisonSchema,
     SelectedHyperparameterSchema,
+    ShapImportanceSchema,
     SummarySchema,
     SupervisedLeaderboardSchema,
     SupervisedMetricSchema,
@@ -211,22 +212,32 @@ def test_store_set_needs_the_store(inputs: dict[str, Path]) -> None:
 
 def test_canary_on_a_real_model(inputs: dict[str, Path]) -> None:
     assert folds(inputs)[0] == 0
-    code, output = run(
-        "train", "canary",
-        "--variants-dir", str(inputs["variants"]),
-        "--folds-dir", str(inputs["folds"]),
-        "--out-dir", str(inputs["results"]),
-        "--store-dir", str(inputs["store"]),
-        NO_TRACKING, "train.model=augmented_ridge", "train.feature_set=site_onehot_esm2",
-        "train.canary.assays=[A_TEST,C_TEST]", "train.canary.n_permutations=6",
-    )  # fmt: skip
-    assert code == 0, output
-    table = CanarySchema.validate(
-        pd.read_parquet(inputs["results"] / "canary_augmented_ridge_site_onehot_esm2.parquet")
-    )
+    tables: list[pd.DataFrame] = []
+    for jobs in ("1", "2"):
+        code, output = run(
+            "train", "canary",
+            "--variants-dir", str(inputs["variants"]),
+            "--folds-dir", str(inputs["folds"]),
+            "--out-dir", str(inputs["results"]),
+            "--store-dir", str(inputs["store"]),
+            "--jobs", jobs,
+            NO_TRACKING, "train.model=augmented_ridge", "train.feature_set=site_onehot_esm2",
+            "train.canary.assays=[A_TEST,C_TEST]", "train.canary.n_permutations=6",
+        )  # fmt: skip
+        assert code == 0, output
+        tables.append(
+            CanarySchema.validate(
+                pd.read_parquet(
+                    inputs["results"] / "canary_augmented_ridge_site_onehot_esm2.parquet"
+                )
+            )
+        )
+    table = tables[0]
     assert len(table) == 2 * 3
     assert table["passed"].all() and table["informative"].all()
     assert (table["n_permutations"] == 6).all()
+    # Each case has its own seeded generator: workers and order do not change the result.
+    pd.testing.assert_frame_equal(tables[0], tables[1])
 
 
 def test_compare_and_leaderboard(inputs: dict[str, Path], tmp_path: Path) -> None:
@@ -294,3 +305,60 @@ def test_compare_and_leaderboard(inputs: dict[str, Path], tmp_path: Path) -> Non
     assert len(board) == 2 * 3
     assert (board["published"].isin([0.5, 0.4])).all()
     assert (board["n_shared"] == 3).all()
+
+
+SMALL_LGBM = (
+    "train.params.lgbm.n_trials=2",
+    "train.params.lgbm.max_rounds=20",
+    "train.params.lgbm.patience=5",
+)
+
+
+@pytest.mark.lightgbm
+@pytest.mark.parametrize("model", ["lgbm", "lgbm_pca"])
+def test_lightgbm_cross_validates_store_sets(inputs: dict[str, Path], model: str) -> None:
+    assert folds(inputs)[0] == 0
+    code, output = train(
+        inputs, f"train.model={model}", "train.feature_set=seq_struct", *SMALL_LGBM, store=True
+    )
+    assert code == 0, output
+    label = f"{model}_seq_struct"
+    table = SupervisedMetricSchema.validate(read_results(inputs["results"] / f"cv_{label}.parquet"))
+    assert set(table["assay_id"]) == {"A_TEST", "B_TEST"}
+    chosen = SelectedHyperparameterSchema.validate(
+        pd.read_parquet(inputs["results"] / f"cv_{label}_hyperparameters.parquet")
+    )
+    assert len(chosen) == 2 * 3 * 5 * 7  # assays x schemes x folds x (6 searched + rounds)
+
+
+@pytest.mark.lightgbm
+def test_shap_then_figure(inputs: dict[str, Path], tmp_path: Path) -> None:
+    assert folds(inputs)[0] == 0
+    code, output = run(
+        "train", "shap",
+        "--variants-dir", str(inputs["variants"]),
+        "--folds-dir", str(inputs["folds"]),
+        "--out-dir", str(inputs["results"]),
+        "--store-dir", str(inputs["store"]),
+        "--jobs", "1",
+        NO_TRACKING, *SMALL_LGBM, "train.shap.assays=[A_TEST,B_TEST]",
+    )  # fmt: skip
+    assert code == 0, output
+    table = ShapImportanceSchema.validate(
+        pd.read_parquet(inputs["results"] / "shap_lgbm_seq_struct.parquet")
+    )
+    blocks = table[table["level"] == "block"]
+    assert set(blocks["assay_id"]) == {"A_TEST", "B_TEST"}
+    assert "esm2_650m:embedding" in set(blocks["name"]) and "structure" in set(blocks["name"])
+    shares = blocks.groupby("assay_id")["share"].sum()
+    assert ((shares - 1).abs() < 1e-9).all()
+
+    code, output = run(
+        "train", "figures",
+        "--results-dir", str(inputs["results"]),
+        "--out-dir", str(tmp_path / "figures"),
+        "--reference", str(inputs["reference"]),
+        NO_TRACKING, "train.shap.assays=[A_TEST,B_TEST]",
+    )  # fmt: skip
+    assert code == 0, output
+    assert (tmp_path / "figures" / "shap_lgbm_seq_struct.svg").exists()
