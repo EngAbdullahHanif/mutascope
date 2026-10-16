@@ -30,7 +30,7 @@ mutascope/
 │   ├── data/                 # download, parse, validate (pandera), clean, structures, 3Di
 │   ├── scoring/              # Scorer protocol, registry, masked_lm.py, esm2.py, saprot.py, struct_tokens.py, ensemble.py, cache.py
 │   ├── features/             # per-variant feature builders
-│   ├── models/               # ridge, lgbm, mlp (Lightning), conformal, ensemble
+│   ├── models/               # ridge, lgbm, mlp (plain torch), conformal (CV+), uncertainty
 │   ├── eval/                 # metrics, ProteinGym-style aggregation, bootstrap CIs, figures (matplotlib)
 │   ├── export/               # landscapes → JSON/Arrow, ONNX export + quantization
 │   └── utils/                # hashing, io, logging, seeding, tracking (MLflow)
@@ -226,6 +226,22 @@ Run `make lint test` before declaring any task done.
   lack exactly those assays. The minimum is never chosen from that model's test results.
 - A post-hoc diagnostic run is labelled post-hoc in config, results and ADR and is never a
   headline model.
+
+## Uncertainty rules (ADR 0024)
+
+- Intervals are CV+ (`models.conformal`, implemented here: MAPIE has no normalised cross-conformal
+  score and cannot pass per-row folds to our models). Per outer fold they are calibrated on the
+  training rows only; the test fold's labels are compared with them afterwards, never before
+  (bit-identical-interval test).
+- The design in `train.uncertainty` (levels, modes `random` / `scheme`, intervals `absolute` /
+  `normalized`, `epsilon`) was fixed before any result; do not tune it on test-fold coverage.
+- A normalised score divides by the spread of the fold ensemble of the calibration model that
+  scored the row (`M_k`'s own), never by the spread of the K calibration models (K − 1 of them
+  trained on the row). A model exposes its ensemble via `fold_predict` or gets members fitted.
+- The point prediction an interval goes with is the outer model's (as deployed); width is judged
+  against its error.
+- Final models' intervals (Task 8) come from `train calibrate` rows plus refitting `CVPlus` on the
+  same inputs; the refit must reproduce the saved predictions (exactly with one BLAS thread).
 
 ## API (`api/`)
 

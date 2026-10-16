@@ -129,6 +129,36 @@ shap:
   assays: [SCN5A_HUMAN_Glazer_2019, NUSA_ECOLI_Tsuboyama_2023_1WCL, HSP82_YEAST_Flynn_2019]
   # Blocks shown per assay in the figure (`mutascope train figures`).
   top_blocks: 10
+# Prediction intervals (`mutascope train uncertainty` / `train calibrate`, ADR 0024). Fixed before
+# any result and never changed after. Per outer fold, CV+ (Barber et al., 2021) is calibrated on
+# the training rows only; the outer model gives the point prediction.
+uncertainty:
+  # The deployment candidate (ADR 0022, 0023). The MLP comparison is an override:
+  # train.uncertainty.model=mlp_mse.
+  model: ridge
+  feature_set: seq_struct
+  # Nominal coverages.
+  levels: [0.8, 0.9]
+  # Calibration folds: random = a seeded random split of the training rows (as many folds as
+  # they have); scheme = the training rows' own outer folds (held-out positions under modulo and
+  # contiguous). The calibration models' own inner CV uses the same folds.
+  modes: [random, scheme]
+  # absolute = |residual| (constant width); normalized = |residual| / (spread + epsilon), where
+  # spread is the SD of the calibration model's fold ensemble (adaptive width).
+  intervals: [absolute, normalized]
+  # In units of the training targets' SD (the loop standardises DMS_score). Only guards against
+  # a zero spread: 1% of the target SD is below any difference a DMS score resolves, and caps a
+  # normalised score at 100x its residual.
+  epsilon: 0.01
+  seed: ${train.seed}
+  # Width-decile bins per assay for the width-vs-error figure.
+  width_bins: 10
+  # Coverage more than this below the level counts an assay as "below target".
+  below_points: 0.10
+  # Assay-size bins (variants) for coverage by size; the MLP's minimum (300) is an edge.
+  size_edges: [300, 1000, 2000, 5000]
+  # Where `train calibrate` writes the all-data calibration rows (gitignored; Task 8 reads them).
+  calibration_dir: ${data.processed_dir}/calibration
 # Paired bootstrap of pooled Spearman (`mutascope train compare`; ADR 0014): [A, B] by run
 # label <model>_<feature_set>. Every supervised model against zero-shot on the same test folds,
 # then neighbouring rungs of the ladder.

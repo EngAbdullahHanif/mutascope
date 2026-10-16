@@ -78,6 +78,7 @@ from mutascope.eval.region import (
 )
 from mutascope.eval.schemas import (
     AgreementSchema,
+    CalibrationSchema,
     CanarySchema,
     ComparisonSchema,
     LandscapeCoverageSchema,
@@ -88,6 +89,9 @@ from mutascope.eval.schemas import (
     SummarySchema,
     SupervisedLeaderboardSchema,
     SupervisedMetricSchema,
+    UncertaintyBinSchema,
+    UncertaintyMetricSchema,
+    UncertaintySummarySchema,
 )
 from mutascope.eval.supervised import (
     below_minimum,
@@ -97,6 +101,7 @@ from mutascope.eval.supervised import (
     results_path,
     supervised_label,
 )
+from mutascope.eval.uncertainty import bin_summary, summarise_intervals, uncertainty_paths
 from mutascope.eval.zero_shot import (
     load_scores,
     run_label,
@@ -105,7 +110,7 @@ from mutascope.eval.zero_shot import (
     write_scores,
 )
 from mutascope.export.hub import PublishError, push_dataset, stage_dataset
-from mutascope.features.base import FEATURE_SETS, KeyDesign
+from mutascope.features.base import FEATURE_SETS, KEY_COLUMNS, KeyDesign
 from mutascope.features.schemas import EmbeddingRunSchema, FeatureStoreReportSchema
 from mutascope.features.sets import (
     FeatureSet,
@@ -135,6 +140,12 @@ from mutascope.models.importance import shap_assay
 from mutascope.models.pca import PCAError
 from mutascope.models.registry import model_factory
 from mutascope.models.ridge import RidgeError
+from mutascope.models.uncertainty import (
+    FrameCheckpoint,
+    UncertaintySettings,
+    assay_calibration,
+    uncertainty_table,
+)
 from mutascope.scoring.base import build_scorer
 from mutascope.scoring.cache import CacheError, LogProbCache
 from mutascope.scoring.ensemble import zscore_mean
@@ -664,14 +675,17 @@ Jobs = Annotated[
 TRAIN_ERRORS = (KeyError, FoldJoinError, CrossValidationError, FeatureSetError, FeatureStoreError)
 
 
-def _design(cfg: DictConfig, store_dir: Path | None) -> tuple[DesignBuilder, list[str] | None]:
-    """Feature builder for ``train.feature_set`` and the assays it covers (None: every assay).
+def _design(
+    cfg: DictConfig, store_dir: Path | None, set_name: str | None = None
+) -> tuple[DesignBuilder, list[str] | None]:
+    """Feature builder for ``set_name`` (default ``train.feature_set``) and the assays it
+    covers (None: every assay).
 
     A key-only set (``none``) is computed from the keys. Any other name is a feature-store set
     in ``features.sets``, assembled one assay at a time (ADR 0020); a structure set covers
     only the assays the store has structure features for.
     """
-    name = str(cfg.train.feature_set)
+    name = str(cfg.train.feature_set) if set_name is None else set_name
     if name in FEATURE_SETS:
         return KeyDesign(name), None
     sets = feature_sets(
@@ -686,9 +700,9 @@ def _design(cfg: DictConfig, store_dir: Path | None) -> tuple[DesignBuilder, lis
     return StoreDesign(store_dir, feature_set), covered
 
 
-def _model(cfg: DictConfig) -> ModelFactory:
-    """``train.model`` configured with ``train.params.<model>`` (if any)."""
-    name = str(cfg.train.model)
+def _model(cfg: DictConfig, model: str | None = None) -> ModelFactory:
+    """``model`` (default ``train.model``) configured with ``train.params.<model>`` (if any)."""
+    name = str(cfg.train.model) if model is None else model
     params = cfg.train.params.get(name)
     config = (
         {} if params is None else as_str_dict(OmegaConf.to_container(params, resolve=True), name)
@@ -1100,6 +1114,315 @@ def train_figures(
     )
     for path in paths:
         typer.echo(f"figure: {path}")
+
+
+def _uncertainty_settings(cfg: DictConfig) -> UncertaintySettings:
+    """``train.uncertainty`` as :class:`UncertaintySettings` (ADR 0024)."""
+    spec = cfg.train.uncertainty
+    return UncertaintySettings(
+        levels=tuple(float(v) for v in spec.levels),
+        modes=tuple(str(m) for m in spec.modes),
+        intervals=tuple(str(i) for i in spec.intervals),
+        epsilon=float(spec.epsilon),
+        seed=int(spec.seed),
+        width_bins=int(spec.width_bins),
+    )
+
+
+def _uncertainty_data(
+    cfg: DictConfig, variants_dir: Path, folds_dir: Path, store_dir: Path | None, model: str
+) -> tuple[pd.DataFrame, DesignBuilder, list[str]]:
+    """Variants, feature builder and skipped assays for ``train.uncertainty``'s model and set."""
+    design, covered = _design(cfg, store_dir, str(cfg.train.uncertainty.feature_set))
+    if cfg.train.assays is not None:
+        subset = [str(a) for a in cfg.train.assays]
+        outside = sorted(set(subset) - set(covered or subset))
+        if outside:
+            raise FeatureSetError(f"the feature set does not cover train.assays {outside}")
+        covered = subset
+    data = load_cv_table(variants_dir, folds_dir, covered)
+    sizes = data.groupby("assay_id").size()
+    minimum = _min_variants(cfg, model)
+    skipped = below_minimum({str(a): int(n) for a, n in sizes.items()}, minimum)
+    if skipped:
+        typer.echo(
+            f"skipped {len(skipped)} of {len(sizes)} assays with fewer than {minimum} variants "
+            f"(train.min_variants): {', '.join(skipped)}"
+        )
+    return data[~data["assay_id"].isin(skipped)].reset_index(drop=True), design, skipped
+
+
+@train_app.command("uncertainty")
+def train_uncertainty(
+    variants_dir: Annotated[
+        Path, typer.Option(help="Processed variant partitions.", exists=True, file_okay=False)
+    ],
+    folds_dir: Annotated[
+        Path,
+        typer.Option(help="Fold partitions (`data folds`).", exists=True, file_okay=False),
+    ],
+    reference: Reference,
+    out_dir: Annotated[Path, typer.Option(help="Results directory.")],
+    store_dir: StoreDir = None,
+    jobs: Jobs = None,
+    config_dir: ConfigDir = Path("conf"),
+    overrides: Overrides = None,
+) -> None:
+    """Judge CV+ prediction intervals of ``train.uncertainty.model`` on the test folds (ADR 0024).
+
+    Per assay, scheme and outer fold: the outer model (as ``train cv``) gives the point
+    prediction; CV+ is calibrated on the training folds only, with random and scheme-like
+    calibration folds, constant-width and adaptive intervals, at every level. Writes
+    ``uncertainty_<label>.parquet`` (per assay), ``_summary`` (over assays, overall and by assay
+    size) and ``_bins`` (width deciles), and logs the run to MLflow in ``train.experiment``.
+    """
+    cfg = load_config(config_dir, overrides)
+    spec = cfg.train.uncertainty
+    model, feature_set = str(spec.model), str(spec.feature_set)
+    label = supervised_label(model, feature_set)
+    schemes = [str(s) for s in cfg.train.schemes]
+    seed_all(int(spec.seed))
+    jobs = default_jobs() if jobs is None else jobs
+    params = as_str_dict(OmegaConf.to_container(cfg.train.params, resolve=True), "train.params")
+    uncertainty = as_str_dict(OmegaConf.to_container(spec, resolve=True), "train.uncertainty")
+    fingerprint = json.dumps(
+        {"schemes": schemes, "uncertainty": uncertainty, "params": params.get(model, {})},
+        sort_keys=True,
+    )
+    checkpoint = FrameCheckpoint(
+        out_dir / f".uncertainty_{label}_checkpoint",
+        hashlib.sha256(fingerprint.encode()).hexdigest(),
+        ("bins", "metrics"),
+    )
+    started = time.monotonic()
+    try:
+        settings = _uncertainty_settings(cfg)
+        make_model = _model(cfg, model)
+        data, design, skipped = _uncertainty_data(cfg, variants_dir, folds_dir, store_dir, model)
+        per_assay, bins = uncertainty_table(
+            data,
+            design,
+            make_model,
+            schemes=schemes,
+            settings=settings,
+            jobs=jobs,
+            max_variants=int(cfg.train.max_variants_in_flight),
+            checkpoint=checkpoint,
+        )
+    except (*TRAIN_ERRORS, ValueError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    wall = time.monotonic() - started
+    reference_table = pd.read_csv(reference)
+    per_assay.insert(0, "model", model)
+    per_assay.insert(1, "feature_set", feature_set)
+    summary = summarise_intervals(
+        per_assay,
+        reference_table,
+        size_edges=[int(e) for e in spec.size_edges],
+        below_points=float(spec.below_points),
+    )
+    summary.insert(0, "model", model)
+    summary.insert(1, "feature_set", feature_set)
+    binned = bin_summary(bins)
+    binned.insert(0, "model", model)
+    binned.insert(1, "feature_set", feature_set)
+    files = uncertainty_paths(out_dir, label)
+    paths = [
+        write_table(per_assay, UncertaintyMetricSchema, files["metrics"]),
+        write_table(summary, UncertaintySummarySchema, files["summary"]),
+        write_table(binned, UncertaintyBinSchema, files["bins"]),
+    ]
+    shutil.rmtree(checkpoint.directory)
+    n_assays = per_assay["assay_id"].nunique()
+    typer.echo(
+        f"{model} on {feature_set}: {n_assays} assays, {len(data):,} variants, "
+        f"{wall:.0f} s with {jobs} job(s)"
+    )
+    overall = summary[summary["size_bin"] == "all"]
+    metrics: dict[str, float] = {"assays": float(n_assays), "skipped_assays": float(len(skipped))}
+    for record in overall.to_dict("records"):
+        if str(record["statistic"]) not in ("mean", "median", "n_below", "aggregate"):
+            continue
+        parts = [str(record["metric"]), str(record["scheme"])]
+        parts += [str(p) for p in (record["mode"], record["interval"]) if isinstance(p, str)]
+        if isinstance(record["level"], float) and not np.isnan(record["level"]):
+            parts.append(f"{record['level']:.2f}")
+        metrics[".".join([*parts, str(record["statistic"])])] = float(str(record["value"]))
+    coverage = overall[overall["metric"] == "coverage"]
+    for (scheme, mode, interval, level), part in coverage.groupby(
+        ["scheme", "mode", "interval", "level"], sort=True
+    ):
+        stat = dict(zip(part["statistic"].astype(str), part["value"].astype(float), strict=True))
+        typer.echo(
+            f"  {scheme!s:<10} {mode!s:<6} {interval!s:<10} {float(str(level)):.0%}: coverage "
+            f"mean {stat['mean']:.3f}, median {stat['median']:.3f}, {int(stat['n_below'])} "
+            "assays more than 10 points below"
+        )
+    for path in paths:
+        typer.echo(f"results: {path}")
+    _log_run(
+        cfg,
+        "uncertainty",
+        f"{model} {feature_set}",
+        {
+            "train.uncertainty": uncertainty,
+            "train.params": params.get(model, {}),
+            "train.schemes": schemes,
+            "train.jobs": jobs,
+            "train.min_variants": _min_variants(cfg, model),
+        },
+        metrics,
+        paths,
+        {"model": model, "feature_set": feature_set, "kind": "uncertainty"},
+        experiment=str(cfg.train.experiment),
+    )
+
+
+@train_app.command("calibrate")
+def train_calibrate(
+    variants_dir: Annotated[
+        Path, typer.Option(help="Processed variant partitions.", exists=True, file_okay=False)
+    ],
+    folds_dir: Annotated[
+        Path,
+        typer.Option(help="Fold partitions (`data folds`).", exists=True, file_okay=False),
+    ],
+    store_dir: StoreDir = None,
+    out_dir: Annotated[
+        Path | None,
+        typer.Option(help="Calibration directory (default: train.uncertainty.calibration_dir)."),
+    ] = None,
+    jobs: Jobs = None,
+    config_dir: ConfigDir = Path("conf"),
+    overrides: Overrides = None,
+) -> None:
+    """CV+ calibration rows of the final all-data models, for their intervals (Task 8, ADR 0024).
+
+    For every assay, scheme and calibration mode, CV+ is fit on all variants with that scheme's
+    folds. Writes ``<out_dir>/<label>/<assay_id>.parquet`` (:class:`CalibrationSchema`): each
+    variant's calibration fold, the held-out prediction and fold-ensemble spread, and its
+    standardised target. Assays already written are kept (a killed run resumes).
+    """
+    cfg = load_config(config_dir, overrides)
+    spec = cfg.train.uncertainty
+    model, feature_set = str(spec.model), str(spec.feature_set)
+    label = supervised_label(model, feature_set)
+    schemes = [str(s) for s in cfg.train.schemes]
+    target_dir = (Path(str(spec.calibration_dir)) if out_dir is None else out_dir) / label
+    jobs = default_jobs() if jobs is None else jobs
+    seed_all(int(spec.seed))
+    started = time.monotonic()
+    try:
+        settings = _uncertainty_settings(cfg)
+        make_model = _model(cfg, model)
+        data, design, skipped = _uncertainty_data(cfg, variants_dir, folds_dir, store_dir, model)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        columns = [*KEY_COLUMNS, "DMS_score", *(f"fold_{s}" for s in schemes)]
+        groups = data.groupby("assay_id", sort=True).indices
+        assays = {
+            str(a): data.iloc[rows][columns].reset_index(drop=True) for a, rows in groups.items()
+        }
+        todo = sorted(
+            (a for a in assays if not (target_dir / f"{a}.parquet").exists()),
+            key=lambda a: (-len(assays[a]), a),
+        )
+
+        def done(index: int, frame: pd.DataFrame) -> None:
+            write_table(frame, CalibrationSchema, target_dir / f"{todo[index]}.parquet")
+
+        run_parallel(
+            assay_calibration,
+            [(a, assays[a], design, make_model, schemes, settings) for a in todo],
+            jobs=jobs,
+            weights=[len(assays[a]) for a in todo],
+            budget=int(cfg.train.max_variants_in_flight),
+            on_done=done,
+        )
+    except (*TRAIN_ERRORS, ValueError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    wall = time.monotonic() - started
+    typer.echo(
+        f"{label}: calibration of {len(assays)} assays ({len(todo)} computed now, "
+        f"{len(assays) - len(todo)} already written) -> {target_dir}, {wall:.0f} s"
+    )
+    _log_run(
+        cfg,
+        "calibrate",
+        f"{model} {feature_set}",
+        {
+            "train.uncertainty": as_str_dict(
+                OmegaConf.to_container(spec, resolve=True), "train.uncertainty"
+            ),
+            "train.schemes": schemes,
+            "train.min_variants": _min_variants(cfg, model),
+        },
+        {
+            "assays": float(len(assays)),
+            "computed": float(len(todo)),
+            "skipped": float(len(skipped)),
+        },
+        [],
+        {"model": model, "feature_set": feature_set, "kind": "calibration"},
+        experiment=str(cfg.train.experiment),
+    )
+
+
+@train_app.command("uncertainty-figures")
+def train_uncertainty_figures(
+    results_dir: Annotated[
+        Path,
+        typer.Option(
+            help="Directory of uncertainty_<label>_*.parquet.", exists=True, file_okay=False
+        ),
+    ],
+    out_dir: Annotated[Path, typer.Option(help="Figure directory.")],
+    config_dir: ConfigDir = Path("conf"),
+    overrides: Overrides = None,
+) -> None:
+    """Calibration plot and width-vs-error plot of ``train.uncertainty``'s run (ADR 0024), drawn
+    from its summary and bins files only."""
+    from mutascope.eval.figures import (
+        FigureDataError,
+        calibration_figure,
+        save_figure,
+        width_error_figure,
+    )
+
+    cfg = load_config(config_dir, overrides)
+    spec, style = cfg.train.uncertainty, cfg.eval.figures
+    label = supervised_label(str(spec.model), str(spec.feature_set))
+    files = uncertainty_paths(results_dir, label)
+    missing = [p.name for p in (files["summary"], files["bins"]) if not p.exists()]
+    if missing:
+        typer.echo(f"error: no {missing} in {results_dir} (run `train uncertainty`)", err=True)
+        raise typer.Exit(code=1)
+    summary = UncertaintySummarySchema.validate(pd.read_parquet(files["summary"]))
+    bins = UncertaintyBinSchema.validate(pd.read_parquet(files["bins"]))
+    dataset = f"ProteinGym {cfg.data.release.version}"
+    try:
+        figures = {
+            f"calibration_{label}": calibration_figure(
+                summary,
+                title=f"Do the intervals cover what they promise? ({label}, CV+)",
+                dataset=dataset,
+            ),
+            f"width_error_{label}": width_error_figure(
+                bins,
+                level=max(float(v) for v in spec.levels),
+                title=f"Do wider intervals mark larger errors? ({label})",
+                dataset=dataset,
+            ),
+        }
+    except FigureDataError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    for name, figure in figures.items():
+        for path in save_figure(
+            figure, out_dir, name, [str(f) for f in style.formats], int(style.dpi)
+        ):
+            typer.echo(f"figure: {path}")
 
 
 def _pooled_runs(results_dir: Path, labels: list[str]) -> dict[str, pd.DataFrame]:
