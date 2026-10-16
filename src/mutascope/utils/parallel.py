@@ -8,6 +8,11 @@ processes, one assay at a time per worker. Two rules keep that safe:
   when it loads). Otherwise 13 workers that each also thread their linear algebra would
   oversubscribe the cores. Children inherit ``os.environ`` as it is when they start; the
   parent's already-loaded libraries are unaffected.
+- **One thread in this process too.** ``jobs = 1`` runs the tasks here, where BLAS is already
+  loaded, so environment variables are too late; ``threadpoolctl`` caps the loaded libraries
+  instead. Without it the serial result depended on the machine: multi-threaded OpenBLAS sums
+  in another order, and on a 4-core Linux runner the ridge CV test's pooled Spearman moved by
+  up to 3.4e-3 against the single-threaded workers (bit-identical with the cap).
 - **Results in task order.** Tasks may finish in any order; the list returned is in the order
   given, so the output never depends on the number of workers.
 
@@ -26,6 +31,8 @@ from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wai
 from contextlib import contextmanager
 from multiprocessing import get_context
 from typing import Any, TypeVar
+
+from threadpoolctl import threadpool_limits  # pyright: ignore[reportMissingTypeStubs]
 
 THREAD_VARIABLES = (
     "OMP_NUM_THREADS",
@@ -77,7 +84,9 @@ def run_parallel(
 
     ``on_done(index, result)`` is called in this process as each task finishes. The first
     exception raised by a task cancels the tasks not yet started and is re-raised here.
-    ``jobs = 1`` (or a single task) runs everything in this process, in order.
+    ``jobs = 1`` (or a single task) runs everything in this process, in order, with the loaded
+    BLAS and OpenMP libraries capped at one thread like a worker's, so the result does not
+    depend on ``jobs``.
 
     Raises:
         ValueError: ``jobs`` is below 1, or ``weights`` does not match ``tasks``.
@@ -97,8 +106,9 @@ def run_parallel(
 
     workers = min(jobs, len(tasks))
     if workers <= 1:
-        for index, task in enumerate(tasks):
-            finished(index, function(*task))
+        with threadpool_limits(limits=1):
+            for index, task in enumerate(tasks):
+                finished(index, function(*task))
         return [results[index] for index in range(len(tasks))]
     pending = list(range(len(tasks)))
     running: dict[Future[T], int] = {}

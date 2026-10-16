@@ -42,7 +42,9 @@ fits = pd.read_parquet("model/fits.parquet").set_index(["assay_id", "fit"])
 coef = pd.read_parquet("model/coefficients.parquet")
 rows = coef[(coef.assay_id == assay_id) & (coef.fit == "contiguous")]
 x = features[rows.feature].fillna(dict(zip(rows.feature, rows.impute)))  # one row per variant
-prediction = fits.loc[(assay_id, "contiguous"), "intercept"] + x.to_numpy() @ rows.coefficient.to_numpy()
+prediction = (
+    fits.loc[(assay_id, "contiguous"), "intercept"] + x.to_numpy() @ rows.coefficient.to_numpy()
+)
 ```
 
 The features come from MutaScope's feature store (`mutascope features build`); the landscapes in
