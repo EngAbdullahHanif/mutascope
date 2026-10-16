@@ -1805,3 +1805,81 @@ features. The reasoning is in ADR 0022.
 - *Not yet done:* MLP rung; the `train` commands are not Nextflow processes.
 - *Tests:* `make lint` clean; `make test` 520 passed, 1 skipped (Foldseek not on PATH), then 15
   LightGBM tests in their own process; 43 new.
+
+---
+
+## Entry 23 — MLP head, MSE vs RankNet (Phase 3, 2026-10-16)
+
+**Plain-language summary.** The third supervised model is a small neural network (about 143,000
+weights) on the same features as ridge and LightGBM, with each 1,280-number embedding compressed
+to 32 numbers. Its whole design was written into the config before any result: architecture,
+optimiser, learning rate, batch size, epoch budget. It was trained two ways, by plain squared
+error and by a ranking loss (RankNet) that only asks it to put fitter variants above less fit
+ones of the same assay. Training stops when a held-out training fold stops improving, a fold split
+the same way as the test split, and the network is then retrained on all training rows. Assays
+under 300 variants are skipped (15 of 213), a cut set from the ridge and LightGBM results before
+the network ever ran. The run took 17 minutes. The result matches LightGBM's: the network beats
+ridge only on positions it has seen (+0.026). On unseen positions it ties ridge (modulo) or is
+worse (contiguous, −0.011). It beats LightGBM on unseen positions (+0.016 under modulo) and
+zero-shot SaProt everywhere. The ranking loss is no better than squared error, and worse under
+modulo. The reasoning is in ADR 0023.
+
+**The 3 most important design choices.**
+
+1. **Early stopping on one training fold, split like the outer scheme, then refit.** The
+   validation set is one of the training folds, so under modulo and contiguous it holds positions
+   the network never trained on, which is the situation the test fold poses. The network is then
+   refit on all training rows for the chosen epoch count, as LightGBM is for its rounds, so every
+   rung's final model sees 80% of the assay. *Evidence:* a test checks the validation and training
+   positions are disjoint exactly under modulo and contiguous; changing every label of a test fold
+   leaves its predictions bit-identical (both losses, all schemes); the canary passes 18 / 18.
+2. **The minimum assay size came from data size and earlier rungs only.** Below 300 variants both
+   ridge and LightGBM lose to zero-shot SaProt on unseen positions (−0.20 under contiguous for
+   ≤ 200 variants); from 300 up both beat it on average in every size bin and scheme. 300 variants
+   also leaves ~60 validation variants for early stopping. `train compare` lets a run lack exactly
+   the assays below its minimum and nothing else. *Evidence:* the size table in ADR 0023; a test
+   shows that dropping the minimum turns the same gap into an error.
+3. **Plain torch with process isolation, no Lightning.** One thread per fit, a forked and seeded
+   torch random state, torch imported only inside `fit`, no files written. *Evidence:* fits are
+   identical whatever the global torch state; the thread count is restored; importing the CLI still
+   loads neither torch nor LightGBM; pilot seed-to-seed spread is measured (below).
+
+**Problems encountered and how they were solved.**
+
+1. *The MLP canary failed on a synthetic assay without a leak.* `train canary` in the new CLI test
+   reported a permuted mean of +0.154 ± 0.019 (z = +7.9, 3 permutations). It was treated as a leak
+   until shown otherwise. Cause: the test trained for 6 epochs, so the shuffled-label networks
+   stayed near their seeded initial weights, one fixed random function of features that carry
+   signal. The seed-0 untrained network alone has Spearman −0.28 with the labels, and varying the
+   seed moves permuted results between −0.59 and +0.45; with one seed the offset is identical in
+   every permutation. At the configured budget (200 epochs, patience 20) the same synthetic assay
+   passes (4 cases, |z| ≤ 0.86), and the real canary passes 18 / 18 (max |z| 2.56). A zero-initialised
+   output layer was tried and rejected: no verdict changed, and true-label Spearman fell (0.769 →
+   0.709). Fix: the test trains with the real epoch budget, and the pitfall is documented.
+2. *The MLP's aggregate looked better than ridge until it was paired.* Under modulo `mlp_mse`
+   scores 0.622 against ridge's published 0.593, apparently +0.029. But ridge's 0.593 is over 213
+   assays, including the 15 small ones where supervised models do badly. On the same 198 assays
+   ridge is 0.621, and the paired difference is +0.001 [−0.005, +0.007]. Only the paired numbers are
+   reported; ADR 0023 says never to set the MLP's aggregate against a 213-assay number.
+
+**Supporting details.**
+- *Results* (198 assays, pooled Spearman, random / modulo / contiguous): `mlp_mse` 0.762 / 0.622 /
+  0.570; `mlp_rank` 0.762 / 0.613 / 0.565; on the same assays ridge `seq_struct` 0.736 / 0.621 /
+  0.581, `lgbm_pca` 0.759 / 0.607 / 0.562, zero-shot SaProt 0.459 / 0.459 / 0.460. Paired:
+  `mlp_mse` − ridge +0.026 / +0.001 (n.s.) / −0.011; `mlp_rank` − ridge +0.026 / −0.008 / −0.016;
+  `mlp_mse` − `lgbm_pca` +0.003 / +0.016 / +0.008 (n.s.); `mlp_rank` − `mlp_mse` +0.000 / −0.009 /
+  −0.006 (n.s.); against SaProt +0.105 to +0.303. Ridge `seq_struct` stays the deployment candidate.
+- *Pilot* (10 assays at size deciles, both losses, 3 seeds): 59–68 s per run; extrapolated
+  12–16 min for the full run; per-assay seed SD of pooled Spearman median 0.002–0.003 (random),
+  0.006–0.009 (modulo), 0.012–0.014 (contiguous), worst 0.034.
+- *Full run* (13 jobs): `mlp_mse` 558 s, `mlp_rank` 486 s, parent peak RSS 1.7 GB. Early stopping
+  chose a median of 6 epochs over 5,940 fits; 1,261 stopped at epoch 1–2, none at the cap of 200.
+- *Canary:* `mlp_mse` 9 / 9 passed, all informative (ρ 0.57–0.89), max |z| 2.56; `mlp_rank` 9 / 9,
+  all informative (ρ 0.63–0.88), max |z| 1.65.
+- *Files:* `results/supervised/cv_mlp_{mse,rank}_seq_struct{,_hyperparameters}.parquet`,
+  `canary_mlp_{mse,rank}_seq_struct.parquet`; updated `supervised_summary.parquet` and
+  `supervised_comparisons.parquet` (all earlier rows unchanged).
+- *Dependencies:* none added (torch was already one).
+- *Not yet done:* conformal intervals; the `train` commands are not Nextflow processes.
+- *Tests:* `make lint` clean; `make test` 550 passed, 1 skipped (Foldseek not on PATH), then 15
+  LightGBM tests in their own process; 30 new.

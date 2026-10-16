@@ -150,8 +150,9 @@ Feature store for all 19 × L substitutions, sets `seq` (217 assays) and `seq_st
 - [x] LightGBM on all features + SHAP (ADR 0022): `lgbm` / `lgbm_pca` on `seq_struct`, `lgbm_pca` on
       `seq`; beats ridge under random only, below it under modulo / contiguous; post-hoc run without
       embeddings; TreeSHAP on 3 assays; canary
-- [ ] MLP head (Lightning): LayerNorm → 512 → GELU → Dropout 0.2 → 128 → GELU → 1; AdamW, early stopping;
-      compare MSE vs ranking-aware loss
+- [x] MLP head (ADR 0023; plain torch, not Lightning): LayerNorm → 512 → GELU → Dropout 0.2 → 128 →
+      GELU → 1; AdamW, early stopping on a training fold split like the outer scheme; MSE vs RankNet;
+      198 assays (≥ 300 variants); beats ridge under random only, ties / loses on unseen positions
 - [ ] [stretch] LoRA fine-tuning of ESM-2 150M on Kaggle T4 (`peft`)
 - [ ] [stretch] Leave-protein-out global model
 
