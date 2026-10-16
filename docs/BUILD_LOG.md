@@ -1883,3 +1883,99 @@ modulo. The reasoning is in ADR 0023.
 - *Not yet done:* conformal intervals; the `train` commands are not Nextflow processes.
 - *Tests:* `make lint` clean; `make test` 550 passed, 1 skipped (Foldseek not on PATH), then 15
   LightGBM tests in their own process; 30 new.
+
+---
+
+## Entry 24 — Prediction intervals: CV+ with fold-ensemble spreads (Phase 3, 2026-10-16)
+
+**Plain-language summary.** Every prediction on the website will now come with a range that should
+contain the true score 80% or 90% of the time. The ranges come from cross-conformal prediction
+(CV+). The training variants are split into folds, each fold is predicted by a model that never saw
+it, and the size of those honest errors sets the width of the range. This was all done inside the
+training folds of the existing cross-validation, so each range was then checked on test variants
+that played no part in building it. Two ways of making the calibration folds were compared: random,
+or the same way as the test split (held-out positions). So were two kinds of range: the same width
+for every variant, or wider where the model's fold copies disagree (the "fold-ensemble spread").
+The design was fixed in config before any result. The main finding: the calibration folds must mimic
+the test split. Calibrated that way, the ranges hit their target on every split (0.908–0.911 at
+90%), with at most 1 of 213 assays more than 10 points short. Calibrated on random folds, they are
+far too narrow on positions the model never saw: 0.806 under contiguous, with 86 assays short.
+Honest ranges on unseen positions are wide, about 2.5 assay standard deviations at 90%. The
+adaptive ranges over-cover by 3–5 points, are 35–43% wider, and follow the error only weakly. MAPIE
+could not do this, so CV+ is about 150 lines of our own, tested. The reasoning is in ADR 0024.
+
+**The 3 most important design choices.**
+
+1. **Calibration folds split like the outer scheme, all the way down.** In `scheme` mode the
+   calibration folds are the training rows' own outer folds, and each calibration model's own inner
+   CV uses them too, so under modulo and contiguous every residual comes from positions the model
+   never saw, which is what the test fold asks. *Evidence:* scheme mode is on target under every
+   split (0.815–0.819 at 80%, 0.908–0.911 at 90%), while random calibration under-covers on unseen
+   positions (contiguous 0.673 / 0.806; 138 / 86 assays more than 10 points below). Its intervals
+   stay ~2.0 SDs wide under every split, the width that only fits seen positions.
+2. **The normaliser is the scoring model's own fold-ensemble spread.** The brief said to divide
+   residuals by the fold-ensemble spread. But at a calibration row, K − 1 of the K CV+ models trained
+   on that row, so their spread would be too small there. Each row is therefore divided by the
+   spread of the fold ensemble of `M_k`, the model that scored it; all of that ensemble's members
+   exclude the row's fold. Ridge already fits those members to choose α, so it now keeps them at the
+   chosen α (`fold_predict`, predictions unchanged). *Evidence:* on synthetic data, the normalised
+   scores used as split conformal hit 0.806 / 0.905, so they are exchangeable; the ridge fold
+   ensemble equals refits at the chosen α to 1e-12.
+3. **The test fold never reaches an interval, and the evaluation repeats `train cv`.** Each outer
+   fold refits the outer model (the point prediction), then calibrates CV+ on its training rows only.
+   *Evidence:* changing every label of one test fold (permuted; ×7 − 3) leaves its predictions,
+   spreads and all 8 bounds bit-identical under all three schemes, while the other folds' intervals
+   move; the outer model's pooled Spearman equals `cv_ridge_seq_struct.parquet` in all 639 (assay,
+   scheme) cells (max difference 1.2e-7).
+
+**Problems encountered and how they were solved.**
+
+1. *Normalised CV+ over-covered on synthetic data with a known noise level.* *Found:* the first
+   version of the known-noise test (y = x b + N(0, 1), 20 draws × 400 rows) failed for normalised
+   intervals: coverage 0.939 at 90%, against 0.905 for absolute. It was treated as a bug. *Cause:*
+   used as split conformal (one fold's model and residuals only), the same normalised scores covered
+   0.905, so the scores are valid. The excess comes from CV+ combining K models whose spreads differ
+   at the same point (by 29% on average there), which widens its order statistics. CV+ guarantees a
+   lower bound, not an exact level. *Fix:* the test now checks absolute CV+ within 0.02 of target
+   (0.809 / 0.905), the normalised scores as split conformal within 0.02 (0.806 / 0.905), and
+   normalised CV+ for no under-coverage (0.836 / 0.939). *Verified:* the real run shows the same
+   pattern (adaptive 0.845–0.850 / 0.940–0.945).
+2. *An assay with 0.000 coverage.* *Found:* in the summary, the minimum coverage of random
+   calibration under modulo was exactly 0. *Cause:* CCDB_ECOLI_Adkar_2012 reports one score per
+   position: all 100 positions have a single value for every substitution (within-position SD 0.0).
+   A model that has seen a position fits it exactly, so with random calibration folds, which share
+   positions with training, the residuals are ~0 and the 90% interval is 0.009 SDs wide. Every test
+   variant (unseen positions) falls outside. *Fix:* none needed; it is the starkest instance of
+   finding 1. *Verified:* rerun alone, scheme calibration on the same assay gives width 2.64 and
+   coverage 0.906.
+3. *The run took 3.0 h, not the 1.4 h estimated.* *Found:* per-assay times in the log against the
+   single-process pilot. With 10 workers sharing the machine, mid-size assays ran 2.7–3.3× slower
+   than alone (NUSA_ECOLI_Tsuboyama_2023_1WCL 39.5 s vs 14.6 s; SPIKE_SARS2_Starr_2020_binding 623 s
+   vs 189 s), most likely from memory-bandwidth contention in the large Gram and eigh computations
+   (not measured directly). Total 27.8 worker-hours against 12.4 projected. The machine did not
+   sleep (pmset log). *Fix:* not fixed; the estimate for `train calibrate` was scaled by the measured
+   ratio instead. 81% of a fold's time is eigendecompositions (185 per scheme for a 3,802-variant
+   assay), so subset caching would be the next lever if this has to run again.
+
+**Supporting details.**
+- *Results* (ridge `seq_struct`, 213 assays, 90%, scheme calibration, constant width; random /
+  modulo / contiguous): coverage 0.911 / 0.909 / 0.908, no assay more than 10 points below except
+  F7YBW8_MESOW_Ding_2023 under modulo (80 variants, 0.675); 0.904–0.923 in every size bin; width
+  2.05 / 2.90 / 3.07 assay SDs (median 2.04 / 2.46 / 2.61). Adaptive: 0.943 / 0.942 / 0.940, width
+  2.93 / 3.94 / 4.15. Per-assay Spearman of width with |error| (median): adaptive 0.185 / 0.095 /
+  0.097, constant 0.093 / 0.025 / 0.010; fold-ensemble spread alone 0.171 / 0.087 / 0.084.
+- *MLP not run:* the full design measured 16.2× a plain CV fit on NUSA (no free fold ensemble), so
+  ~2.5 h against the 1-hour limit. A reduced design (scheme calibration, constant width) measured
+  5.8× (~55 min) and was left as an option.
+- *MAPIE 1.5.0* (latest) was checked in its source: no normalised score with cross-conformal, folds
+  cannot reach the estimator, array inputs only. No dependency added.
+- *For Task 8:* `train calibrate` wrote CV+ calibration rows of the all-data models (3 schemes × 2
+  modes) to `data/processed/calibration/ridge_seq_struct/` (gitignored): 3,994,758 rows (6 × 665,793), 75 MB, 3,880 s on 13 workers. A refit of
+  NUSA_ECOLI_Tsuboyama_2023_1WCL reproduced the saved predictions and spreads with difference 0.0.
+  Intervals for any variant: refit `CVPlus` on the same inputs (it must reproduce the saved
+  predictions; exactly with one BLAS thread), then `intervals(predict(x), ...)` (ADR 0024, section 5). Recommended
+  configuration: scheme calibration on modulo or contiguous folds, constant width.
+- *Files:* `results/supervised/uncertainty_ridge_seq_struct{,_summary,_bins}.parquet`,
+  `results/figures/{calibration,width_error}_ridge_seq_struct.{svg,png}`; MLflow run in `supervised`.
+- *Tests:* `make lint` clean; `make test` 579 passed, 1 skipped, then 15 LightGBM tests in their own
+  process; 26 new (`test_conformal.py` 13, `test_uncertainty.py` 10, `test_cli_uncertainty.py` 3).

@@ -157,13 +157,18 @@ Feature store for all 19 × L substitutions, sets `seq` (217 assays) and `seq_st
 - [ ] [stretch] Leave-protein-out global model
 
 ### Uncertainty
-- [ ] Fold-ensemble spread
-- [ ] Conformal intervals (MAPIE) + calibration plot
+- [x] Fold-ensemble spread (ADR 0024): SD of the fold models' predictions, as a difficulty score
+- [x] Conformal intervals + calibration plot (ADR 0024; CV+ implemented directly, MAPIE cannot
+      normalise cross-conformal scores): ridge `seq_struct`, 80% / 90%, random vs scheme-like
+      calibration folds, constant vs adaptive width; scheme-like calibration on target under every
+      split, random calibration under-covers on unseen positions; MLP comparison not run (~2.5 h)
+- [x] All-data calibration rows for Task 8 (`train calibrate` → `data/processed/calibration/`)
 
 ### Final models (Task 8)
 - [ ] Choose and train the deployed model. Model selection for deployment uses modulo and contiguous
       splits, not random: the website's landscapes are predictions at unmeasured positions. Current
-      leader: ridge `seq_struct` (ADR 0022, "Consequence for the deployed model").
+      leader: ridge `seq_struct` (ADR 0022, "Consequence for the deployed model"). Intervals: CV+
+      with scheme-like calibration folds, constant width (ADR 0024, "Consequences").
 
 Done when: Spearman table (3 splits × 4 rungs vs zero-shot, bootstrap CIs), SHAP figure, calibration plot, model cards on the HF Hub.
 
