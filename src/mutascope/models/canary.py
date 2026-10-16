@@ -21,10 +21,12 @@ for that reason.
 from dataclasses import dataclass
 
 import numpy as np
+import pandas as pd
 
 from mutascope.eval.metrics import spearman
+from mutascope.features.base import KEY_COLUMNS
 from mutascope.features.matrix import FeatureMatrix, FloatArray, IntArray
-from mutascope.models.cv import ModelFactory, OutOfFold, cross_validate
+from mutascope.models.cv import DesignBuilder, ModelFactory, OutOfFold, cross_validate
 
 
 @dataclass(frozen=True)
@@ -73,6 +75,32 @@ def permutation_canary(
         ]
     )
     return CanaryResult(observed=_pooled_spearman(observed), permuted=permuted)
+
+
+def canary_case(
+    assay_id: str,
+    assay: pd.DataFrame,
+    design: DesignBuilder,
+    make_model: ModelFactory,
+    scheme: str,
+    n_permutations: int,
+    seed: tuple[int, ...],
+) -> CanaryResult:
+    """The canary on one assay and scheme: the unit ``train canary`` runs in parallel.
+
+    Each case draws its permutations from its own generator, seeded with ``seed`` (the run's
+    seed plus the case's indices), so a case's result does not depend on which cases ran
+    before it, in which process or in what order (ADR 0022).
+    """
+    x = design(assay_id, assay[list(KEY_COLUMNS)].reset_index(drop=True))
+    return permutation_canary(
+        x,
+        assay["DMS_score"].to_numpy(np.float64),
+        assay[f"fold_{scheme}"].to_numpy(np.int64),
+        make_model,
+        n_permutations=n_permutations,
+        rng=np.random.default_rng(list(seed)),
+    )
 
 
 def canary_record(

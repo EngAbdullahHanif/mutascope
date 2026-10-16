@@ -146,3 +146,15 @@ class LogProbCache:
             Path(tmp).unlink(missing_ok=True)
             raise
         return path
+
+
+def embedding_method(layers: int) -> str:
+    """The cache key's method for an embedding: the mean over the last ``layers`` layers.
+
+    Here rather than in :mod:`mutascope.features.embeddings`, which imports torch: the feature
+    store names its cache entries with it, and training processes must not load torch (ADR
+    0022).
+    """
+    if layers < 1:
+        raise ValueError(f"layers must be at least 1, got {layers}")
+    return f"embedding_mean_last{layers}"

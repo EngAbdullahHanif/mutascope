@@ -108,9 +108,8 @@ def write_feature_store(
     """
     from mutascope.eval.landscapes import LandscapeTarget
     from mutascope.eval.region import ScoringRegion
-    from mutascope.features.embeddings import embedding_method
     from mutascope.features.store import ModelSource, build_store
-    from mutascope.scoring.cache import CacheKey, LogProbCache
+    from mutascope.scoring.cache import CacheKey, LogProbCache, embedding_method
 
     rng = np.random.default_rng(0)
     log_probs = LogProbCache(tmp_dir / "logprobs")

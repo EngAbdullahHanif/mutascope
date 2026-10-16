@@ -14,7 +14,6 @@ import pytest
 from mutascope.alphabet import AA_ORDER
 from mutascope.eval.landscapes import LandscapeTarget
 from mutascope.eval.region import ScoringRegion
-from mutascope.features.embeddings import embedding_method
 from mutascope.features.store import (
     FeatureStoreError,
     ModelSource,
@@ -25,7 +24,7 @@ from mutascope.features.store import (
     measured_keys,
     substitution_grid,
 )
-from mutascope.scoring.cache import CacheKey, LogProbCache
+from mutascope.scoring.cache import CacheKey, LogProbCache, embedding_method
 
 TARGET = "MKVARLE"
 WIDTH = 3

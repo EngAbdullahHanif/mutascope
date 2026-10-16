@@ -9,6 +9,8 @@ every config path relative to it (see the ``processed_overrides`` fixture):
 """
 
 import csv
+import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 import duckdb
@@ -125,3 +127,18 @@ def processed_root(tmp_path: Path) -> Path:
             (processed_dir / name).mkdir(parents=True)
             write_partition(con, schema.validate(frame), processed_dir / name / "assay_id=A")
     return tmp_path
+
+
+@pytest.fixture(autouse=True)
+def one_openmp_runtime(request: pytest.FixtureRequest) -> Iterator[None]:
+    """LightGBM and torch never share a test process (ADR 0022).
+
+    On macOS their OpenMP runtimes crash when both are loaded, in either order, as a segfault
+    somewhere later. This turns that into a clear failure at the test that broke the rule.
+    """
+    marked = "lightgbm" in request.keywords
+    if marked and "torch" in sys.modules:
+        pytest.fail("torch is loaded: run LightGBM tests in their own process (`make test`)")
+    yield
+    if not marked and "lightgbm" in sys.modules:
+        pytest.fail("this test loaded LightGBM: mark it @pytest.mark.lightgbm (ADR 0022)")

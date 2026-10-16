@@ -41,3 +41,9 @@ class _Probe:
 
 def probe_model() -> Regressor:
     return _Probe()
+
+
+def probe_design(assay_id: str, keys: pd.DataFrame) -> FeatureMatrix:
+    """:func:`probe_features` as a design builder; module-level, so worker processes can load it."""
+    del assay_id
+    return probe_features(keys)

@@ -45,3 +45,6 @@ web/openapi.json
 # Secrets
 .env
 .env.*
+
+# Per-assay checkpoints of a running `train cv` (removed when the run finishes)
+results/supervised/.cv_*_checkpoint/

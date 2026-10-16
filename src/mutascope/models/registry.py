@@ -1,12 +1,13 @@
 """Supervised models by name (``train.model``), built from ``train.params.<name>``."""
 
 from collections.abc import Callable, Mapping
+from functools import partial
 from typing import Any, Final
 
 import numpy as np
 
 from mutascope.models.baselines import TrainingMean, ZeroShot
-from mutascope.models.cv import ModelFactory, Regressor
+from mutascope.models.cv import ModelFactory
 from mutascope.models.ridge import InnerCVRidge
 
 
@@ -20,13 +21,26 @@ def _alphas(params: Mapping[str, Any]) -> list[float]:
 
 
 def _ridge(params: Mapping[str, Any]) -> ModelFactory:
-    alphas = _alphas(params)
-    unpenalized = [str(c) for c in params.get("unpenalized", [])]
+    # A partial, not a closure: `train cv --jobs` pickles the factory into worker processes.
+    return partial(InnerCVRidge, _alphas(params), [str(c) for c in params.get("unpenalized", [])])
 
-    def make() -> Regressor:
-        return InnerCVRidge(alphas, unpenalized)
 
-    return make
+def _lgbm(params: Mapping[str, Any]) -> ModelFactory:
+    # Imported here: importing the registry (every `mutascope` command does) must not load
+    # LightGBM's OpenMP runtime into a process that scores with torch (ADR 0022).
+    from mutascope.models.lgbm import InnerCVLightGBM, search_space
+
+    components = params.get("pca_components")
+    return partial(
+        InnerCVLightGBM,
+        search_space(params["search"]),
+        dict(params["fixed"]),
+        n_trials=int(params["n_trials"]),
+        max_rounds=int(params["max_rounds"]),
+        patience=int(params["patience"]),
+        seed=int(params["seed"]),
+        pca_components=None if components is None else int(components),
+    )
 
 
 MODELS: Final[Mapping[str, Callable[[Mapping[str, Any]], ModelFactory]]] = {
@@ -34,9 +48,12 @@ MODELS: Final[Mapping[str, Callable[[Mapping[str, Any]], ModelFactory]]] = {
     "zero_shot": lambda params: ZeroShot,
     "ridge": _ridge,
     "augmented_ridge": _ridge,
+    "lgbm": _lgbm,
+    "lgbm_pca": _lgbm,
 }
 """Name -> builder of a model factory from that model's params. ``ridge`` and
-``augmented_ridge`` are one class; the latter's params leave the zero-shot score unpenalised."""
+``augmented_ridge`` are one class; the latter's params leave the zero-shot score unpenalised.
+``lgbm`` and ``lgbm_pca`` are one class; the latter's params reduce each embedding by PCA."""
 
 
 def model_factory(name: str, params: Mapping[str, Any] | None = None) -> ModelFactory:

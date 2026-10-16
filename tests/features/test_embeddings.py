@@ -16,12 +16,11 @@ from mutascope.eval.landscapes import LandscapeTarget
 from mutascope.eval.region import ScoringRegion
 from mutascope.features.embeddings import (
     embedding_key,
-    embedding_method,
     fill_embeddings,
     hidden_size,
     mean_last_layers,
 )
-from mutascope.scoring.cache import LogProbCache
+from mutascope.scoring.cache import LogProbCache, embedding_method
 from mutascope.scoring.esm2 import Esm2Scorer, Esm2Settings
 from mutascope.scoring.windows import tiled_windows
 from mutascope.utils.seeding import seed_all
