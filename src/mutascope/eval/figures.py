@@ -414,7 +414,7 @@ def shap_figure(
     ((model, feature_set),) = labels
     with matplotlib.rc_context(_RC):
         fig = Figure(figsize=(4.0 * len(assays) + 1.0, 0.32 * top + 2.3))
-        left, right, gap = 0.012, 0.99, 0.02
+        left, right, gap = 0.015, 0.985, 0.05
         width = (right - left - gap * (len(assays) - 1)) / len(assays)
         for k, assay_id in enumerate(assays):
             rows = blocks[blocks["assay_id"] == assay_id]
@@ -422,7 +422,7 @@ def shap_figure(
                 raise FigureDataError(f"no SHAP importance for {assay_id}")
             rows = rows.sort_values("share", ascending=False).head(top)
             ax = fig.add_axes((left + k * (width + gap), 0.17, width, 0.62))
-            ax.set_xlim(0, 1.0)
+            ax.set_xlim(0, max(0.6, float(rows["share"].max()) + 0.25))
             for j, row in enumerate(rows.itertuples(index=False)):
                 share = float(str(row.share))
                 ax.barh(j, share, height=0.7, color=SERIES[_block_kind(str(row.name))])
