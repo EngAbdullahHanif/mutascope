@@ -219,6 +219,7 @@ class InnerCVRidge:
         self.alpha_: float | None = None
         self.inner_mse_: FloatArray | None = None
         self.fit_: LinearFit | None = None
+        self.fold_fits_: tuple[LinearFit, ...] = ()
 
     def fit(self, x: FeatureMatrix, y: FloatArray, groups: IntArray) -> "InnerCVRidge":
         free = [x.column(name) for name in self.unpenalized]
@@ -226,9 +227,11 @@ class InnerCVRidge:
         if inner.size < 2:
             raise RidgeError(f"inner CV needs at least 2 training folds, got {inner.tolist()}")
         squared = np.zeros(len(self.alphas))
+        paths: list[list[LinearFit]] = []
         for group in inner:
             held_out = groups == group
             fits = ridge_path(x.take(~held_out), y[~held_out], self.alphas, free)
+            paths.append(fits)
             validation = x.take(held_out)
             for k, candidate in enumerate(fits):
                 squared[k] += float(np.sum((candidate.predict(validation) - y[held_out]) ** 2))
@@ -236,8 +239,19 @@ class InnerCVRidge:
         # alphas ascend, so the last of the tied minima is the largest penalty.
         best = int(np.flatnonzero(squared <= squared.min())[-1])
         self.alpha_ = self.alphas[best]
+        self.fold_fits_ = tuple(path[best] for path in paths)
         self.fit_ = ridge_path(x, y, [self.alpha_], free)[0]
         return self
+
+    def fold_predict(self, x: FeatureMatrix) -> FloatMatrix:
+        """Predictions of the fold ensemble: one row per training fold, fit without it.
+
+        These are the inner-CV fits at the chosen ``alpha``, kept from :meth:`fit` at no extra
+        cost (ADR 0024). Their spread is the model's fold-ensemble spread.
+        """
+        if not self.fold_fits_:
+            raise RuntimeError("InnerCVRidge.fold_predict called before fit")
+        return np.stack([fit.predict(x) for fit in self.fold_fits_])
 
     def predict(self, x: FeatureMatrix) -> FloatArray:
         if self.fit_ is None:

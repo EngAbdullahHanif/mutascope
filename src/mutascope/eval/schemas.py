@@ -151,6 +151,106 @@ class ShapImportanceSchema(pa.DataFrameModel):
         unique = ["model", "feature_set", "assay_id", "level", "name"]  # noqa: RUF012 — read by pandera
 
 
+_MODES = ["random", "scheme"]
+_INTERVALS = ["absolute", "normalized"]
+
+
+class UncertaintyMetricSchema(pa.DataFrameModel):
+    """Per-assay prediction-interval metrics on the test folds (ADR 0024).
+
+    ``mode`` (calibration folds), ``interval`` (type) and ``level`` (nominal coverage) are null
+    where a metric does not depend on them: ``n_variants`` and ``prediction_spearman`` have
+    none, ``spread_error_spearman`` only a mode. Metrics: :data:`mutascope.eval.uncertainty.
+    UNCERTAINTY_METRICS`.
+    """
+
+    model: Series[str]
+    feature_set: Series[str]
+    assay_id: Series[str]
+    scheme: Series[str] = pa.Field(isin=list(CV_SCHEMES))
+    mode: Series[str] = pa.Field(isin=_MODES, nullable=True)
+    interval: Series[str] = pa.Field(isin=_INTERVALS, nullable=True)
+    level: Series[float] = pa.Field(gt=0, lt=1, nullable=True)
+    metric: Series[str]
+    value: Series[float] = pa.Field(nullable=True)
+
+    class Config:  # pyright: ignore[reportIncompatibleVariableOverride]
+        strict = True
+        ordered = True
+
+
+class UncertaintySummarySchema(pa.DataFrameModel):
+    """Statistics over assays of one per-assay interval metric (``train uncertainty``).
+
+    ``size_bin`` is ``all`` or an assay-size bin (variants). ``statistic``: mean, median,
+    quantiles, ``n_assays``, ``share_positive``; coverage adds ``n_below`` (assays more than
+    ``train.uncertainty.below_points`` under the level) and ``aggregate`` (ProteinGym-style).
+    """
+
+    model: Series[str]
+    feature_set: Series[str]
+    scheme: Series[str] = pa.Field(isin=list(CV_SCHEMES))
+    mode: Series[str] = pa.Field(isin=_MODES, nullable=True)
+    interval: Series[str] = pa.Field(isin=_INTERVALS, nullable=True)
+    level: Series[float] = pa.Field(gt=0, lt=1, nullable=True)
+    size_bin: Series[str]
+    metric: Series[str]
+    statistic: Series[str]
+    value: Series[float] = pa.Field(nullable=True)
+
+    class Config:  # pyright: ignore[reportIncompatibleVariableOverride]
+        strict = True
+        ordered = True
+
+
+class UncertaintyBinSchema(pa.DataFrameModel):
+    """Width deciles averaged over assays: mean width, absolute error (assay-SD units) and
+    coverage per decile of interval width within each assay (``train uncertainty``)."""
+
+    model: Series[str]
+    feature_set: Series[str]
+    scheme: Series[str] = pa.Field(isin=list(CV_SCHEMES))
+    mode: Series[str] = pa.Field(isin=_MODES)
+    interval: Series[str] = pa.Field(isin=_INTERVALS)
+    level: Series[float] = pa.Field(gt=0, lt=1)
+    bin: Series[int] = pa.Field(ge=0)
+    width_sd: Series[float] = pa.Field(ge=0)
+    abs_error_sd: Series[float] = pa.Field(ge=0)
+    coverage: Series[float] = pa.Field(ge=0, le=1)
+    n_assays: Series[int] = pa.Field(ge=1)
+
+    class Config:  # pyright: ignore[reportIncompatibleVariableOverride]
+        strict = True
+        ordered = True
+
+
+class CalibrationSchema(pa.DataFrameModel):
+    """CV+ calibration rows of an all-data model (``train calibrate``; Task 8, ADR 0024).
+
+    One row per variant, scheme and mode: the calibration ``fold`` that held it out, the
+    prediction and fold-ensemble spread of the model fit without that fold, and the target
+    standardised with all variants' ``target_mean`` and ``target_sd``.
+    """
+
+    assay_id: Series[str]
+    position: Series[int] = pa.Field(ge=0)
+    wt_aa: Series[str]
+    mt_aa: Series[str]
+    scheme: Series[str] = pa.Field(isin=list(CV_SCHEMES))
+    mode: Series[str] = pa.Field(isin=_MODES)
+    fold: Series[int] = pa.Field(ge=0)
+    target: Series[float]
+    prediction: Series[float]
+    spread: Series[float] = pa.Field(ge=0)
+    target_mean: Series[float]
+    target_sd: Series[float] = pa.Field(gt=0)
+
+    class Config:  # pyright: ignore[reportIncompatibleVariableOverride]
+        strict = True
+        ordered = True
+        unique = ["assay_id", "scheme", "mode", "position", "mt_aa"]  # noqa: RUF012 — read by pandera
+
+
 class SummarySchema(pa.DataFrameModel):
     """A ProteinGym-style aggregate with its bootstrap CI, overall or for one function type.
 
