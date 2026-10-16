@@ -54,6 +54,50 @@ params:
     pca_components: 32
     fixed: ${train.params.lgbm.fixed}
     search: ${train.params.lgbm.search}
+  # MLP head (ADR 0023). Fixed before any MLP result and never changed after; nothing is searched.
+  # LayerNorm -> 512 -> GELU -> Dropout -> 128 -> GELU -> 1 on PCA-reduced, standardised features.
+  # Early stopping on one training fold (split like the outer scheme), then refit on all
+  # training rows for the chosen epoch count.
+  mlp_mse:
+    loss: mse
+    hidden: [512, 128]
+    dropout: 0.2
+    # Adam's standard rate (Kingma & Ba, 2015): stable for a 2-layer head without warm-up.
+    learning_rate: 1.0e-3
+    # PyTorch's AdamW default; dropout and early stopping do most of the regularising.
+    weight_decay: 1.0e-2
+    # The smallest kept assay (326 variants) still gets 2 updates per epoch, and a RankNet
+    # batch holds up to 8,128 pairs.
+    batch_size: 128
+    # A ceiling, not a target: early stopping ends almost every run first (chosen epochs are
+    # written per fold, so hitting it is visible).
+    max_epochs: 200
+    # 10% of the ceiling: long enough to ride out a noisy validation epoch on ~65 variants.
+    patience: 20
+    # As lgbm_pca: 32 components per 1,280-column embedding, fitted on training rows only.
+    pca_components: 32
+    seed: ${train.seed}
+  mlp_rank:
+    # RankNet pairwise logistic loss, pairs within one assay only (a model is one assay's).
+    loss: rank
+    hidden: ${train.params.mlp_mse.hidden}
+    dropout: ${train.params.mlp_mse.dropout}
+    learning_rate: ${train.params.mlp_mse.learning_rate}
+    weight_decay: ${train.params.mlp_mse.weight_decay}
+    batch_size: ${train.params.mlp_mse.batch_size}
+    max_epochs: ${train.params.mlp_mse.max_epochs}
+    patience: ${train.params.mlp_mse.patience}
+    pca_components: ${train.params.mlp_mse.pca_components}
+    seed: ${train.params.mlp_mse.seed}
+# Smallest assay (variants) a model is cross-validated on; a model not listed runs on every
+# assay. `train cv` skips smaller assays and reports them; `train compare` pairs such a run on the
+# assays it has. The MLP's 300 comes from data size and the ridge / LightGBM results only, before
+# any MLP result (ADR 0023): below 300 variants both lose to zero-shot SaProt on unseen positions
+# (mean -0.20 under contiguous below 200), from 300 up they beat it in every size bin and scheme.
+# Skipped assays keep their ridge / LightGBM results.
+min_variants:
+  mlp_mse: 300
+  mlp_rank: 300
 # ProteinGym's three schemes (fold_random_5, fold_modulo_5, fold_contiguous_5). Report all three.
 schemes: [random, modulo, contiguous]
 seed: 0
@@ -111,6 +155,14 @@ comparisons:
   - [lgbm_seq_struct_noemb, lgbm_seq_struct]
   - [lgbm_seq_struct_noemb, lgbm_pca_seq_struct]
   - [lgbm_seq_struct_noemb, ridge_seq_struct]
+  # MLP head (ADR 0023), on the assays with at least train.min_variants variants.
+  - [mlp_mse_seq_struct, ridge_seq_struct]
+  - [mlp_mse_seq_struct, lgbm_pca_seq_struct]
+  - [mlp_mse_seq_struct, zero_shot_saprot_score]
+  - [mlp_rank_seq_struct, ridge_seq_struct]
+  - [mlp_rank_seq_struct, lgbm_pca_seq_struct]
+  - [mlp_rank_seq_struct, zero_shot_saprot_score]
+  - [mlp_rank_seq_struct, mlp_mse_seq_struct]
 # ProteinGym's supervised leaderboard (`mutascope train leaderboard`): run label -> published
 # baselines of the same type. A sanity range, not a gate: their features differ (ADR 0021).
 leaderboard:

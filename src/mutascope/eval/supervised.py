@@ -26,6 +26,16 @@ def supervised_label(model: str, feature_set: str) -> str:
     return f"{model}_{feature_set}"
 
 
+def below_minimum(sizes: Mapping[str, int], minimum: int) -> list[str]:
+    """Assays with fewer than ``minimum`` variants (``train.min_variants``), sorted.
+
+    The one rule for which assays a model skips: ``train cv`` applies it to the variants it
+    loads, ``train compare`` to the reference file's single-mutant counts (identical in the
+    pinned release), so a comparison allows the run to lack exactly these assays.
+    """
+    return sorted(assay for assay, n in sizes.items() if n < minimum)
+
+
 def results_path(results_dir: Path, label: str) -> Path:
     """``cv_<label>.parquet`` (``mutascope train cv``)."""
     return results_dir / f"cv_{label}.parquet"
