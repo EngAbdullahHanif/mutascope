@@ -171,6 +171,18 @@ class StoreDesign:
         return assemble(self.store_dir, self.feature_set, assay_id, keys).feature_matrix()
 
 
+@dataclass(frozen=True)
+class LandscapeDesign:
+    """``assay_id -> every substitution`` (``19 * L`` rows) of a store set, keys included: the
+    input of a full landscape (ADR 0025). Picklable, like :class:`StoreDesign`."""
+
+    store_dir: Path
+    feature_set: FeatureSet
+
+    def __call__(self, assay_id: str) -> AssayMatrix:
+        return assemble(self.store_dir, self.feature_set, assay_id)
+
+
 def _locate(store: pd.DataFrame, keys: pd.DataFrame | None, assay_id: str) -> npt.NDArray[np.intp]:
     """Row of ``store`` for each key, in key order; the wild type must match the target."""
     if keys is None:

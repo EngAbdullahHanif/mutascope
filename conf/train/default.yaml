@@ -159,6 +159,96 @@ uncertainty:
   size_edges: [300, 1000, 2000, 5000]
   # Where `train calibrate` writes the all-data calibration rows (gitignored; Task 8 reads them).
   calibration_dir: ${data.processed_dir}/calibration
+# Final results table (`mutascope train final-table`, ADR 0025): results only, no training. Each
+# run's aggregate with its own CI, and its paired difference against the best zero-shot model on
+# the same assays: SaProt for a structure feature set (213 assays, fewer with a minimum), ESM-2
+# 650M otherwise (217). Every row carries its assay count.
+final_table:
+  runs:
+    - ridge_site_onehot
+    - ridge_seq
+    - ridge_seq_struct
+    - lgbm_pca_seq
+    - lgbm_pca_seq_struct
+    - mlp_mse_seq_struct
+    - mlp_rank_seq_struct
+  comparators:
+    structure: zero_shot_saprot_score
+    sequence: zero_shot_esm2_score
+  # Assay-size bins (measured variants, lower edges) for supervised vs zero-shot by size. 300 is
+  # the eligibility minimum below; 200 splits the assays under it as in ADR 0023.
+  size_edges: [200, 300, 1000, 2000, 5000]
+  # Runs drawn in the by-size figure (`train final-figures`), at most three; the first one also
+  # gets its per-assay points.
+  size_figure: [ridge_seq_struct, lgbm_pca_seq_struct, mlp_mse_seq_struct]
+  # Run label -> name shown in the final figures.
+  names:
+    ridge_site_onehot: One-hot ridge
+    ridge_seq: Ridge, seq
+    ridge_seq_struct: Ridge, seq_struct
+    lgbm_pca_seq: LightGBM-PCA, seq
+    lgbm_pca_seq_struct: LightGBM-PCA, seq_struct
+    mlp_mse_seq_struct: MLP (MSE), seq_struct
+    mlp_rank_seq_struct: MLP (RankNet), seq_struct
+    zero_shot_saprot_score: SaProt 650M
+    zero_shot_esm2_score: ESM-2 650M
+# Final deployment models (`mutascope train final`, ADR 0025). One fixed model for every eligible
+# assay, never chosen per assay: ridge on seq_struct, the best on unseen positions (ADR 0022-0024).
+final:
+  model: ridge
+  feature_set: seq_struct
+  # Eligible: a structure and at least this many measured variants. Below it supervised models
+  # lose to zero-shot SaProt on unseen positions (ADR 0023, from ridge / LightGBM results only).
+  min_variants: 300
+  # The website's default where no supervised landscape exists: by whether a structure exists.
+  zero_shot_default:
+    structure: saprot_650m_af2
+    sequence: esm2_650m
+  # Each variant's prediction, out-of-fold value and interval come from one scheme, chosen by its
+  # position: `measured` = the position has (other) measured variants, `unmeasured` = none. The
+  # final model of each scheme has its alpha chosen by inner CV over that scheme's folds.
+  scheme_by_position:
+    measured: random
+    unmeasured: contiguous
+  # Constant-width CV+ intervals (ADR 0024: on target on unseen positions with scheme-like
+  # calibration folds; adaptive ones over-cover). The landscape schema has these two levels.
+  levels: ${train.uncertainty.levels}
+  interval: absolute
+  epsilon: ${train.uncertainty.epsilon}
+  # The refit CV+ must reproduce `train calibrate`'s rows (ADR 0024: exactly with one BLAS
+  # thread), and the out-of-fold pooled Spearman must reproduce `cv_ridge_seq_struct.parquet`
+  # (the same fits on a differently standardised target; ADR 0024 saw 1.2e-7 for that).
+  calibration_tolerance: 1.0e-9
+  oof_tolerance: 1.0e-6
+  # Sanity check (reported, never failed): residues with relative SASA below this are buried.
+  buried_rel_sasa: 0.2
+  out_dir: ${data.processed_dir}/supervised_landscapes
+  # Memory budget for `train final --jobs`: landscape rows plus measured variants of the assays
+  # in flight. A worker holds its target's 19 x L x 2,647 features in float64 (1.4 GB for the
+  # largest, 3,423 residues) on top of the ridge fits (ADR 0022's ~2 GB at 16,897 variants).
+  max_rows_in_flight: 250000
+# Publishing the final models (`mutascope train publish`): one Hugging Face model repo with every
+# assay's ridge coefficients, the configs and a model card. The landscapes go to the dataset repo
+# (publish.repo_id) as a new revision. Staging is the default; --push uploads.
+publish:
+  repo_id: engAbdullahHanif/mutascope-ridge-seq-struct
+  # New repos are created private, so the upload can be checked on the Hub first.
+  private: true
+  stage_dir: build/hf_model
+  card: docs/MODEL_CARD.md
+  card_metadata:
+    license: mit
+    library_name: numpy
+    tags:
+      - biology
+      - proteins
+      - protein-engineering
+      - deep-mutational-scanning
+      - variant-effect-prediction
+      - proteingym
+      - ridge-regression
+    datasets:
+      - engAbdullahHanif/mutascope-proteingym-v1.3
 # Paired bootstrap of pooled Spearman (`mutascope train compare`; ADR 0014): [A, B] by run
 # label <model>_<feature_set>. Every supervised model against zero-shot on the same test folds,
 # then neighbouring rungs of the ladder.
