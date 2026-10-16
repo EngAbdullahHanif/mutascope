@@ -31,6 +31,7 @@ import matplotlib
 import pandas as pd
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
+from matplotlib.lines import Line2D
 from matplotlib.ticker import MaxNLocator
 
 from mutascope.data.schemas import FUNCTION_TYPES
@@ -546,3 +547,183 @@ def _comparison_row(
             f"[{a}, {b}] to eval.comparisons and run `mutascope eval compare`"
         )
     return rows.iloc[0]
+
+
+MODE_NAMES = {"random": "random calibration folds", "scheme": "scheme-like calibration folds"}
+INTERVAL_NAMES = {"absolute": "constant width", "normalized": "adaptive"}
+SCHEME_NAMES = {
+    "random": "Random split",
+    "modulo": "Modulo split",
+    "contiguous": "Contiguous split",
+}
+
+
+def calibration_figure(summary: pd.DataFrame, *, title: str, dataset: str) -> Figure:
+    """Target vs actual coverage per scheme (panel), calibration mode (colour) and interval type
+    (filled: constant width, hollow: adaptive), from ``uncertainty_<label>_summary.parquet``.
+
+    Markers are the mean over assays of per-assay coverage; whiskers the 10th-90th percentile of
+    the per-assay values; the number under a marker is how many assays fell more than the
+    configured margin below target. All three are read from the summary.
+    """
+    rows = summary[(summary["metric"] == "coverage") & (summary["size_bin"] == "all")]
+    if rows.empty:
+        raise FigureDataError("no coverage rows in the uncertainty summary")
+    schemes = [s for s in SCHEME_NAMES if s in set(rows["scheme"])]
+    levels = sorted({float(v) for v in rows["level"]})
+    series = [(m, i) for m in MODE_NAMES for i in INTERVAL_NAMES]
+    with matplotlib.rc_context(_RC):
+        fig = Figure(figsize=(11.0, 4.6))
+        left, right, gap = 0.06, 0.985, 0.03
+        width = (right - left - gap * (len(schemes) - 1)) / len(schemes)
+        span = max(levels) - min(levels) or 0.1
+        for k, scheme in enumerate(schemes):
+            ax = fig.add_axes((left + k * (width + gap), 0.2, width, 0.56))
+            low, high = min(levels) - 0.6 * span, max(levels) + 0.6 * span
+            ax.plot([low, high], [low, high], color=TEXT_SECONDARY, linewidth=0.8, linestyle="--")
+            for j, (mode, interval) in enumerate(series):
+                offset = (j - (len(series) - 1) / 2) * 0.12 * span
+                for level in levels:
+                    stats = rows[
+                        (rows["scheme"] == scheme)
+                        & (rows["mode"] == mode)
+                        & (rows["interval"] == interval)
+                        & (rows["level"] == level)
+                    ].set_index("statistic")["value"]
+                    for needed in ("mean", "q10", "q90", "n_below"):
+                        if needed not in stats.index:
+                            raise FigureDataError(
+                                f"no {needed} for {scheme}, {mode}, {interval}, {level}"
+                            )
+                    colour = SERIES[list(MODE_NAMES).index(mode)]
+                    x = level + offset
+                    ax.plot([x, x], [stats["q10"], stats["q90"]], color=colour, linewidth=1.2)
+                    ax.plot(
+                        x,
+                        stats["mean"],
+                        marker="o",
+                        markersize=6,
+                        color=colour,
+                        markerfacecolor=colour if interval == "absolute" else SURFACE,
+                        markeredgewidth=1.4,
+                    )
+                    ax.text(
+                        x,
+                        float(stats["q10"]) - 0.015,
+                        f"{int(stats['n_below'])}",
+                        ha="center",
+                        va="top",
+                        fontsize=6.5,
+                        color=TEXT_SECONDARY,
+                    )
+            ax.set_xlim(low, high)
+            ax.set_ylim(min(0.4, low), 1.0)
+            ax.set_xticks(levels)
+            ax.xaxis.set_major_formatter(lambda value, _: f"{value:.0%}")  # pyright: ignore[reportUnknownLambdaType]
+            ax.yaxis.set_major_formatter(lambda value, _: f"{value:.0%}")  # pyright: ignore[reportUnknownLambdaType]
+            ax.grid(axis="y", color=GRID, linewidth=0.8)
+            ax.set_axisbelow(True)
+            ax.set_title(SCHEME_NAMES[scheme], fontsize=9.5, loc="left", color=TEXT)
+            ax.set_xlabel("Target coverage")
+            if k == 0:
+                ax.set_ylabel("Actual coverage on test folds")
+            else:
+                ax.set_yticklabels([])
+        handles = [
+            Line2D(
+                [],
+                [],
+                marker="o",
+                linestyle="",
+                color=SERIES[list(MODE_NAMES).index(m)],
+                markerfacecolor=SERIES[list(MODE_NAMES).index(m)] if i == "absolute" else SURFACE,
+                markeredgewidth=1.4,
+                label=f"{MODE_NAMES[m]}, {INTERVAL_NAMES[i]}",
+            )
+            for m, i in series
+        ]
+        fig.legend(
+            handles=handles,
+            loc="upper left",
+            bbox_to_anchor=(0.012, 0.875),
+            ncol=4,
+            frameon=False,
+            fontsize=7.5,
+        )
+        n_assays = int(
+            rows[rows["statistic"] == "n_assays"]["value"].max()  # pyright: ignore[reportArgumentType]
+        )
+        _titles(
+            fig,
+            title,
+            f"{dataset}; {n_assays} assays; CV+ intervals calibrated inside the training folds",
+            "Marker: mean over assays of per-assay coverage of the test folds; whisker: 10th-90th "
+            "percentile over assays; number: assays more than 10 points below target.\n"
+            "Dashed: actual = target. Filled: constant width (absolute residuals); hollow: "
+            "adaptive (residuals / fold-ensemble spread).",
+        )
+    return fig
+
+
+def width_error_figure(bins: pd.DataFrame, *, level: float, title: str, dataset: str) -> Figure:
+    """Mean absolute error vs mean interval width per within-assay width decile, one panel per
+    scheme, from ``uncertainty_<label>_bins.parquet`` (both in assay-SD units).
+
+    If width tracks error, the adaptive lines rise; a constant-width interval's deciles bunch up.
+    """
+    rows = bins[bins["level"] == level]
+    if rows.empty:
+        raise FigureDataError(f"no width bins at level {level}")
+    schemes = [s for s in SCHEME_NAMES if s in set(rows["scheme"])]
+    with matplotlib.rc_context(_RC):
+        fig = Figure(figsize=(11.0, 4.4))
+        left, right, gap = 0.06, 0.985, 0.04
+        width = (right - left - gap * (len(schemes) - 1)) / len(schemes)
+        for k, scheme in enumerate(schemes):
+            ax = fig.add_axes((left + k * (width + gap), 0.2, width, 0.56))
+            for mode in MODE_NAMES:
+                for interval in INTERVAL_NAMES:
+                    line = rows[
+                        (rows["scheme"] == scheme)
+                        & (rows["mode"] == mode)
+                        & (rows["interval"] == interval)
+                    ].sort_values("bin")
+                    if line.empty:
+                        raise FigureDataError(f"no bins for {scheme}, {mode}, {interval}")
+                    colour = SERIES[list(MODE_NAMES).index(mode)]
+                    ax.plot(
+                        line["width_sd"],
+                        line["abs_error_sd"],
+                        color=colour,
+                        linewidth=1.4,
+                        linestyle="-" if interval == "normalized" else ":",
+                        marker="o" if interval == "normalized" else None,
+                        markersize=3.5,
+                        markerfacecolor=SURFACE,
+                        label=f"{MODE_NAMES[mode]}, {INTERVAL_NAMES[interval]}",
+                    )
+            ax.grid(color=GRID, linewidth=0.8)
+            ax.set_axisbelow(True)
+            ax.set_title(SCHEME_NAMES[scheme], fontsize=9.5, loc="left", color=TEXT)
+            ax.set_xlabel(f"Mean {level:.0%} interval width (assay SD)")
+            if k == 0:
+                ax.set_ylabel("Mean |error| (assay SD)")
+        handles, labels = fig.axes[0].get_legend_handles_labels()
+        fig.legend(
+            handles,
+            labels,
+            loc="upper left",
+            bbox_to_anchor=(0.012, 0.875),
+            ncol=4,
+            frameon=False,
+            fontsize=7.5,
+        )
+        _titles(
+            fig,
+            title,
+            f"{dataset}; deciles of interval width within each assay, averaged over assays",
+            "Each point: one width decile (10% of an assay's test variants by interval width), "
+            "mean width vs mean |prediction - target|, averaged over assays.\nSolid: adaptive "
+            "intervals; dotted: constant width. Error of the outer model's point prediction.",
+        )
+    return fig
