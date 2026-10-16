@@ -204,7 +204,7 @@ Run `make lint test` before declaring any task done.
   two entries per row (`features.matrix.SiteOneHot`, ADR 0021).
 - `train cv` assembles one assay's features at a time (`DesignBuilder`); never all assays at once.
 
-## Supervised rules (ADR 0019, 0021, 0022)
+## Supervised rules (ADR 0019, 0021, 0022, 0023)
 
 - A model's `fit(x, y, groups)` gets its training rows' outer folds; any hyperparameter search is
   an inner CV over those folds (split like the outer scheme). The test fold is never passed in.
@@ -219,6 +219,11 @@ Run `make lint test` before declaring any task done.
 - **Torch and LightGBM never share a process** (their OpenMP runtimes segfault together on
   macOS). Importing the CLI, the registry or `models.lgbm` loads neither; LightGBM tests carry
   the `lightgbm` marker and `make test` runs them in a second process.
+- Early stopping (MLP) uses one training fold as validation, so it is split like the outer
+  scheme, then refits on all training rows for the chosen epochs. Preprocessing (PCA, scaling) is
+  fitted on the rows each model trains on.
+- `train.min_variants.<model>` skips smaller assays in `train cv`; `train compare` lets such a run
+  lack exactly those assays. The minimum is never chosen from that model's test results.
 - A post-hoc diagnostic run is labelled post-hoc in config, results and ADR and is never a
   headline model.
 
