@@ -39,14 +39,8 @@ post-hoc LightGBM diagnostic stay in `supervised_summary.parquet` (ADR 0021, 002
 the summary and comparisons are bit-identical to `train compare`'s rows for the same runs and
 pairs (162 and 126 rows, maximum difference 0.0).
 
-**By-size bins use a plain mean.** The first version took the ProteinGym aggregate within each
-size bin. In the 200–299 bin (7 assays: 4 organismal fitness, 2 activity, 1 expression) it gave
-ridge − SaProt under contiguous **+0.053 [+0.041, +0.066]** while the per-assay differences ran
-from −0.094 to +0.129. The aggregate weights function types equally and its bootstrap resamples
-within them, so a type with one assay adds no spread: the interval was an artefact. Within a bin
-the statistic is now the mean of per-assay paired differences, with assays resampled unstratified
-(the same draw for both runs), as ADR 0023's size table used. The same bin is then +0.018
-[−0.043, +0.079]. Headline numbers stay ProteinGym aggregates.
+**By-size bins use a plain mean, not the ProteinGym aggregate**: a deliberate deviation, see
+"Deviations and caveats" below.
 
 ### 2. Figures from results files only
 
@@ -210,9 +204,7 @@ eligibility rule was fixed before this table (ADR 0023); the table agrees with i
   1.90 (random) and 2.61 (contiguous). The unseen-position widths match ADR 0024's 2.61 under
   contiguous.
 - **Out-of-fold coverage of measured variants:** 0.800 at 80% and 0.900 at 90% (per assay 0.799–
-  0.802 and 0.899–0.903). This is a consistency check, not evidence: each variant is compared with
-  the quantile of the other variants' out-of-fold residuals, so it holds by construction. The
-  evidence is ADR 0024's test-fold coverage (0.908–0.911 at 90%).
+  0.802 and 0.899–0.903). By construction; it proves nothing (see "Deviations and caveats").
 - **Imputed structure features:** 108,452 substitutions, all in ZIKV (55,461 of 65,037) and POLG
   (52,991 of 57,627).
 - **Sanity check (reported, not failed):** median prediction lower at buried (relative SASA < 0.2)
@@ -225,6 +217,43 @@ eligibility rule was fixed before this table (ADR 0023); the table agrees with i
 - **Published (staged):** model repo `build/hf_model` (9 MB: fits, 1,048,212 coefficients with
   imputation values, manifest, version, configs, results, card); dataset revision `build/hf_dataset`
   with `supervised_landscapes` (61 MB Parquet) and `supervised_landscape_assays`.
+
+## Deviations and caveats
+
+### The by-size figure uses a plain mean, not the ProteinGym aggregate
+
+CLAUDE.md requires ProteinGym-style aggregation (per UniProt ID, per function type, overall) for
+every headline. The by-size table and figure (`final_size_comparisons.parquet`,
+`final_by_size`) deviate from it on purpose:
+
+- **With the ProteinGym aggregate**, the 7-assay 200–299-variant bin gave ridge − SaProt under
+  contiguous **+0.053 [+0.041, +0.066]**, although the 7 per-assay differences span **−0.094 to
+  +0.129**. The bin holds 4 organismal-fitness, 2 activity and 1 expression assay. The aggregate
+  weights the three function types equally, and its bootstrap resamples assays within each
+  function type, so the single expression assay contributes no resampling spread at all and the
+  two activity assays very little. The interval was an artefact of the stratification.
+- **With a plain mean** of the per-assay paired differences, assays resampled with replacement and
+  unstratified (the same draw for both runs, so still paired), the same bin is **+0.018
+  [−0.043, +0.079]**, consistent with its spread. ADR 0023's size table used plain means too.
+- **The headline numbers remain ProteinGym aggregates**: `final_summary.parquet`,
+  `final_comparisons.parquet`, the ladder figure, the model card and every table above except the
+  by-size one. The by-size view is a diagnostic of where supervision pays, never a headline, and
+  its schema, figure note and code docstring say it is a plain mean.
+
+### The 0.800 / 0.900 coverage of measured variants proves nothing
+
+The out-of-fold intervals of measured variants cover 0.800 at 80% and 0.900 at 90%, on average
+and in every assay to within 0.003. That holds **by construction**: each measured variant's
+half-width is the CV+ order statistic of the other measured variants' out-of-fold residuals, and
+its own residual comes from the same exchangeable set, so it falls inside the interval in almost
+exactly the nominal share of rows. It checks that the code computes what it intends; it is not
+evidence that the intervals are calibrated.
+
+The evidence is Task 7's held-out test-fold coverage (ADR 0024), where every interval was built
+without the test fold's labels: **0.908–0.911 at 90%** (0.815–0.819 at 80%) with scheme-like
+calibration, under every split, and no assay more than 10 points below target on the random and
+contiguous splits. Calibration on random folds, which the landscapes never use for unseen
+positions, covered only 0.806 at 90% under contiguous.
 
 ## Alternatives rejected
 
