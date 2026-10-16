@@ -159,6 +159,11 @@ Feature store for all 19 × L substitutions, sets `seq` (217 assays) and `seq_st
 - [ ] Fold-ensemble spread
 - [ ] Conformal intervals (MAPIE) + calibration plot
 
+### Final models (Task 8)
+- [ ] Choose and train the deployed model. Model selection for deployment uses modulo and contiguous
+      splits, not random: the website's landscapes are predictions at unmeasured positions. Current
+      leader: ridge `seq_struct` (ADR 0022, "Consequence for the deployed model").
+
 Done when: Spearman table (3 splits × 4 rungs vs zero-shot, bootstrap CIs), SHAP figure, calibration plot, model cards on the HF Hub.
 
 ---

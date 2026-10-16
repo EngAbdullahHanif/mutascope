@@ -1799,6 +1799,9 @@ features. The reasoning is in ADR 0022.
   `supervised_comparisons.parquet`; `results/figures/shap_lgbm_seq_struct.{svg,png}`.
 - *Dependencies:* `lightgbm` 4.7.0 (gradient boosting; its TreeSHAP replaces the `shap`
   package), `optuna` 5.0.0 (seeded search). macOS needs `brew install libomp`.
+- *Consequence:* the deployed model is chosen on modulo and contiguous splits, because the website
+  predicts unmeasured positions; the current leader is ridge `seq_struct`, not LightGBM (ADR 0022,
+  "Consequence for the deployed model").
 - *Not yet done:* MLP rung; the `train` commands are not Nextflow processes.
 - *Tests:* `make lint` clean; `make test` 520 passed, 1 skipped (Foldseek not on PATH), then 15
   LightGBM tests in their own process; 43 new.
