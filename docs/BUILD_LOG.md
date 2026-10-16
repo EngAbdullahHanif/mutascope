@@ -1979,3 +1979,99 @@ could not do this, so CV+ is about 150 lines of our own, tested. The reasoning i
   `results/figures/{calibration,width_error}_ridge_seq_struct.{svg,png}`; MLflow run in `supervised`.
 - *Tests:* `make lint` clean; `make test` 579 passed, 1 skipped, then 15 LightGBM tests in their own
   process; 26 new (`test_conformal.py` 13, `test_uncertainty.py` 10, `test_cli_uncertainty.py` 3).
+
+---
+
+## Entry 25 — Final models: results table, deployed ridge landscapes, Hub bundles (Phase 3, 2026-10-16)
+
+**Plain-language summary.** Phase 3 closes with three things. First, one final table puts every
+supervised model next to the best zero-shot model it can fairly be compared with, on the same
+assays: SaProt where the model uses structure, ESM-2 otherwise. Every row carries its own
+confidence interval, the paired difference and how many assays it covers. This step reused
+existing results only, with no training. Second, two figures drawn from those files: the ladder
+of models per split, and where supervision pays by assay size. Third, the deployed model: one
+fixed ridge regression per assay, for the 198 assays that have a structure and at least 300
+measured variants. It predicts all 19 substitutions at every position, 1,379,989 in total, each
+with an 80% and a 90% range. Measured variants show an honest out-of-fold prediction, never the
+model's fit to their own label. Every position is handled according to how much of it was
+measured. The run refuses to write anything unless it reproduces the earlier calibration exactly
+and the cross-validation results to within 3.5e-7, and it passed. The model and the landscapes
+are staged for the Hugging Face Hub with their cards. The reasoning is in ADR 0025.
+
+**The 3 most important design choices.**
+
+1. **Two final fits per assay, matched to the position.** A landscape mixes two tasks:
+   predicting at positions that have measurements (interpolation) and at positions with none
+   (extrapolation). The penalty chosen by inner CV on random folds and on contiguous folds
+   differs by a median of one decade (equal in 18% of Task 4's folds; in the final fits the
+   contiguous penalty is larger in 62% of assays). So each assay has a `random` and a
+   `contiguous` ridge, and each variant takes its prediction, interval calibration and (if
+   measured) out-of-fold value from the one scheme that matches its position. *Evidence:* ADR
+   0024 showed calibration must mimic the task (random calibration on unseen positions: 0.806 at
+   90%, 86 assays more than 10 points short); the unseen-position widths here (median 2.70 assay
+   SDs at 90%) match ADR 0024's contiguous result (2.61). Chosen with the author before the run.
+2. **Measured variants are out-of-fold, interval included.** The final ridge trained on every
+   measured variant, so its value there is an in-sample fit and is never stored. A measured
+   variant shows `M_k(x)` from the CV+ fold model that never saw it, and its interval uses the CV+
+   order statistic of the *other* rows' residuals, its own left out. Plain CV+ at that point would
+   lean on the 4 of 5 fold models that trained on it. *Evidence:* a test checks the bounds
+   against a brute-force leave-one-out at every row; the measured predictions equal the saved
+   calibration rows (1e-12).
+3. **The release is blocked by reproduction checks.** `train final` refits CV+ on exactly
+   `train calibrate`'s inputs and writes no bundle unless the refit matches (≤ 1e-9, identical
+   fold labels) and the out-of-fold pooled Spearman matches `train cv` in every scheme (≤ 1e-6,
+   after mapping each fold back to its own training scale, since `train cv` standardises per fold
+   and `train calibrate` over all variants). *Evidence:* real run: refit difference 0 in all 198
+   assays; Spearman differences 0 / 3.5e-7 / 6.6e-8 (random / modulo / contiguous). A CLI test
+   feeds calibration rows from another penalty grid and requires the failure and no bundle.
+
+**Problems encountered and how they were solved.**
+
+1. *A confidence interval that was far too narrow.* *Found:* in the first version of the by-size
+   table, ridge − SaProt under contiguous in the 200–299-variant bin was +0.053 [+0.041, +0.066],
+   from 7 assays whose own differences ran from −0.094 to +0.129. A tight interval from 7 widely
+   spread values was treated as a bug. *Cause:* the bin used the ProteinGym aggregate, which
+   averages function types equally, and its bootstrap resamples within function types. The bin
+   held 4 organismal-fitness, 2 activity and 1 expression assay. The single expression assay
+   contributes no resampling spread at all, and the two activity assays very little. *Fix:*
+   within size bins, the statistic is now the plain mean of per-assay paired differences with an
+   unstratified bootstrap over assays (both runs drawn on the same assays), as ADR 0023's size
+   table used. Headline numbers stay ProteinGym aggregates. *Verified:* the same bin is now
+   +0.018 [−0.043, +0.079]. The figure's note and the schema docstring say it is a plain mean.
+2. *The final run took 30 minutes, not "a few".* *Found:* the first estimate came from
+   single-process smoke tests (NUSA 3.2 s, POLG_HCVJF 7.3 s per assay). The run was still going
+   after 10 minutes, with 12–13 workers busy at ~1,100% CPU and 8 GB resident, so it was not
+   stuck. *Cause:* the same memory-bandwidth contention as in Task 7: many workers doing large
+   eigendecompositions at once. *Fix:* re-estimated from `train calibrate`'s parallel timing
+   (3,880 s for 6 CV+ fits per assay; this run does 2 CV+ and 2 final fits) as 25–30 min, and
+   said so. *Verified:* 1,808 s for the run itself, 30:15 wall time including loading.
+
+**Supporting details.**
+- *Final table* (`results/supervised/final_*.parquet`; pooled Spearman, own CI, paired against
+  the comparator): ridge `seq_struct` 0.721 / 0.593 / 0.553 (random / modulo / contiguous, 213
+  assays), − SaProt +0.263 / +0.135 / +0.092, every interval above 0. MLP-MSE (198 assays) 0.762 /
+  0.622 / 0.570, − SaProt +0.303 / +0.163 / +0.111. By function type under contiguous, ridge −
+  SaProt is above 0 for all but binding (+0.010 [−0.106, +0.121], 13 assays). By size: below 300
+  variants no unseen-position interval is above 0 (−0.244 under contiguous below 200), from 300 up
+  every one is. The summary and comparison rows are bit-identical to `train compare`'s (maximum
+  difference 0.0). The check also turned up a rounding slip in ADR 0022 (LightGBM-PCA `seq`
+  contiguous is 0.464473, written there as 0.465).
+- *Eligibility:* 198 of 217 assays. Not eligible: 4 without a structure (website default ESM-2
+  650M), 15 with 33–298 variants (SaProt). Stored per assay in the manifest with the reason.
+- *Landscapes:* 1,379,989 rows (663,263 measured; 585,637 at unmeasured positions), 71 MB,
+  stamped with code `6fb0d07`, the config hash and the data-manifest hash. 108,452 rows have
+  imputed structure features, all in ZIKV and POLG_HCVJF, whose structures cover a small part of
+  the target. Out-of-fold coverage of measured variants is 0.800 / 0.900, but that holds by
+  construction; the real coverage evidence is ADR 0024's test folds.
+- *Sanity check:* buried residues (relative SASA < 0.2) are predicted lower than exposed ones in
+  194 of 195 assays. KCNE1 (×2) and α-synuclein have no buried residue in their AF2 models. The
+  exception, TADBP_HUMAN_Bolognesi_2019 (0.039 vs 0.029), measures toxicity of TDP-43's
+  disordered C-terminal domain.
+- *Publication:* staged, not pushed. There is no Hugging Face token on the machine (`whoami`
+  fails). After `hf auth login`: `uv run mutascope train publish --results-dir results/supervised
+  --push` (model repo `engAbdullahHanif/mutascope-ridge-seq-struct`, created private) and `uv run
+  mutascope data publish --landscapes --push` (new revision of the dataset).
+- *Tests:* `make lint` clean; `make test` 600 passed, 1 skipped, then 15 LightGBM tests in their
+  own process; 17 new (`test_final.py` 10, `eval/test_final.py` 3, `test_cli_final.py` 2,
+  `test_hub.py` +2). MLflow runs `final-table supervised` and `final ridge seq_struct` in
+  `supervised`.
