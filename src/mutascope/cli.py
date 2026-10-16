@@ -104,7 +104,7 @@ from mutascope.eval.zero_shot import (
     write_scores,
 )
 from mutascope.export.hub import PublishError, push_dataset, stage_dataset
-from mutascope.features.base import FEATURE_SETS, KEY_COLUMNS, KeyDesign
+from mutascope.features.base import FEATURE_SETS, KeyDesign
 from mutascope.features.schemas import EmbeddingRunSchema, FeatureStoreReportSchema
 from mutascope.features.sets import (
     FeatureSet,
@@ -122,7 +122,7 @@ from mutascope.features.store import (
     measured_keys,
     read_structure_features,
 )
-from mutascope.models.canary import canary_record, permutation_canary
+from mutascope.models.canary import canary_case, canary_record
 from mutascope.models.cv import (
     Checkpoint,
     CrossValidationError,
@@ -847,26 +847,28 @@ def train_canary(
     ],
     out_dir: Annotated[Path, typer.Option(help="Results directory.")],
     store_dir: StoreDir = None,
+    jobs: Jobs = None,
     config_dir: ConfigDir = Path("conf"),
     overrides: Overrides = None,
 ) -> None:
-    """Label-permutation canary of ``train.model`` on real assays (ADR 0019, 0021).
+    """Label-permutation canary of ``train.model`` on real assays (ADR 0019, 0021, 0022).
 
     On each assay of ``train.canary.assays`` and each scheme, the CV loop runs once with true
     labels and ``n_permutations`` times with shuffled training labels. Passes when the mean
     permuted pooled Spearman is within ``max_standard_errors`` standard errors of 0. A case
     whose true-label Spearman is below ``min_observed`` is marked uninformative: a model that
-    learns nothing there passes without proving anything. Writes ``canary_<label>.parquet``;
+    learns nothing there passes without proving anything. The (assay, scheme) cases run in
+    ``--jobs`` processes, each with its own seeded generator. Writes ``canary_<label>.parquet``;
     exits 1 if any case fails.
     """
     cfg = load_config(config_dir, overrides)
     model, feature_set = str(cfg.train.model), str(cfg.train.feature_set)
     canary = cfg.train.canary
     label = supervised_label(model, feature_set)
-    seed_all(int(cfg.train.seed))
-    rng = np.random.default_rng(int(cfg.train.seed))
+    seed = int(cfg.train.seed)
+    seed_all(seed)
     assays = [str(a) for a in canary.assays]
-    records: list[dict[str, object]] = []
+    schemes = [str(s) for s in cfg.train.schemes]
     try:
         make_model = _model(cfg)
         design, covered = _design(cfg, store_dir)
@@ -874,30 +876,33 @@ def train_canary(
         if outside:
             raise FeatureSetError(f"{feature_set} does not cover canary assays {outside}")
         data = load_cv_table(variants_dir, folds_dir, assays)
-        for assay_id in assays:
-            assay = data[data["assay_id"] == assay_id].reset_index(drop=True)
-            x = design(assay_id, assay[list(KEY_COLUMNS)])
-            for scheme in [str(s) for s in cfg.train.schemes]:
-                result = permutation_canary(
-                    x,
-                    assay["DMS_score"].to_numpy(np.float64),
-                    assay[f"fold_{scheme}"].to_numpy(np.int64),
-                    make_model,
-                    n_permutations=int(canary.n_permutations),
-                    rng=rng,
-                )
-                records.append(
-                    {"model": model, "feature_set": feature_set, "assay_id": assay_id}
-                    | canary_record(
-                        result,
-                        scheme=scheme,
-                        max_standard_errors=float(canary.max_standard_errors),
-                        min_observed=float(canary.min_observed),
-                    )
-                )
+        cases = [(a, s) for a in assays for s in schemes]
+        tasks = [
+            (
+                a,
+                data[data["assay_id"] == a].reset_index(drop=True),
+                design,
+                make_model,
+                s,
+                int(canary.n_permutations),
+                (seed, assays.index(a), schemes.index(s)),
+            )
+            for a, s in cases
+        ]
+        results = run_parallel(canary_case, tasks, jobs=default_jobs() if jobs is None else jobs)
     except (*TRAIN_ERRORS, RidgeError, PCAError, ValueError) as exc:  # ValueError: LightGBMError
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
+    records: list[dict[str, object]] = [
+        {"model": model, "feature_set": feature_set, "assay_id": a}
+        | canary_record(
+            result,
+            scheme=s,
+            max_standard_errors=float(canary.max_standard_errors),
+            min_observed=float(canary.min_observed),
+        )
+        for (a, s), result in zip(cases, results, strict=True)
+    ]
     table = pd.DataFrame.from_records(records)
     path = write_table(table, CanarySchema, out_dir / f"canary_{label}.parquet")
     typer.echo(f"canary {label}: {int(canary.n_permutations)} permutations per case")

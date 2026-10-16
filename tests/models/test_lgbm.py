@@ -26,7 +26,7 @@ SMALL: dict[str, Any] = {
         "bagging_freq": 1,
         "num_threads": 1,
         "deterministic": True,
-        "force_col_wise": True,
+        "force_row_wise": True,
         "verbose": -1,
     },
     "search": {

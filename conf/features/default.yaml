@@ -27,6 +27,14 @@ sets:
              esm2_650m:score, esm2_650m:log_probs, esm2_650m:embedding,
              saprot_650m_af2:score, saprot_650m_af2:log_probs, saprot_650m_af2:embedding,
              structure]
+  # POST-HOC diagnostic (ADR 0022), never a headline: seq_struct without either embedding.
+  # Asks whether the embeddings make LightGBM overfit on unseen positions.
+  seq_struct_noemb:
+    structure: true
+    blocks: [onehot, blosum62, rel_position,
+             esm2_650m:score, esm2_650m:log_probs,
+             saprot_650m_af2:score, saprot_650m_af2:log_probs,
+             structure]
   # Hsu et al. (2022): one-hot ridge, and augmented ridge with ESM-2 650M's score (ADR 0021).
   site_onehot:
     structure: false

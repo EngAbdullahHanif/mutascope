@@ -19,8 +19,11 @@ params:
   # rounds from the inner curves (early stopping, `patience`); refit on all training rows.
   lgbm:
     n_trials: 10
-    max_rounds: 1000
-    patience: 50
+    # Learning rate >= 0.05 with at most 300 rounds: the pilot's winners (lr >= 0.01, 1,000
+    # rounds) took a median 177 rounds, and on one outer fold this is 3.8x faster with test
+    # Spearman 0.899 vs 0.901 (SPIKE_SARS2, 3,798 variants; ADR 0022).
+    max_rounds: 300
+    patience: 30
     seed: ${train.seed}
     # Principal components kept per 1,280-column embedding block, fitted on training rows only;
     # null keeps the raw embedding columns.
@@ -32,11 +35,12 @@ params:
       bagging_freq: 1
       num_threads: 1
       deterministic: true
-      force_col_wise: true
+      # Row-wise histograms: identical models, 1.3x faster than column-wise here (ADR 0022).
+      force_row_wise: true
       verbose: -1
     # Searched, by LightGBM parameter name: {low, high, log?, int?}.
     search:
-      learning_rate: {low: 0.01, high: 0.2, log: true}
+      learning_rate: {low: 0.05, high: 0.2, log: true}
       num_leaves: {low: 4, high: 64, log: true, int: true}
       min_data_in_leaf: {low: 5, high: 100, log: true, int: true}
       feature_fraction: {low: 0.1, high: 1.0}
@@ -58,7 +62,8 @@ assays: null
 # `train cv --jobs N` runs assays in N processes. Memory, not cores, is the limit: ridge on the
 # largest `seq_struct` assay (16,897 variants) peaks near 2 GB per worker, and the 13 largest at
 # once swapped a 24 GB machine. At most this many variants' assays run at once (ADR 0022).
-max_variants_in_flight: 80000
+# Sized for LightGBM (~1 GB per worker on a large assay); use 80000 for ridge on `seq_struct`.
+max_variants_in_flight: 160000
 # MLflow experiment for supervised runs, next to tracking.experiment (zero-shot).
 experiment: supervised
 # Label-permutation canary on real models (`mutascope train canary`, ADR 0019 / 0021): the
@@ -91,6 +96,21 @@ comparisons:
   - [ridge_seq_struct, zero_shot_saprot_score]
   - [ridge_seq, augmented_ridge_site_onehot_esm2]
   - [ridge_seq_struct, ridge_seq]
+  # LightGBM (ADR 0022): both configurations against ridge and zero-shot on the same folds.
+  - [lgbm_seq_struct, ridge_seq_struct]
+  - [lgbm_pca_seq_struct, ridge_seq_struct]
+  - [lgbm_seq_struct, zero_shot_esm2_score]
+  - [lgbm_pca_seq_struct, zero_shot_esm2_score]
+  - [lgbm_seq_struct, zero_shot_saprot_score]
+  - [lgbm_pca_seq_struct, zero_shot_saprot_score]
+  - [lgbm_pca_seq, ridge_seq]
+  - [lgbm_pca_seq, zero_shot_esm2_score]
+  # With vs without PCA of the embeddings (seq_struct only; lgbm on seq was skipped).
+  - [lgbm_seq_struct, lgbm_pca_seq_struct]
+  # POST-HOC diagnostic: LightGBM without embeddings (seq_struct_noemb). Not a headline.
+  - [lgbm_seq_struct_noemb, lgbm_seq_struct]
+  - [lgbm_seq_struct_noemb, lgbm_pca_seq_struct]
+  - [lgbm_seq_struct_noemb, ridge_seq_struct]
 # ProteinGym's supervised leaderboard (`mutascope train leaderboard`): run label -> published
 # baselines of the same type. A sanity range, not a gate: their features differ (ADR 0021).
 leaderboard:
