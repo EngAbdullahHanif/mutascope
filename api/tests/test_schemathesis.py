@@ -27,6 +27,7 @@ from schemathesis import checks
 
 from api.app.main import create_app
 from api.app.settings import Settings
+from api.tests.conftest import LOOSE_LIMITS
 
 
 def _free_port() -> int:
@@ -43,8 +44,10 @@ def base_url(
     settings = Settings(
         bundle_dir=bundle_dir,
         onnx_local_dir=onnx_dir,
-        score_cache_dir=tmp_path_factory.mktemp("score-cache"),
+        score_cache_dir=(cache := tmp_path_factory.mktemp("score-cache")),
+        lock_file=cache / "api.lock",
         job_queue_size=2,
+        **LOOSE_LIMITS,  # pyright: ignore[reportArgumentType]
     )
     port = _free_port()
     config = uvicorn.Config(create_app(settings), host="127.0.0.1", port=port, log_level="warning")

@@ -166,7 +166,8 @@ export interface paths {
          *
          *     The job runs when the ones before it have finished (one at a time); follow it with
          *     ``GET /v1/jobs/{id}/stream``. An identical earlier job's result is returned at once,
-         *     already ``succeeded``. 429 when the queue is full.
+         *     already ``succeeded``. 429 when the queue is full, or this client already has a job
+         *     queued or running.
          */
         post: operations["create_job_v1_jobs_post"];
         delete?: never;
@@ -212,7 +213,8 @@ export interface paths {
          *     landscape rows), then ``succeeded`` (with the landscape), ``failed`` or ``cancelled``.
          *
          *     Each event's ``id`` is its index; reconnecting with ``Last-Event-ID`` resumes after it.
-         *     The stream ends when the job has finished. Event data are JSON: the job (``JobResponse``)
+         *     The stream ends when the job has finished. A client may hold a few streams open at once
+         *     (429 beyond that). Event data are JSON: the job (``JobResponse``)
          *     for status events, ``JobProgress`` for ``progress``.
          */
         get: operations["stream_job_v1_jobs__job_id__stream_get"];
@@ -1184,6 +1186,15 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
             /** @description Service Unavailable */
             503: {
                 headers: {
@@ -1226,6 +1237,15 @@ export interface operations {
             };
             /** @description Unprocessable Entity */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1285,6 +1305,15 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
             /** @description Service Unavailable */
             503: {
                 headers: {
@@ -1312,6 +1341,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BenchmarksResponse"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
                 };
             };
             /** @description Service Unavailable */
@@ -1356,8 +1394,26 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            /** @description Request Entity Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
             /** @description Unprocessable Entity */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1400,6 +1456,15 @@ export interface operations {
             };
             /** @description Bad Request */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Request Entity Too Large */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1474,6 +1539,15 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
             /** @description Service Unavailable */
             503: {
                 headers: {
@@ -1532,6 +1606,15 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
             /** @description Service Unavailable */
             503: {
                 headers: {
@@ -1576,6 +1659,15 @@ export interface operations {
             };
             /** @description Unprocessable Entity */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };

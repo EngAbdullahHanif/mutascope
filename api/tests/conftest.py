@@ -29,6 +29,16 @@ ZERO_SHOT = "F7YBW8_MESOW_Aakre_2015"
 NO_STRUCTURE = "P53_HUMAN_Giacomelli_2018_WT_Nutlin"
 """No AF2 structure: ESM-2 650M is the default and SaProt has no landscape."""
 FIXTURE_PROTEINS = (SUPERVISED, ZERO_SHOT, NO_STRUCTURE)
+LOOSE_LIMITS = {
+    "rate_limit_read": "10000/minute",
+    "rate_limit_score": "10000/minute",
+    "rate_limit_score_global": "10000/minute",
+    "rate_limit_jobs": "10000/minute",
+    "max_active_jobs_per_client": 100,
+    "max_streams_per_client": 100,
+}
+"""Every client is 127.0.0.1 in-process, so tests of other behaviour run without the limits;
+``test_hardening.py`` sets them explicitly."""
 
 
 @pytest.fixture
@@ -70,7 +80,11 @@ def onnx_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
 @pytest.fixture
 def settings(bundle_dir: Path, onnx_dir: Path, tmp_path: Path) -> Settings:
     return Settings(
-        bundle_dir=bundle_dir, onnx_local_dir=onnx_dir, score_cache_dir=tmp_path / "score-cache"
+        bundle_dir=bundle_dir,
+        onnx_local_dir=onnx_dir,
+        score_cache_dir=tmp_path / "score-cache",
+        lock_file=tmp_path / "api.lock",
+        **LOOSE_LIMITS,  # pyright: ignore[reportArgumentType]
     )
 
 

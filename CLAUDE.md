@@ -311,8 +311,28 @@ Run `make lint test` before declaring any task done.
   `api/tests/golden/` (written from the pipeline cache by `python -m api.tests.make_live_golden`,
   never recomputed), Spearman ≥ 0.99. The bundle has no 35M / 150M landscapes to compare with.
 - Live inference uses ONNX Runtime (fp32 ONNX ESM-2 35M/150M; int8 rejected, ADR 0029). SaProt is not served live.
-- Caching with `diskcache`; rate limiting with `slowapi`; CORS restricted to configured origins.
-- Logs: structlog JSON. Metrics: prometheus-fastapi-instrumentator.
+- Caching with `diskcache`; CORS restricted to `cors_origins`.
+- Hardening (ADR 0032; threats in `docs/threat-model.md`): every limit is a setting.
+  - Clients are IP addresses: the socket address, or `X-Forwarded-For` read from the right only
+    when the peer is in `trusted_proxies` (`api.app.clients`, the only place). uvicorn's proxy
+    headers stay off.
+  - Rate limits: a per-app slowapi `Limiter` (memory, moving window), checked by the
+    `ratelimit.rate_limit(...)` dependency, never by slowapi decorators. Groups: `read`,
+    `score` + `score_global`, `jobs`; plus one active job per client, stream slots per client
+    and in total, `max_body_bytes` (413), `max_connections`. Refusals are problems; rate limits
+    carry `Retry-After`. Probes are never limited. Never raise a default to make a test pass;
+    tests set their own limits (`LOOSE_LIMITS` elsewhere).
+  - **One process.** The queue, the counters and the slots are in memory: production starts with
+    `python -m api.app.serve` (app object, `workers=1`, `WEB_CONCURRENCY` > 1 refused), and the
+    lifespan holds `lock_file`. Never add workers without moving that state to a shared store.
+- Logs: structlog JSON, one line per event, `request_id` in every line of a request (and in its
+  job's worker lines), one access line from our middleware. **Never log a sequence or a
+  mutation list**: log `logs.sequence_fields` (sha256 + length). The redaction processor is a
+  safety net, not a licence; `test_no_sequence_or_mutation_in_any_log` must cover any new route.
+- Metrics: prometheus-fastapi-instrumentator + the API's collectors (`api.app.metrics`, one
+  registry per app). `/metrics` needs `metrics_token` (constant-time), 404 without one, and is
+  not in the OpenAPI schema. Sentry only with `sentry_dsn`, no bodies or frame variables,
+  events redacted.
 - Tests: pytest + httpx AsyncClient, golden-value tests against pipeline outputs, schemathesis against
   OpenAPI (`api/tests/test_schemathesis.py`, a real uvicorn server; `positive_data_acceptance` is
   off because wild-type matching and the precise limit cannot be written in the schema).

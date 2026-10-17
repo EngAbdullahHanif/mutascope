@@ -2,12 +2,13 @@
 
 import logging
 import sys
+from collections.abc import Sequence
 
 import structlog
 from structlog.typing import Processor
 
 
-class _CurrentStderr:
+class CurrentStderr:
     """Writes to whatever ``sys.stderr`` is at write time, not at configure time.
 
     The logger factory is built when logging is configured, so binding the stream object itself
@@ -22,7 +23,9 @@ class _CurrentStderr:
         sys.stderr.flush()
 
 
-def configure_logging(*, json: bool = False, level: int = logging.INFO) -> None:
+def configure_logging(
+    *, json: bool = False, level: int = logging.INFO, extra: Sequence[Processor] = ()
+) -> None:
     """Configure structlog; a later call replaces the earlier configuration for every logger.
 
     Loggers are not cached on first use. A cached logger keeps the processors of the
@@ -35,6 +38,8 @@ def configure_logging(*, json: bool = False, level: int = logging.INFO) -> None:
         json: Emit one JSON object per line (for pipelines and the API) instead of
             human-readable console output.
         level: Minimum log level.
+        extra: Processors run after the standard ones, just before rendering (the API's
+            redaction of sequences).
     """
     processors: list[Processor] = [
         structlog.contextvars.merge_contextvars,
@@ -45,10 +50,10 @@ def configure_logging(*, json: bool = False, level: int = logging.INFO) -> None:
         structlog.processors.JSONRenderer() if json else structlog.dev.ConsoleRenderer()
     )
     structlog.configure(
-        processors=[*processors, renderer],
+        processors=[*processors, *extra, renderer],
         wrapper_class=structlog.make_filtering_bound_logger(level),
         # Logs go to stderr so stdout stays clean for command output.
-        logger_factory=structlog.PrintLoggerFactory(file=_CurrentStderr()),  # type: ignore[arg-type]
+        logger_factory=structlog.PrintLoggerFactory(file=CurrentStderr()),  # type: ignore[arg-type]
         cache_logger_on_first_use=False,
     )
 
