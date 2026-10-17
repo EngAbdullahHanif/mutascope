@@ -2261,3 +2261,97 @@ version of the pipeline runs the same ridge steps on two small assays in under a
   match the republished bundle.
 - *Not wired:* `train compare`, `final-table`, `final-figures`, `canary`, `shap`, `uncertainty`
   (results-only steps or diagnostics). The `docker` profile waits for the Phase 4 image.
+
+---
+
+## Entry 28 — The website bundle (Phase 4 Task 1, 2026-10-17)
+
+**Plain-language summary.** The website needs every protein's data as a ready-made file, so a
+page works even when the backend is asleep. `mutascope export bundle` now writes one compressed
+file per ProteinGym assay (217). Each holds what the page shows: which model to show first and
+why, the measured values, the two zero-shot landscapes, the structure features and, for the 198
+assays with a supervised model, its predictions with 80% and 90% intervals. A manifest lists
+every protein with its label ("Supervised (n = 9,576)" or "Zero-shot"), and `benchmarks.json`
+holds the headline tables. The format is written down as Pydantic models and exported as
+versioned JSON Schemas for the frontend. To keep the files small, numbers are stored as
+integers with a fixed number of decimals. The build then proves that this rounding changes no
+reported number: it reads every file back, recomputes each Spearman correlation and each
+interval coverage, and fails if any moves by more than 0.001 or 0.002. The bundle is 29.2 MB;
+the largest file is 1.15 MB, under the 2 MB budget. It is published on the Hub as a tagged,
+pinned revision of the dataset repo.
+
+**The 3 most important design choices.**
+
+1. **Choose the decimals so that ties cannot form.** Rounding to the nearest step keeps the
+   order of two numbers, but two different numbers can round to the same value. Because
+   interval bounds are inclusive, a measurement just outside its interval then counts as inside.
+   So each assay's step is below the smallest gap between a measured value and its bounds, as
+   well as at most 1/1000 of the assay's SD. *Evidence:* with the SD rule alone, 5 numbers in 3
+   assays failed (problem 2). With the gap rule, coverage is reproduced exactly in all 198 assays
+   at both levels, for 12% more bytes.
+2. **Prove fidelity on the written bytes, against the reported numbers.** The check decodes the
+   files the browser will receive, not an in-memory copy. It compares against the unrounded
+   inputs and against the results tables wherever the bundle holds the same numbers: zero-shot
+   Spearman on the 212 / 210 assays whose benchmark region is the whole target, and coverage
+   from the published `final_checks`. *Evidence:* the largest changes are Spearman 4.30e-4
+   (ESM-2), 6.56e-4 (SaProt) and 4.04e-4 (ridge), and the aggregates move by at most 9e-6.
+3. **Read the published revisions and check them.** Supervised landscapes, metadata,
+   measurements, structure features and final tables come from the pinned Hub commits. Each
+   file is compared with the `SHA256SUMS` published in the same commit, and a branch name is
+   refused. The website therefore shows exactly what was released. *Evidence:* the published
+   final tables differ from the local copies by up to 1.2e-7 (problem 4). The bundle carries the
+   released numbers.
+
+**Problems encountered and how they were solved.**
+
+1. **The interval's calibration scheme is per variant, not per residue.** *Found:* the build's
+   input check stopped at `AACC1_PSEAI_Dandage_2018` ("calibration_scheme varies within a
+   residue"; 2 of its 177 residues). *Cause:* `train.final.scheme_by_position` asks whether a
+   variant's residue has *other* measured variants. So a residue's only measured variant uses
+   contiguous folds while its 18 unmeasured substitutions use random ones (residue 90: F
+   measured and `contiguous`, the rest `random`). *Fix:* stored as a coded `(L, 20)` grid. The
+   check stays for `position_status` and `structure_imputed`, which are per residue. *Verified:*
+   the full build passes, and a synthetic test checks a lone measured variant against its
+   neighbours.
+2. **Rounding moved interval coverage.** *Found:* the first full build's fidelity check: 5
+   failures. `CCDB_ECOLI_Adkar_2012` coverage +0.200 (80%) and +0.099 (90%), supervised Spearman
+   0.0021; `EPHB2_HUMAN_Tsuboyama_2023_1F0M` 80% coverage 0.0024 (3 of 1,239 variants);
+   `LYAM1_HUMAN_Elazar_2016` 90% coverage 0.0028 (1 of 359). *Cause:* ties at the bound, as in
+   design choice 1. CCDB is the extreme: it reports one score per position (ADR 0024), so its
+   random-split predictions equal the measurement to ~1e-6 and its intervals are 3.0e-6 wide;
+   at 3 decimals all 1,176 variants tie a bound. *Fix:* the gap rule, capped at 9 decimals
+   (CCDB reaches 9). *Verified:* the rebuild passes. Coverage differs by 0 everywhere, and
+   CCDB's Spearman is within tolerance. Decimals: 3 in 36 assays, 4 in 120, 5 in 52, 6 in 6, 7
+   in 2, 9 in 1.
+3. **A fixed 3 decimals would have flattened small-scale assays.** *Found:* while choosing the
+   encoding, from the per-assay SD of `DMS_score`, before any code. `HSP82_YEAST_Cote-
+   Hammarlof_2020_growth-H2O2` has SD 0.016, so 3 decimals give about 16 steps per SD. *Fix:*
+   at least SD / 1000 per step (5 decimals there). *Verified:* that assay is in the passing
+   fidelity table.
+4. **Local final tables are not the published ones.** *Found:* comparing local
+   `results/supervised/final_*` with the model repo's `SHA256SUMS` at `45a04b8`: 6 of 7
+   differ. *Cause:* the single-threaded re-baseline (`ed9cdf4`, entry 27, problem 1) landed
+   after publication: values move by up to 1.2e-7 (`cv_spearman_contiguous`), plus the
+   provenance stamps. *Fix:* none needed. The bundle reads the published tables, as the task
+   asks, and ADR 0028 records the difference.
+5. **An all-null column broke the fidelity table's schema.** *Found:* the synthetic tests, where
+   no reported value is comparable, so pandas made `reported` an object column. *Fix:* the
+   numeric columns are cast to float64 before validation. *Verified:* 35 new tests pass.
+
+**Supporting details.**
+- *Bundle (built at `5c8d778`):* 217 files, 29,218,051 bytes compressed (79,167,098 JSON),
+  median 88,105, largest 1,153,890 (ZIKV, 3,423 residues); `benchmarks.json` 351,937 bytes,
+  `manifest.json` 93,115. Budgets set after measuring: 2,000,000 per file, 40,000,000 in total.
+  Defaults: 198 `ridge_seq_struct`, 15 `saprot_650m_af2`, 4 `esm2_650m`; MSA region on 5 assays;
+  one caveat (Binding under contiguous and modulo).
+- *Hub:* dataset repo commit `3ae767217bb0a56b8f2e7c79c68b73119e308066`, tag `bundle-v1.0.0`
+  (resolves to it), public. Checked through the API without a token: 224 files under
+  `bundle/` equal to `build/bundle` (217 by sha256, 7 by size), and the 14 files outside it
+  identical to `0b0fe65`. Pinned as `export.publish.revision`.
+- *Run time:* 13 s with the Hub files cached.
+- *Tests:* `make lint` clean; `make test` passes (652 + 15 LightGBM). 35 new tests: encoding,
+  a property test of the gap rule, the round trip, input checks, budgets, the fidelity
+  failure path, schemas, benchmark rows, the pinned fetch and the tagged push.
+- *Loose ends:* not a Nextflow process yet; no MLflow run (no model is evaluated); the root
+  dataset card does not mention `bundle/` until the next `data publish` (the folder has its own
+  README).
