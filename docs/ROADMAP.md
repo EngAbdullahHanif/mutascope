@@ -220,9 +220,15 @@ Goal: a tested, observable service deployed automatically.
       pinned as `onnx.publish.revision`
 
 ### FastAPI
-- [ ] Pydantic v2, pydantic-settings, models loaded in `lifespan`
-- [ ] `/v1/proteins`, `/v1/proteins/{id}/landscape`, `POST /v1/score` (fast mode),
-      `POST /v1/jobs` + `GET /v1/jobs/{id}/stream` (precise mode, SSE), `/v1/benchmarks`, `/health`, `/metrics`
+- [x] Pydantic v2, pydantic-settings, models loaded in `lifespan` (ADR 0030): the bundle at
+      `export.publish.revision` (checksums and schema version checked, or no start) and the fp32
+      ONNX scorers; `/ready`; RFC 9457 problem details for every error; ETag + Cache-Control +
+      gzip on read-only routes; no torch (fresh-interpreter test)
+- [x] Read-only routes (ADR 0030): `/v1/proteins` (function type filter, search),
+      `/v1/proteins/{id}`, `/v1/proteins/{id}/landscape?model=default|esm2_650m|saprot`,
+      `/v1/benchmarks`, `/health`, `/ready`; golden tests against `bundle-v1.0.0`
+- [ ] `POST /v1/score` (fast mode), `POST /v1/jobs` + `GET /v1/jobs/{id}/stream` (precise mode,
+      SSE), `/metrics`
 - [ ] Validation: 20 canonical AAs, length 1–1022, ≤ 50 mutations per request
 - [ ] diskcache, slowapi rate limiting, CORS to configured origins, structlog JSON, Prometheus metrics, Sentry
 - [ ] Tests: httpx AsyncClient, golden values vs pipeline outputs, schemathesis
@@ -238,7 +244,9 @@ Goal: a tested, observable service deployed automatically.
       (off); test profile runs the ridge path on its 2 assays (55 s). `train compare`,
       `final-table`, `final-figures`, `canary`, `shap`, `uncertainty` stay by hand: they read
       results files or are diagnostics
-- [ ] `openapi-typescript` type generation for the frontend
+- [x] `openapi-typescript` type generation for the frontend (`make types` →
+      `web/src/lib/api-types.ts`, openapi-typescript 7.13.0 pinned in `web/`; CI job `types`
+      fails when the committed file is stale; ADR 0030)
 
 Done when: CI green on every push, tags deploy automatically, `/docs` live, fast-mode response < 2 s.
 
