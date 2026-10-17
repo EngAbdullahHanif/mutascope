@@ -68,8 +68,10 @@ def onnx_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 @pytest.fixture
-def settings(bundle_dir: Path, onnx_dir: Path) -> Settings:
-    return Settings(bundle_dir=bundle_dir, onnx_local_dir=onnx_dir)
+def settings(bundle_dir: Path, onnx_dir: Path, tmp_path: Path) -> Settings:
+    return Settings(
+        bundle_dir=bundle_dir, onnx_local_dir=onnx_dir, score_cache_dir=tmp_path / "score-cache"
+    )
 
 
 @pytest.fixture
