@@ -126,13 +126,21 @@ from mutascope.eval.zero_shot import (
     with_labels,
     write_scores,
 )
+from mutascope.export.assemble import Budget, BundleInputs, BundleResult, write_bundle
+from mutascope.export.benchmarks import BenchmarkError, build_benchmarks
+from mutascope.export.bundle import BundleError, Encoding, SupervisedInfo, ZeroShotModel
+from mutascope.export.fidelity import Tolerances
+from mutascope.export.format import SCHEMA_VERSION, SupervisedStamp, VersionStamp, json_schemas
 from mutascope.export.hub import (
     PublishError,
+    fetch_pinned,
+    push_bundle,
     push_dataset,
     push_folder,
     stage_dataset,
     stage_model,
 )
+from mutascope.export.schemas import BundleFidelitySchema, BundleSizeSchema
 from mutascope.features.base import FEATURE_SETS, KEY_COLUMNS, KeyDesign
 from mutascope.features.schemas import (
     SUBSTITUTIONS_PER_RESIDUE,
@@ -182,8 +190,8 @@ from mutascope.models.uncertainty import (
     assay_calibration,
     uncertainty_table,
 )
-from mutascope.scoring.base import build_scorer
-from mutascope.scoring.cache import CacheError, LogProbCache
+from mutascope.scoring.base import build_scorer, landscape_from_log_probs
+from mutascope.scoring.cache import CacheError, CacheKey, LogProbCache
 from mutascope.scoring.ensemble import zscore_mean
 from mutascope.scoring.struct_tokens import AssayStructure, StructTokenError, load_struct_tokens
 from mutascope.utils.config import as_str_dict, load_config
@@ -3546,3 +3554,263 @@ def _embedding_width(store_dir: Path, store: pd.DataFrame, model: str) -> int:
     if len(widths) != 1:
         raise FeatureStoreError(f"{model}: embedding widths {sorted(widths)} in the store")
     return widths.pop()
+
+
+export_app = typer.Typer(help="Export the website bundle.", no_args_is_help=True)
+app.add_typer(export_app, name="export")
+
+BUNDLE_DATASET_FILES = {
+    "assays": "data/assays.parquet",
+    "variants": "data/variants.parquet",
+    "structure_features": "data/structure_features.parquet",
+    "landscapes": "data/supervised_landscapes.parquet",
+    "manifest": "data/supervised_landscape_assays.parquet",
+}
+"""Bundle inputs read from the dataset repo at ``publish.revision``."""
+BUNDLE_MODEL_FILES = {
+    "summary": "results/final_summary.parquet",
+    "comparisons": "results/final_comparisons.parquet",
+    "size_comparisons": "results/final_size_comparisons.parquet",
+    "checks": "results/final_checks.parquet",
+    "uncertainty": "results/uncertainty_ridge_seq_struct_summary.parquet",
+}
+"""Bundle inputs read from the model repo at ``train.publish.revision``."""
+
+
+@export_app.command("bundle")
+def export_bundle(
+    reference: Reference,
+    three_di_dir: ThreeDiDir = None,
+    structure_features_dir: StructureFeaturesDir = None,
+    results_dir: Annotated[
+        Path,
+        typer.Option(help="Results root (zero-shot benchmark tables).", exists=True),
+    ] = Path("results"),
+    config_dir: ConfigDir = Path("conf"),
+    overrides: Overrides = None,
+) -> None:
+    """Write the website bundle (ADR 0028) to ``export.out_dir``; fails if any check fails.
+
+    One gzip JSON file per assay (``proteins/``), ``manifest.json``, ``benchmarks.json``, the
+    JSON Schemas and checksums. Supervised landscapes, assay metadata, measurements, structure
+    features and the final results come from the pinned Hub revisions (verified against their
+    checksums); zero-shot full-target landscapes from the cache (``score check-landscapes``).
+    Every file is decoded again and scored: per-assay and aggregate Spearman and interval
+    coverage must stay within ``export.fidelity`` of the unrounded and the reported values,
+    and every file within ``export.budget``. Size and fidelity tables go to
+    ``export.results_dir`` either way; the bundle replaces the previous one only on success.
+    """
+    base = [o for o in overrides or [] if not o.startswith("model=")]
+    cfg = load_config(config_dir, base)
+    spec = cfg.export
+    deployed = _final_label(cfg)
+    table = pd.read_csv(reference)
+    try:
+        dataset = fetch_pinned(
+            str(cfg.publish.repo_id),
+            repo_type="dataset",
+            revision=str(cfg.publish.revision),
+            filenames=list(BUNDLE_DATASET_FILES.values()),
+        )
+        model_repo = fetch_pinned(
+            str(cfg.train.publish.repo_id),
+            repo_type="model",
+            revision=str(cfg.train.publish.revision),
+            filenames=list(BUNDLE_MODEL_FILES.values()),
+        )
+        hub = {k: pd.read_parquet(dataset[v]) for k, v in BUNDLE_DATASET_FILES.items()}
+        hub |= {k: read_results(model_repo[v]) for k, v in BUNDLE_MODEL_FILES.items()}
+        landscapes = FinalLandscapeSchema.validate(hub["landscapes"], lazy=True)
+        manifest = FinalManifestSchema.validate(hub["manifest"], lazy=True)
+        checks = FinalCheckSchema.validate(hub["checks"], lazy=True)
+        cache = LogProbCache(Path(cfg.scoring.cache_dir))
+        zero_shot: list[ZeroShotModel] = []
+        reported: dict[tuple[str, str, str], float] = {}
+        msa_regions: dict[str, ScoringRegion] = {}
+        for name in spec.zero_shot_models:
+            model_cfg = load_config(config_dir, [*base, f"model={name}"])
+            targets = _landscape_targets(
+                model_cfg, table, three_di_dir, structure_features_dir, config_dir
+            )
+            zero_shot.append(_full_landscapes(model_cfg, targets, cache))
+            comparable = {t.assay_id for t in targets if t.benchmark and t.full_target}
+            results = read_results(results_dir / f"zero_shot_{name}_single.parquet")
+            spearman_rows = results[
+                (results["metric"] == "spearman") & results["assay_id"].isin(comparable)
+            ]
+            for assay_id, value in zip(
+                spearman_rows["assay_id"], spearman_rows["value"], strict=True
+            ):
+                reported[(str(assay_id), str(name), "spearman")] = float(value)
+            if name == spec.msa_region_model:
+                msa_regions = {t.assay_id: t.region for t in targets if not t.full_target}
+        levels = [round(float(level) * 100) for level in cfg.train.final.levels]
+        for row in checks.itertuples():
+            for level in levels:
+                reported[(str(row.assay_id), deployed, f"coverage_{level}")] = float(
+                    getattr(row, f"oof_coverage_{level}")
+                )
+        stamps = landscapes[["code_version", "config_sha256", "manifest_sha256"]].drop_duplicates()
+        if len(stamps) != 1:
+            raise BundleError(f"supervised landscapes carry {len(stamps)} version stamps")
+        version = VersionStamp(
+            schema_version=SCHEMA_VERSION,
+            mutascope_version=__version__,
+            code_version=code_version(),
+            proteingym_release=str(cfg.data.release.version),
+            dataset_repo=str(cfg.publish.repo_id),
+            dataset_revision=str(cfg.publish.revision),
+            model_repo=str(cfg.train.publish.repo_id),
+            model_revision=str(cfg.train.publish.revision),
+            supervised=SupervisedStamp(**{str(k): str(v) for k, v in stamps.iloc[0].items()}),
+        )
+        comparator_label = str(cfg.train.final_table.comparators.structure)
+        benchmarks = build_benchmarks(
+            version=version,
+            deployed=deployed,
+            comparator=comparator_label,
+            comparator_name=str(cfg.train.final_table.names[comparator_label]),
+            zero_shot_summaries=[
+                read_results(results_dir / f"zero_shot_{label}_single_summary.parquet")
+                for label in spec.zero_shot_results
+            ],
+            zero_shot_shared=read_results(results_dir / "zero_shot" / "shared_summary.parquet"),
+            zero_shot_comparisons=read_results(results_dir / "zero_shot" / "comparisons.parquet"),
+            supervised_summary=SummarySchema.validate(hub["summary"]),
+            supervised_comparisons=ComparisonSchema.validate(hub["comparisons"]),
+            size_comparisons=SizeComparisonSchema.validate(hub["size_comparisons"]),
+            uncertainty_summary=UncertaintySummarySchema.validate(hub["uncertainty"]),
+            final_checks=checks,
+            model=str(cfg.train.final.model),
+            feature_set=str(cfg.train.final.feature_set),
+            interval=str(cfg.train.final.interval),
+            levels=levels,
+        )
+        result = write_bundle(
+            BundleInputs(
+                assays=hub["assays"],
+                variants=hub["variants"],
+                structure_features=hub["structure_features"],
+                manifest=manifest,
+                landscapes=landscapes,
+                reference=table,
+                zero_shot=zero_shot,
+                msa_regions=msa_regions,
+                reported=reported,
+            ),
+            out_dir=Path(str(spec.out_dir)),
+            benchmarks=benchmarks,
+            version=version,
+            encoding=Encoding(**as_str_dict(OmegaConf.to_container(spec.encoding), "encoding")),
+            supervised_info=SupervisedInfo(
+                model=deployed, levels=(levels[0] / 100, levels[1] / 100)
+            ),
+            budget=Budget(**as_str_dict(OmegaConf.to_container(spec.budget), "budget")),
+            tolerances=Tolerances(**as_str_dict(OmegaConf.to_container(spec.fidelity), "fidelity")),
+            card=Path(str(spec.card)).read_text(),
+        )
+    except (
+        PublishError,
+        BundleError,
+        BenchmarkError,
+        CacheError,
+        ScoringRegionError,
+        StructTokenError,
+        pa.errors.SchemaErrors,
+    ) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    out = Path(str(spec.results_dir))
+    write_table(result.fidelity, BundleFidelitySchema, out / "bundle_fidelity.parquet")
+    write_table(result.sizes, BundleSizeSchema, out / "bundle_sizes.parquet")
+    _echo_bundle(result)
+    if result.failure is not None:
+        typer.echo(f"FAIL: {result.failure}", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"bundle -> {spec.out_dir}")
+
+
+def _full_landscapes(
+    model_cfg: DictConfig, targets: list[LandscapeTarget], cache: LogProbCache
+) -> ZeroShotModel:
+    """A model's full-target landscapes from the cache, as ``log P(mt) - log P(wt)``.
+
+    Raises:
+        CacheError: An entry is missing or incomplete (run ``score landscapes``).
+    """
+    name, hf_id, revision = (str(model_cfg.model[k]) for k in ("name", "hf_id", "revision"))
+    landscapes: dict[str, np.ndarray] = {}
+    for target in targets:
+        if not target.full_target:
+            continue
+        key = CacheKey(
+            model_id=hf_id,
+            revision=revision,
+            sequence=target.sequence,
+            struct_tokens=target.struct_tokens,
+            method="masked",
+            region=target.region.label,
+        )
+        entry = cache.get(key)
+        if entry is None or not np.isfinite(entry).all():
+            raise CacheError(
+                f"{name} {target.assay_id}: full-target landscape missing or incomplete; "
+                "run `mutascope score check-landscapes`"
+            )
+        landscapes[target.assay_id] = landscape_from_log_probs(entry, target.sequence)
+    return ZeroShotModel(name=name, hf_id=hf_id, revision=revision, landscapes=landscapes)
+
+
+def _echo_bundle(result: BundleResult) -> None:
+    sizes, fidelity = result.sizes, result.fidelity
+    largest = sizes.sort_values("bytes").iloc[-1]
+    typer.echo(
+        f"{len(sizes)} protein files, {int(sizes['bytes'].sum()):,} bytes compressed "
+        f"({int(sizes['raw_bytes'].sum()):,} JSON); median {int(sizes['bytes'].median()):,}, "
+        f"largest {largest['assay_id']} {int(largest['bytes']):,} bytes "
+        f"(L = {int(largest['length']):,})"
+    )
+    for (model, metric), rows in fidelity[fidelity["level"] == "assay"].groupby(
+        ["model", "metric"], sort=True
+    ):
+        compared = rows["diff_reported"].dropna()
+        typer.echo(
+            f"  {model} {metric}: {len(rows)} assays, max |encoded - source| "
+            f"{rows['diff_source'].max():.2e}, max |encoded - reported| "
+            + (f"{compared.max():.2e} ({len(compared)} assays)" if len(compared) else "n/a")
+        )
+
+
+@export_app.command("push")
+def export_push(config_dir: ConfigDir = Path("conf"), overrides: Overrides = None) -> None:
+    """Upload ``export.out_dir`` into ``export.publish.path_in_repo`` of the dataset repo as one
+    tagged commit (``export.publish.tag``); pin the printed commit as
+    ``export.publish.revision``."""
+    cfg = load_config(config_dir, overrides)
+    spec = cfg.export.publish
+    tag = str(spec.tag)
+    try:
+        pushed = push_bundle(
+            Path(str(cfg.export.out_dir)),
+            str(cfg.publish.repo_id),
+            path_in_repo=str(spec.path_in_repo),
+            tag=tag,
+            message=f"Publish website bundle {tag} (format {SCHEMA_VERSION}, mutascope "
+            f"{__version__})",
+        )
+    except PublishError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"pushed -> {pushed.url}")
+    typer.echo(f"revision {pushed.oid} (tag {tag}); pin it as export.publish.revision")
+
+
+@export_app.command("schema")
+def export_schema(
+    out_dir: Annotated[Path, typer.Option(help="Directory for the JSON Schema files.")],
+) -> None:
+    """Write the bundle format's JSON Schemas (one per file kind, ``$id`` versioned)."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for name, schema in json_schemas().items():
+        (out_dir / name).write_text(json.dumps(schema, indent=2) + "\n")
+    typer.echo(f"{len(json_schemas())} schemas (format {SCHEMA_VERSION}) -> {out_dir}")
