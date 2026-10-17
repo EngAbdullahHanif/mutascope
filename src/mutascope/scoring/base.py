@@ -76,6 +76,7 @@ class ScorerConfigError(ValueError):
 SCORERS: Mapping[str, str] = {
     "esm2": "mutascope.scoring.esm2",
     "saprot": "mutascope.scoring.saprot",
+    "esm2_onnx": "mutascope.scoring.onnx_esm2",
 }
 """Scorer name -> module exposing ``from_config(model_cfg, *, device, cache_dir)``."""
 

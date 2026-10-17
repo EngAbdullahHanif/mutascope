@@ -6,12 +6,14 @@ Every pipeline step is a command here; Nextflow only ever calls these commands.
 import csv
 import hashlib
 import json
+import platform
 import re
 import shutil
+import subprocess
 import time
 from dataclasses import asdict, replace
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated, Any, cast
 
 import duckdb
 import httpx
@@ -20,6 +22,7 @@ import pandas as pd
 import pandera.pandas as pa
 import typer
 from omegaconf import DictConfig, OmegaConf
+from tokenizers import Tokenizer
 
 from mutascope import __version__
 from mutascope.data.clean import clean_dataset
@@ -72,6 +75,14 @@ from mutascope.eval.landscapes import (
     landscape_targets,
 )
 from mutascope.eval.metrics import SUPERVISED_METRICS
+from mutascope.eval.onnx import (
+    landscape_agreement,
+    max_abs_diff,
+    parity_inputs,
+    random_sequence,
+    time_calls,
+    tokenizer_mismatches,
+)
 from mutascope.eval.proteingym import (
     PRECOMPUTED_PREFIX,
     RowSet,
@@ -96,7 +107,10 @@ from mutascope.eval.schemas import (
     FinalLandscapeSchema,
     FinalManifestSchema,
     LandscapeCoverageSchema,
+    LandscapeParitySchema,
     LandscapeRunSchema,
+    LatencySchema,
+    LogitParitySchema,
     RidgeCoefficientSchema,
     RidgeFitSchema,
     ScoringRunSchema,
@@ -138,7 +152,22 @@ from mutascope.export.hub import (
     push_dataset,
     push_folder,
     stage_dataset,
+    stage_files,
     stage_model,
+)
+from mutascope.export.onnx import (
+    MODEL_FILE,
+    PRECISIONS,
+    RECORD_FILE,
+    ExportRecord,
+    OnnxExportError,
+    QuantRecipe,
+    esm_tokenizer,
+    export_paths,
+    model_files,
+    place_export,
+    quantize_int8,
+    run_optimum,
 )
 from mutascope.export.schemas import BundleFidelitySchema, BundleSizeSchema
 from mutascope.features.base import FEATURE_SETS, KEY_COLUMNS, KeyDesign
@@ -193,6 +222,7 @@ from mutascope.models.uncertainty import (
 from mutascope.scoring.base import build_scorer, landscape_from_log_probs
 from mutascope.scoring.cache import CacheError, CacheKey, LogProbCache
 from mutascope.scoring.ensemble import zscore_mean
+from mutascope.scoring.marginals import cache_model_id
 from mutascope.scoring.struct_tokens import AssayStructure, StructTokenError, load_struct_tokens
 from mutascope.utils.config import as_str_dict, load_config
 from mutascope.utils.hashing import config_sha256, file_digests
@@ -207,6 +237,10 @@ from mutascope.utils.tracking import (
     code_version,
     log_run,
 )
+
+if TYPE_CHECKING:
+    from mutascope.scoring.masked_lm import MaskedLMScorer
+    from mutascope.scoring.onnx_esm2 import OnnxEsm2Scorer
 
 app = typer.Typer(
     name="mutascope",
@@ -2197,7 +2231,7 @@ def train_publish(
             private=bool(spec.private),
             message=f"Publish final ridge models (mutascope {__version__})",
             delete_patterns=["model/*", "results/*", "config/*"],
-        )
+        ).url
     except PublishError as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -2574,7 +2608,7 @@ def score_zero_shot(
     logged = [
         c
         for c in LogProbCache(cache_dir).computations()
-        if c["model_id"] == str(cfg.model.hf_id)
+        if c["model_id"] == cache_model_id(str(cfg.model.hf_id), cfg.model.get("file"))
         and c["revision"] == str(cfg.model.revision)
         and c["method"] == ("wt" if fast else "masked")
     ]
@@ -3814,3 +3848,496 @@ def export_schema(
     for name, schema in json_schemas().items():
         (out_dir / name).write_text(json.dumps(schema, indent=2) + "\n")
     typer.echo(f"{len(json_schemas())} schemas (format {SCHEMA_VERSION}) -> {out_dir}")
+
+
+onnx_app = typer.Typer(
+    help="Export ESM-2 to ONNX for CPU serving, and check it (ADR 0029).", no_args_is_help=True
+)
+app.add_typer(onnx_app, name="onnx")
+
+
+def _model_config(config_dir: Path, name: str) -> dict[str, object]:
+    """``conf/model/<name>.yaml``, resolved, as a plain mapping."""
+    model = load_config(config_dir, [f"model={name}"]).model
+    return as_str_dict(OmegaConf.to_container(model, resolve=True), "model")
+
+
+def _export_scorer(
+    cfg: DictConfig, config_dir: Path, source: str, precision: str, threads: int | None
+) -> "OnnxEsm2Scorer":
+    """An ONNX scorer over ``onnx.export_dir``'s files of one exported model, without a cache.
+
+    Its batching and window are the PyTorch config's, as in the ONNX scorers' configs.
+    """
+    from mutascope.scoring.onnx_esm2 import OnnxEsm2Scorer, OnnxEsm2Settings, make_session
+
+    root = Path(str(cfg.onnx.export_dir))
+    file, tokenizer_file = export_paths(source, precision)
+    torch_cfg = _model_config(config_dir, source)
+    window = torch_cfg["window_tokens"]
+    settings = OnnxEsm2Settings(
+        name=f"{source}_{precision}",
+        hf_id=f"local:{root}",
+        revision="local",
+        batch_size=int(str(torch_cfg["batch_size"])),
+        window_tokens=None if window is None else int(str(window)),
+        file=file,
+        tokenizer_file=tokenizer_file,
+        threads=threads,
+    )
+    return OnnxEsm2Scorer(
+        settings=settings,
+        session=make_session(root / file, threads),
+        tokenizer=Tokenizer.from_file(str(root / tokenizer_file)),
+    )
+
+
+def _targets(reference: Path) -> dict[str, str]:
+    """Assay id -> target sequence, from the reference CSV."""
+    table = pd.read_csv(reference)
+    return dict(zip(table["DMS_id"].astype(str), table["target_seq"].astype(str), strict=True))
+
+
+def _tokenizer_mismatches(ours: Tokenizer, theirs: Any, sequences: list[str]) -> list[int]:
+    """Indices of ``sequences`` that ``tokenizer.json`` and transformers tokenize differently."""
+    return tokenizer_mismatches(
+        lambda s: ours.encode(s).ids,
+        lambda s: [int(i) for i in theirs(s)["input_ids"]],
+        sequences,
+    )
+
+
+@onnx_app.command("export")
+def onnx_export(
+    reference: Reference, config_dir: ConfigDir = Path("conf"), overrides: Overrides = None
+) -> None:
+    """Export every model of ``onnx.models`` to fp32 and int8 ONNX, with a ``tokenizer.json``.
+
+    The pinned checkpoint is downloaded as a local snapshot; optimum exports it in the
+    ``onnx.exporter.project`` environment; ONNX Runtime quantizes the graph with the recipe in
+    ``onnx.quantization``. The tokenizer must give transformers' ids on random sequences and on
+    the parity targets, or nothing is written. Each model directory is replaced whole.
+    """
+    from huggingface_hub import (
+        snapshot_download,  # pyright: ignore[reportUnknownVariableType]
+    )
+    from transformers import AutoTokenizer
+
+    cfg = load_config(config_dir, overrides)
+    spec = cfg.onnx
+    recipe = QuantRecipe.from_config(
+        as_str_dict(OmegaConf.to_container(spec.quantization, resolve=True), "onnx.quantization")
+    )
+    targets = _targets(reference)
+    check = spec.tokenizer_check
+    rng = seed_all(int(check.seed))
+    lengths: list[int] = rng.integers(1, int(check.max_length) + 1, int(check.sequences)).tolist()
+    sequences = [random_sequence(n, rng) for n in lengths]
+    sequences += [targets[str(a)] for a in spec.parity.assays]
+    from onnxruntime import (  # pyright: ignore[reportMissingTypeStubs]
+        __version__ as onnxruntime_version,  # pyright: ignore[reportUnknownVariableType]
+    )
+
+    for name in [str(m) for m in spec.models]:
+        source = _model_config(config_dir, name)
+        hf_id, revision = str(source["hf_id"]), str(source["revision"])
+        snapshot = Path(
+            snapshot_download(
+                hf_id,
+                revision=revision,
+                allow_patterns=["*.json", "vocab.txt", "model.safetensors"],
+            )
+        )
+        model_dir = Path(str(spec.export_dir)) / name
+        tmp = fresh_tmp_dir(model_dir)
+        try:
+            versions = run_optimum(
+                Path(str(spec.exporter.project)),
+                snapshot,
+                tmp / "optimum",
+                task=str(spec.exporter.task),
+                opset=int(spec.exporter.opset),
+            )
+            tokenizer = esm_tokenizer((snapshot / "vocab.txt").read_text().splitlines())
+            hf_tokenizer: Any = cast(Any, AutoTokenizer).from_pretrained(str(snapshot))
+            bad = _tokenizer_mismatches(tokenizer, hf_tokenizer, sequences)
+            if bad:
+                raise OnnxExportError(
+                    f"tokenizer.json differs from transformers' on {len(bad)} of "
+                    f"{len(sequences)} sequences"
+                )
+            place_export(tmp / "optimum", tmp, tokenizer)
+            shutil.rmtree(tmp / "optimum")
+            quantize_int8(tmp / "fp32" / MODEL_FILE, tmp / "int8" / MODEL_FILE, recipe)
+            ExportRecord(
+                model=name,
+                source_hf_id=hf_id,
+                source_revision=revision,
+                task=str(spec.exporter.task),
+                opset=int(spec.exporter.opset),
+                quantization=asdict(recipe),
+                export_environment=versions,
+                onnxruntime=str(onnxruntime_version),  # pyright: ignore[reportUnknownArgumentType]
+                sha256=model_files(tmp),
+            ).write(tmp / RECORD_FILE)
+        except (OnnxExportError, subprocess.CalledProcessError) as exc:
+            shutil.rmtree(tmp, ignore_errors=True)
+            typer.echo(f"error: {name}: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+        replace_dir(tmp, model_dir)
+        sizes = {
+            p: (model_dir.parent / export_paths(name, p)[0]).stat().st_size for p in PRECISIONS
+        }
+        typer.echo(
+            f"{name}: fp32 {sizes['fp32'] / 1e6:.1f} MB, int8 {sizes['int8'] / 1e6:.1f} MB, "
+            f"tokenizer checked on {len(sequences)} sequences -> {model_dir}"
+        )
+
+
+@onnx_app.command("check-parity")
+def onnx_check_parity(
+    reference: Reference, config_dir: ConfigDir = Path("conf"), overrides: Overrides = None
+) -> None:
+    """Check 1 (ADR 0029): the exported graphs against the PyTorch model on the parity targets.
+
+    Logits: every token and vocabulary entry of an unmasked pass and of
+    ``onnx.parity.masked_positions`` masked passes, against PyTorch on the CPU; fp32 must be
+    within ``onnx.parity.logits_atol`` everywhere (exit 1 otherwise), int8 is reported.
+    Landscapes: fast and precise, against PyTorch on ``scoring.device`` (the device the
+    published landscapes were computed on), as Spearman and largest difference. Writes
+    ``logit_parity.parquet`` and ``landscape_parity.parquet`` to ``onnx.results_dir``.
+    """
+    import torch
+
+    cfg = load_config(config_dir, overrides)
+    spec = cfg.onnx
+    targets = _targets(reference)
+    atol = float(spec.parity.logits_atol)
+    logit_rows: list[dict[str, object]] = []
+    landscape_rows: list[dict[str, object]] = []
+    for name in [str(m) for m in spec.models]:
+        source = _model_config(config_dir, name)
+        on_cpu = cast("MaskedLMScorer", build_scorer(source, device="cpu", cache_dir=None))
+        on_device = build_scorer(source, device=str(cfg.scoring.device), cache_dir=None)
+        reference_landscapes = {
+            (assay, fast): on_device.landscape(targets[assay], fast=fast)
+            for assay in [str(a) for a in spec.parity.assays]
+            for fast in (True, False)
+        }
+        for precision in PRECISIONS:
+            scorer = _export_scorer(cfg, config_dir, name, precision, threads=None)
+            for assay in [str(a) for a in spec.parity.assays]:
+                seq = targets[assay]
+                tokens = scorer.encode(seq, None)
+                inputs = parity_inputs(tokens, scorer.mask_id, int(spec.parity.masked_positions))
+                for kind, ids in inputs.items():
+                    with torch.inference_mode():
+                        expected = on_cpu.forward(torch.tensor(ids)).numpy()
+                    diff = max_abs_diff(scorer.forward(ids), expected)
+                    logit_rows.append(
+                        {
+                            "model": name,
+                            "precision": precision,
+                            "assay_id": assay,
+                            "length": len(seq),
+                            "input": kind,
+                            "rows": len(ids),
+                            "max_abs_diff": diff,
+                            "passed": diff <= atol,
+                        }
+                    )
+                for fast in (True, False):
+                    rho, diff = landscape_agreement(
+                        reference_landscapes[assay, fast], scorer.landscape(seq, fast=fast), seq
+                    )
+                    landscape_rows.append(
+                        {
+                            "model": name,
+                            "precision": precision,
+                            "assay_id": assay,
+                            "length": len(seq),
+                            "method": "wt" if fast else "masked",
+                            "spearman": rho,
+                            "max_abs_diff": diff,
+                        }
+                    )
+    out_dir = Path(str(spec.results_dir))
+    logits = write_table(
+        pd.DataFrame.from_records(logit_rows), LogitParitySchema, out_dir / "logit_parity.parquet"
+    )
+    landscapes = write_table(
+        pd.DataFrame.from_records(landscape_rows),
+        LandscapeParitySchema,
+        out_dir / "landscape_parity.parquet",
+    )
+    logit_table = pd.read_parquet(logits)
+    landscape_table = pd.read_parquet(landscapes)
+    metrics: dict[str, float] = {}
+    for (name, precision), rows in logit_table.groupby(["model", "precision"], sort=True):
+        worst = float(rows["max_abs_diff"].max())
+        metrics[f"logits_max_abs_diff/{name}_{precision}"] = worst
+        typer.echo(f"{name} {precision}: logits max |diff| {worst:.2e} (atol {atol:.0e})")
+    for (name, precision, method), rows in landscape_table.groupby(
+        ["model", "precision", "method"], sort=True
+    ):
+        low = float(rows["spearman"].min())
+        metrics[f"landscape_min_spearman/{name}_{precision}_{method}"] = low
+        typer.echo(
+            f"{name} {precision} {method}: landscape Spearman min {low:.5f}, "
+            f"max |diff| {float(rows['max_abs_diff'].max()):.3f} nats"
+        )
+    typer.echo(f"results: {logits}, {landscapes}")
+    failing = logit_table[(logit_table["precision"] == "fp32") & ~logit_table["passed"]]
+    _log_run(
+        cfg,
+        "onnx-parity",
+        ", ".join(str(m) for m in spec.models),
+        {"onnx.parity.logits_atol": atol, "onnx.parity.assays": list(spec.parity.assays)},
+        metrics,
+        [logits, landscapes],
+        {"kind": "onnx", "passed": str(failing.empty)},
+    )
+    if not failing.empty:
+        typer.echo(f"error: fp32 logits beyond {atol:.0e} in {len(failing)} checks", err=True)
+        raise typer.Exit(code=1)
+
+
+@onnx_app.command("check-scores")
+def onnx_check_scores(
+    scores_dir: Annotated[
+        Path,
+        typer.Option(
+            help="Score sets of `mutascope score zero-shot` (<label>/).",
+            exists=True,
+            file_okay=False,
+        ),
+    ],
+    variants_dir: Annotated[
+        Path, typer.Option(help="Processed variant partitions.", exists=True, file_okay=False)
+    ],
+    reference: Reference,
+    fast: Annotated[
+        bool, typer.Option("--fast", help="Compare the wild-type-marginal score sets.")
+    ] = False,
+    config_dir: ConfigDir = Path("conf"),
+    overrides: Overrides = None,
+) -> None:
+    """Check 2 (ADR 0029): every ONNX scorer's scores (``onnx.scorers``) against its PyTorch
+    source's.
+
+    The model gate's two checks (ADR 0010) with our PyTorch score set in place of ProteinGym's:
+    per-assay Spearman of the two score sets at least ``onnx.scores.min_assay_spearman`` in
+    every assay, and aggregate Spearman against ``DMS_score`` within
+    ``onnx.scores.aggregate_tolerance``. Writes ``score_parity_<label>.parquet`` to
+    ``onnx.results_dir``; exits 1 if a model fails.
+    """
+    cfg = load_config(config_dir, overrides)
+    spec = cfg.onnx
+    thresholds = GateThresholds(
+        float(spec.scores.min_assay_spearman), float(spec.scores.aggregate_tolerance)
+    )
+    table = pd.read_csv(reference)
+    out_dir = Path(str(spec.results_dir))
+    failed: list[str] = []
+    metrics: dict[str, float] = {}
+    paths: list[Path] = []
+    for name in [str(m) for m in spec.scorers]:
+        scorer_cfg = _model_config(config_dir, name)
+        label = run_label(name, fast=fast)
+        source_label = run_label(str(scorer_cfg["source_model"]), fast=fast)
+        try:
+            ours = load_scores(scores_dir / label)
+            theirs = with_labels(load_scores(scores_dir / source_label), variants_dir)
+            joined = join_scores(ours, theirs.rename(columns={"score": "pytorch"}), "pytorch")
+        except (ValueError, duckdb.Error) as exc:
+            typer.echo(f"error: {label}: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+        gate = model_gate(joined, table, thresholds)
+        path = write_table(
+            gate.per_assay, AgreementSchema, out_dir / f"score_parity_{label}.parquet"
+        )
+        paths.append(path)
+        low = gate.per_assay.sort_values("spearman").iloc[0]
+        typer.echo(
+            f"{label} vs {source_label}: {len(gate.per_assay)} assays, per-assay Spearman min "
+            f"{low['spearman']:.4f} ({low['assay_id']}), {len(gate.failing)} below "
+            f"{thresholds.min_assay_spearman}; aggregate {gate.ours:.4f} vs {gate.theirs:.4f} "
+            f"({gate.aggregate_delta:+.4f}) -> {'PASS' if gate.passed else 'FAIL'}"
+        )
+        metrics |= {
+            f"min_assay_spearman/{label}": float(low["spearman"]),
+            f"assays_below/{label}": float(len(gate.failing)),
+            f"aggregate_delta/{label}": gate.aggregate_delta,
+        }
+        if not gate.passed:
+            failed.append(label)
+    _log_run(
+        cfg,
+        "onnx-scores",
+        ", ".join(str(m) for m in spec.scorers),
+        {
+            "method": "wt" if fast else "masked",
+            "onnx.scores.min_assay_spearman": thresholds.min_assay_spearman,
+            "onnx.scores.aggregate_tolerance": thresholds.aggregate_tolerance,
+        },
+        metrics,
+        paths,
+        {"kind": "onnx", "passed": str(not failed)},
+    )
+    if failed:
+        typer.echo(f"error: {failed} disagree with PyTorch", err=True)
+        raise typer.Exit(code=1)
+
+
+@onnx_app.command("latency")
+def onnx_latency(config_dir: ConfigDir = Path("conf"), overrides: Overrides = None) -> None:
+    """CPU wall time of ``landscape()`` with ``onnx.latency.threads`` threads (ADR 0029).
+
+    Every exported model at both precisions, on one random sequence per length (the same
+    sequences for every model). Fast mode: ``warmup`` untimed calls, then ``repeats.fast``
+    timed ones. Precise mode follows at the same length (the session is warm), with
+    ``repeats.precise`` timed calls. Writes ``latency.parquet`` to ``onnx.results_dir``.
+    """
+    cfg = load_config(config_dir, overrides)
+    spec = cfg.onnx.latency
+    threads = int(spec.threads)
+    rng = seed_all(int(spec.seed))
+    sequences = {int(n): random_sequence(int(n), rng) for n in spec.lengths}
+    rows: list[dict[str, object]] = []
+    for name in [str(m) for m in cfg.onnx.models]:
+        for precision in PRECISIONS:
+            scorer = _export_scorer(cfg, config_dir, name, precision, threads=threads)
+            for length, seq in sequences.items():
+                timings = {
+                    "fast": time_calls(
+                        lambda: scorer.landscape(seq, fast=True),  # noqa: B023 — called now
+                        warmup=int(spec.warmup),
+                        repeats=int(spec.repeats.fast),
+                    ),
+                    "precise": time_calls(
+                        lambda: scorer.landscape(seq),  # noqa: B023 — called now
+                        warmup=0,
+                        repeats=int(spec.repeats.precise),
+                    ),
+                }
+                for mode, seconds in timings.items():
+                    rows.extend(
+                        {
+                            "model": name,
+                            "precision": precision,
+                            "threads": threads,
+                            "length": length,
+                            "mode": mode,
+                            "repeat": i,
+                            "seconds": s,
+                        }
+                        for i, s in enumerate(seconds)
+                    )
+                    typer.echo(
+                        f"{name} {precision} L={length} {mode}: median "
+                        f"{float(np.median(seconds)):.3f} s ({len(seconds)} calls)"
+                    )
+    path = write_table(
+        pd.DataFrame.from_records(rows),
+        LatencySchema,
+        Path(str(cfg.onnx.results_dir)) / "latency.parquet",
+    )
+    typer.echo(f"results: {path}")
+    medians = (
+        pd.read_parquet(path)
+        .groupby(["model", "precision", "length", "mode"], as_index=False)["seconds"]
+        .median()
+    )
+    _log_run(
+        cfg,
+        "onnx-latency",
+        ", ".join(str(m) for m in cfg.onnx.models),
+        {"threads": threads, "lengths": list(sequences), "machine": platform.platform()},
+        {
+            f"median_seconds/{r.model}_{r.precision}_{r.mode}_L{r.length}": float(r.seconds)
+            for r in medians.itertuples(index=False)
+        },
+        [path],
+        {"kind": "onnx"},
+    )
+
+
+@onnx_app.command("publish")
+def onnx_publish(
+    results_dir: Annotated[
+        Path,
+        typer.Option(help="Results root (zero_shot_<label>_single*.parquet).", file_okay=False),
+    ] = Path("results"),
+    push: Annotated[
+        bool,
+        typer.Option("--push", help="Upload to onnx.publish.repo_id. Without it, only stage."),
+    ] = False,
+    config_dir: ConfigDir = Path("conf"),
+    overrides: Overrides = None,
+) -> None:
+    """Stage the ONNX model repo, and optionally push it as one commit (ADR 0029).
+
+    The repo holds every exported model's directory as written by ``onnx export``, the check,
+    latency and fast-mode benchmark tables of the ONNX scorers (with their paired comparisons
+    against PyTorch), the configs, and the model card. Pin the printed commit as
+    ``onnx.publish.revision``.
+    """
+    cfg = load_config(config_dir, overrides)
+    spec = cfg.onnx
+    export_dir = Path(str(spec.export_dir))
+    files: dict[str, Path] = {}
+    for name in [str(m) for m in spec.models]:
+        for path in sorted((export_dir / name).rglob("*")):
+            if path.is_file():
+                files[path.relative_to(export_dir).as_posix()] = path
+    onnx_results = Path(str(spec.results_dir))
+    for path in sorted(onnx_results.glob("*.parquet")):
+        files[f"results/{path.name}"] = path
+    labels = [run_label(str(m), fast=True) for m in spec.scorers]
+    for label in labels:
+        for suffix in ("single", "single_summary"):
+            name = f"zero_shot_{label}_{suffix}.parquet"
+            files[f"results/{name}"] = results_dir / name
+    comparisons = ComparisonSchema.validate(
+        pd.read_parquet(results_dir / "zero_shot" / "comparisons.parquet")
+    )
+    ours = comparisons[comparisons["model_a"].isin(labels)]
+    stage = Path(str(spec.publish.stage_dir))
+    comparison_copy = stage.with_name(stage.name + ".comparisons.parquet")
+    write_table(ours.reset_index(drop=True), ComparisonSchema, comparison_copy)
+    files["results/comparisons.parquet"] = comparison_copy
+    files["config/onnx.yaml"] = config_dir / "onnx" / "default.yaml"
+    for name in [*map(str, spec.models), *map(str, spec.scorers)]:
+        files[f"config/model/{name}.yaml"] = config_dir / "model" / f"{name}.yaml"
+    try:
+        staged = stage_files(
+            files,
+            card=Path(str(spec.publish.card)),
+            card_metadata=as_str_dict(
+                OmegaConf.to_container(spec.publish.card_metadata, resolve=True), "card_metadata"
+            ),
+            out_dir=stage,
+        )
+    except PublishError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    finally:
+        comparison_copy.unlink(missing_ok=True)
+    typer.echo(f"staged {len(files)} files -> {staged}")
+    if not push:
+        typer.echo("not pushed (pass --push to upload)")
+        return
+    try:
+        pushed = push_folder(
+            staged,
+            str(spec.publish.repo_id),
+            repo_type="model",
+            private=bool(spec.publish.private),
+            message=f"Publish ESM-2 ONNX models (mutascope {__version__})",
+            delete_patterns=["esm2_*", "results/*", "config/*"],
+        )
+    except PublishError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"pushed -> {pushed.url}")
+    typer.echo(f"revision {pushed.oid}; pin it as onnx.publish.revision")
