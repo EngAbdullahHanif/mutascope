@@ -6,8 +6,9 @@ The defaults are the pins in ``conf/`` (a test fails if they drift apart): the w
 hash, never by branch, so a later push cannot change what a running API serves.
 """
 
+import tempfile
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -44,6 +45,24 @@ class Settings(BaseSettings):
 
     config_dir: Path = REPO_ROOT / "conf"
     """Hydra config root: the ONNX model configs name their files there."""
+
+    score_default_model: Literal["esm2_35m", "esm2_150m"] = "esm2_150m"
+    """``POST /v1/score`` without ``model``. ADR 0029's rule: 150M, unless its fast-mode p95 on
+    the Space exceeds 2 s at 1,000 residues; then 35M (set this, no code change)."""
+    precise_max_length: int = Field(default=600, ge=1, le=1022)
+    """Longest sequence a precise-mode job accepts: the masked marginal must stay under about
+    3 minutes on the Space (ADR 0029, section 6). Provisional until the Space is measured:
+    600 residues take 64 s on the M4 Pro at 2 threads, so the limit holds unless the Space is
+    more than 2.8x slower (ADR 0031)."""
+    job_queue_size: int = Field(default=4, ge=1)
+    """Precise-mode jobs that may wait behind the running one; one more is a 429."""
+    job_ttl_seconds: float = Field(default=3600, gt=0)
+    """How long a finished job (and its result) stays readable."""
+    score_cache_dir: Path = Path(tempfile.gettempdir()) / "mutascope-api-cache"
+    """diskcache directory of live landscapes (fast and precise)."""
+    score_cache_bytes: int = Field(default=256 * 2**20, ge=2**20)
+    """Size limit of that cache; least recently used entries are evicted. A 1,022-residue
+    landscape is 82 kB."""
 
     protein_cache_size: int = Field(default=32, ge=1)
     """Parsed protein files kept in memory (the largest is about 70k grid cells)."""

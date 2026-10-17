@@ -8,6 +8,8 @@ from fastapi import APIRouter, Depends, Query, Request
 
 from api.app import problems
 from api.app.bundle import Bundle
+from api.app.jobs import JobManager
+from api.app.live import LiveModel, LiveModelName
 from api.app.schemas import (
     ZERO_SHOT_KEYS,
     ZERO_SHOT_LABEL,
@@ -26,6 +28,8 @@ from api.app.schemas import (
     SupervisedLandscapeResponse,
     ZeroShotLandscapeResponse,
 )
+from api.app.score_cache import ScoreCache
+from api.app.settings import Settings
 from mutascope import __version__
 from mutascope.alphabet import AA_ORDER
 from mutascope.export.format import CalibrationScheme, Coded, ProteinFile, Quantized
@@ -38,6 +42,11 @@ class AppState:
 
     bundle: Bundle
     scorers: Mapping[str, Scorer]
+    live: Mapping[LiveModelName, LiveModel]
+    """The served models by request key (:mod:`api.app.live`)."""
+    score_cache: ScoreCache
+    jobs: JobManager
+    settings: Settings
 
 
 def get_state(request: Request) -> AppState:
@@ -50,12 +59,17 @@ def get_state(request: Request) -> AppState:
 State = Annotated[AppState, Depends(get_state)]
 
 
-def _version(state: AppState) -> ApiVersion:
+def api_version(bundle: Bundle) -> ApiVersion:
+    """The version stamp of every ``/v1`` response."""
     return ApiVersion(
         api_version=__version__,
-        bundle_revision=state.bundle.source.revision,
-        bundle=state.bundle.manifest.version,
+        bundle_revision=bundle.source.revision,
+        bundle=bundle.manifest.version,
     )
+
+
+def _version(state: AppState) -> ApiVersion:
+    return api_version(state.bundle)
 
 
 def decode(grid: Quantized) -> Grid:
@@ -108,6 +122,8 @@ async def ready(state: State) -> Ready:
         bundle_revision=state.bundle.source.revision,
         proteins=len(state.bundle.entries),
         models=sorted(state.scorers),
+        score_default_model=state.settings.score_default_model,
+        precise_max_length=state.settings.precise_max_length,
     )
 
 
