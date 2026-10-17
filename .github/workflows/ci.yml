@@ -54,6 +54,32 @@ jobs:
           name: coverage
           path: coverage.xml
 
+  # The frontend's API types are generated from the OpenAPI schema (make types) and committed;
+  # this fails when a response model changed without regenerating them.
+  types:
+    name: API types up to date
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          version: ${{ env.UV_VERSION }}
+      - run: uv sync --all-extras --locked
+      # pnpm's version comes from "packageManager" in web/package.json.
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        working-directory: web
+      - run: make types
+      - name: Committed types match the API
+        run: git diff --exit-code web/src/lib/api-types.ts
+
   pipeline:
     name: Nextflow smoke test (2 assays)
     needs: [lint, test]
