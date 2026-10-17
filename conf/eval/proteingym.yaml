@@ -36,6 +36,10 @@ comparisons:
   # The ensemble against each of its members, on the same 213 assays (ADR 0016).
   - [ensemble_esm2_650m_saprot_650m_af2, saprot_650m_af2]
   - [ensemble_esm2_650m_saprot_650m_af2, esm2_650m]
+  # The served int8 ONNX models against the PyTorch checkpoints they were exported from, fast
+  # mode (the wild-type marginal the API serves), all 217 assays (ADR 0029).
+  - [esm2_35m_int8_wt, esm2_35m_wt]
+  - [esm2_150m_int8_wt, esm2_150m_wt]
 
 # Score sets summarised again on the assays all of them have (`mutascope eval shared`, ADR 0016),
 # for figures that show them side by side: a structure-aware model's own summary covers 213
