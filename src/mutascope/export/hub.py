@@ -12,16 +12,20 @@ sorted, so staging the same data twice gives identical tables.
 
 import hashlib
 import json
+import re
 import shutil
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import duckdb
 import pandas as pd
 import pandera.pandas as pa
-from huggingface_hub import HfApi
+from huggingface_hub import (
+    HfApi,
+    hf_hub_download,  # pyright: ignore[reportUnknownVariableType]
+)
 from omegaconf import OmegaConf
 
 from mutascope import __version__
@@ -335,3 +339,103 @@ def push_folder(
         delete_patterns=list(delete_patterns),
     )
     return commit.commit_url
+
+
+@dataclass(frozen=True)
+class PushedRevision:
+    """The commit an upload made: its URL and hash (what later steps pin)."""
+
+    url: str
+    oid: str
+
+
+def push_bundle(
+    bundle_dir: Path,
+    repo_id: str,
+    *,
+    path_in_repo: str,
+    tag: str,
+    message: str,
+    token: str | None = None,
+) -> PushedRevision:
+    """Upload the website bundle into ``path_in_repo`` of an existing dataset repo as one
+    commit, replacing only what is under that folder, and tag the commit (ADR 0028).
+
+    Raises:
+        PublishError: The bundle changed since it was written, or ``tag`` already exists (a
+            tag names one bundle; a new bundle gets a new tag).
+    """
+    expected = (bundle_dir / CHECKSUMS_FILE).read_text()
+    if checksums(bundle_dir) != expected:
+        raise PublishError(f"{bundle_dir} changed since it was written; build it again")
+    api = HfApi(token=token)
+    refs = api.list_repo_refs(repo_id, repo_type="dataset")
+    if any(t.name == tag for t in refs.tags):
+        raise PublishError(f"tag {tag} already exists on {repo_id}; set a new export.publish.tag")
+    commit = api.upload_folder(
+        folder_path=bundle_dir,
+        repo_id=repo_id,
+        repo_type="dataset",
+        path_in_repo=path_in_repo,
+        commit_message=message,
+        delete_patterns=["*"],
+    )
+    api.create_tag(repo_id, tag=tag, revision=commit.oid, repo_type="dataset", tag_message=message)
+    return PushedRevision(url=commit.commit_url, oid=commit.oid)
+
+
+class Downloader(Protocol):
+    """``huggingface_hub.hf_hub_download``'s keyword interface, as far as it is used here."""
+
+    def __call__(self, *, repo_id: str, filename: str, repo_type: str, revision: str) -> str: ...
+
+
+def _hub_download(*, repo_id: str, filename: str, repo_type: str, revision: str) -> str:
+    return hf_hub_download(
+        repo_id=repo_id, filename=filename, repo_type=repo_type, revision=revision
+    )
+
+
+def fetch_pinned(
+    repo_id: str,
+    *,
+    repo_type: str,
+    revision: str,
+    filenames: Sequence[str],
+    download: Downloader = _hub_download,
+) -> dict[str, Path]:
+    """Download files of one pinned Hub revision and check them against its ``SHA256SUMS``.
+
+    The revision must be a full commit hash, so a later push cannot change what is read. The
+    checksums file is the one published in that same commit by :func:`checksums`.
+
+    Returns:
+        Published path -> local file (in the Hugging Face cache).
+
+    Raises:
+        PublishError: The revision is not a commit hash, a file is not listed in the
+            checksums, or its sha256 differs.
+    """
+    if not re.fullmatch(r"[0-9a-f]{40}", revision):
+        raise PublishError(f"revision {revision!r} is not a full commit hash")
+
+    def get(filename: str) -> Path:
+        return Path(
+            download(repo_id=repo_id, filename=filename, repo_type=repo_type, revision=revision)
+        )
+
+    listed: dict[str, str] = {}
+    for line in get(CHECKSUMS_FILE).read_text().splitlines():
+        digest, path = line.split(maxsplit=1)
+        listed[path] = digest
+    out: dict[str, Path] = {}
+    for filename in filenames:
+        if filename not in listed:
+            raise PublishError(f"{repo_id}@{revision[:7]}: {filename} is not in {CHECKSUMS_FILE}")
+        path = get(filename)
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        if digest != listed[filename]:
+            raise PublishError(f"{repo_id}@{revision[:7]}: {filename} sha256 {digest} differs")
+        out[filename] = path
+        log.info("hub_file_verified", repo_id=repo_id, revision=revision[:7], file=filename)
+    return out
