@@ -28,7 +28,8 @@ dependencies = [
 
 [project.optional-dependencies]
 api = [
-    "fastapi>=0.115",
+    "diskcache>=5.6.3",
+    "fastapi>=0.143",
     "pydantic-settings>=2.4",
     "uvicorn[standard]>=0.30",
 ]
@@ -61,6 +62,7 @@ dev = [
     "pytest-cov>=5.0",
     "pytest-randomly>=5.0.0",
     "ruff>=0.6",
+    "schemathesis>=4.31.1",
 ]
 
 [build-system]
