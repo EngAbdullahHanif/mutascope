@@ -9,7 +9,7 @@ presents it as an interactive mutation landscape (heatmap + 3D structure) with a
 
 - **Data:** ProteinGym DMS substitution benchmark (single mutants only in v1).
 - **Zero-shot models:** ESM-2 (35M / 150M / 650M), SaProt 650M (AF2, structure-aware via Foldseek 3Di tokens). Stretch: ESM-1v, ESM C 300M.
-- **Supervised models:** per-assay models following the ProteinGym supervised protocol (random / modulo / contiguous 5-fold CV): augmented ridge → LightGBM → MLP head. Uncertainty via fold ensembles + conformal prediction (MAPIE).
+- **Supervised models:** per-assay models following the ProteinGym supervised protocol (random / modulo / contiguous 5-fold CV): augmented ridge → LightGBM → MLP head. Uncertainty via fold ensembles + CV+ conformal intervals (implemented directly; ADR 0024).
 - **Serving:** FastAPI backend (ONNX-quantized ESM-2 35M/150M for live scoring), Next.js frontend; precomputed landscapes for all ProteinGym proteins served statically.
 - **Pipeline:** Nextflow DSL2 orchestrating the `mutascope` Python CLI.
 - **Tracking:** MLflow, local SQLite store in `mlruns/` (no server, no account).
@@ -288,13 +288,19 @@ lint → typecheck → tests (+ coverage) → Nextflow `-profile local,test` smo
 
 ## Current phase
 
-Weeks 5–6: supervised models (Phase 3). Phase 1 delivered a pinned, checksum-verified ProteinGym
+Week 7: API, Docker, CI/CD (Phase 4). Phase 1 delivered a pinned, checksum-verified ProteinGym
 v1.3 pipeline producing 696,311 validated single mutants across 217 assays, structure features and
 3Di for 213 of them, an EDA notebook and a data card (ADR 0009). Phase 2 delivered zero-shot scores
-at every measured position from ESM-2 35M / 150M / 650M (217 assays, masked and wild-type marginal),
-SaProt 650M and the ESM-2 650M + SaProt ensemble (213 assays), the benchmark harness with paired
-comparisons and figures, and passing harness and model gates (ADR 0017). Full masked landscapes
-at every residue for all four models, plus full-target landscapes where the benchmark region is
-partial, landed after the close (ADR 0018); the Phase 4 export reads them from the cache.
+from ESM-2 35M / 150M / 650M (217 assays), SaProt 650M and the ESM-2 650M + SaProt ensemble (213),
+the benchmark harness with paired comparisons, passing harness and model gates (ADR 0017), and full
+masked landscapes at every residue for all four models in the cache (ADR 0018). Phase 3 delivered
+the feature store, the supervised ladder (ridge, LightGBM, MLP) under random / modulo / contiguous
+CV against zero-shot on the same folds, CV+ intervals, and the deployed model: ridge `seq_struct`
+on the 198 assays with a structure and ≥ 300 variants, 19 × L landscapes with 80% / 90% intervals
+in `data/processed/supervised_landscapes/`, and a manifest naming each assay's default model
+(ADR 0025, 0026). Open from Phase 3: the Hub push (`train publish --push`, `data publish
+--landscapes --push`, staged in `build/`, needs `hf auth login`); the Phase 3 commands are not
+Nextflow processes. The Phase 4 export reads supervised landscapes from the bundle and zero-shot
+ones from the cache.
 Update this section at the start of each phase.
 The per-phase task checklist lives in `docs/ROADMAP.md`; mark items `[x]` there as they land.

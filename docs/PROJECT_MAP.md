@@ -487,3 +487,42 @@ A map of what exists after steps 9–18, by the question it answers.
 | What runs in the pipeline, and what by hand? | `pipeline/main.nf` runs `SCORE_ZERO_SHOT` and `BENCHMARK_ZERO_SHOT` per model and method. `score ensemble`, `eval compare`, `eval shared`, `eval figures` and the model gate are run by hand |
 | Where are the full landscapes? | The cache, one entry per model, sequence, structure tokens and region; `results/data/landscape_coverage.parquet` lists them; ADR 0018 |
 | What is not in git? | `data/cache/logprobs/` (cache and checkpoint), `data/processed/zero_shot/` (score sets), `mlruns/` (MLflow store) |
+
+## Step 26 — Phase 3 close-out (Phase 3, 2026-10-17)
+
+Steps 19–25 (Phase 3's tasks) are not in this map yet; their files are in build-log entries
+19–25 and ADRs 0019–0025.
+
+- **What this step did:** reviewed the Phase 3 checklist against the repository, regenerated the
+  headline numbers from `results/supervised/`, recorded what is open or weak, stated the
+  deployment decision, and pointed the project at Phase 4 (ADR 0026). No code changed and no
+  number in `results/` changed.
+- **Files created or modified:**
+
+| Path | What it does | Why it exists |
+|---|---|---|
+| `docs/adr/0026-phase-3-close.md` | Headline table (4 rungs × 3 splits, own CIs and paired differences against zero-shot), per function type, rung comparisons, deployment decision, release checks, open and weak items, what Phase 4 inherits | One-page phase summary, as ADR 0017 was for Phase 2 |
+| `CLAUDE.md` | Current phase → Phase 4, with what Phase 3 delivered and what is open; uncertainty line says CV+ instead of MAPIE | The section is updated at the start of each phase; the MAPIE line was out of date since ADR 0024 |
+| `docs/ROADMAP.md` | Phase 3 close note; the publish item moved to Phase 4's export; export reads the supervised manifest; Phase 3 commands as Nextflow processes added to Phase 4 | The open items need an owner in the next phase |
+| `README.md` | Status line → Phase 4, links to ADR 0017 and 0026 | The line named Phase 3 |
+| `docs/BUILD_LOG.md`, `docs/PROJECT_MAP.md` | Entry 26; this step | Journal and index |
+
+- **CLI commands added:** none.
+- **Outputs:** none. The audit read `results/supervised/*.parquet`, the MLflow store and the CI
+  history, and reran `make lint test`.
+
+## Where Phase 3 left things
+
+A map of what exists after steps 19–26, by the question it answers.
+
+| Question | Where to look |
+|---|---|
+| Which features does a variant have? | `src/mutascope/features/` (`store.py`, `sets.py`, `matrix.py`, `embeddings.py`), `conf/features/default.yaml`; ADR 0020, 0021 (`site_onehot`) |
+| How is a supervised model cross-validated? | `src/mutascope/models/cv.py`, `utils/parallel.py`, `conf/train/default.yaml`; ADR 0019, 0022 |
+| Which models are there? | `src/mutascope/models/` (`ridge.py`, `lgbm.py`, `pca.py`, `mlp.py`, `baselines.py`, `registry.py`); ADR 0021–0023 |
+| How do we know nothing leaks? | Leakage tests in `tests/models/`, the permutation canary (`models/canary.py`, `results/supervised/canary_*.parquet`), the leaderboard sanity range (`leaderboard.parquet`); ADR 0019, 0021 |
+| Where are the numbers? | `results/supervised/final_{summary,comparisons,assay_differences,size_comparisons}.parquet`, `supervised_{summary,comparisons}.parquet`, `cv_*.parquet`; summary in ADR 0026 |
+| How are the intervals made and judged? | `src/mutascope/models/conformal.py`, `models/uncertainty.py`, `eval/uncertainty.py`, `results/supervised/uncertainty_*.parquet`; ADR 0024 |
+| What is deployed, and is it right? | `src/mutascope/models/final.py`, `eval/final.py`, `results/supervised/final_{checks,manifest}.parquet`, `docs/MODEL_CARD.md`; the bundle in `data/processed/supervised_landscapes/`; ADR 0025 |
+| What runs in the pipeline, and what by hand? | `pipeline/main.nf` stops at the zero-shot landscapes. `data folds`, `features embed|build` and every `train` command are run by hand |
+| What is not in git? | `data/processed/{features,calibration,supervised_landscapes}/`, the embedding cache, `build/hf_model`, `build/hf_dataset` (staged Hub repos), `mlruns/` |

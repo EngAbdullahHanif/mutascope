@@ -2075,3 +2075,100 @@ are staged for the Hugging Face Hub with their cards. The reasoning is in ADR 00
   own process; 17 new (`test_final.py` 10, `eval/test_final.py` 3, `test_cli_final.py` 2,
   `test_hub.py` +2). MLflow runs `final-table supervised` and `final ridge seq_struct` in
   `supervised`.
+
+---
+
+## Entry 26 — Phase 3 close-out (2026-10-17)
+
+**Plain-language summary.** Phase 3 is closed, with one item left open on purpose: the Phase 3
+model and landscapes are not on the Hugging Face Hub yet, because this machine has no token. The phase asked whether training on
+an assay's own measurements beats the pretrained models that never see them, and the answer is
+yes in all three ways of splitting the data. How much depends on the question. When a position
+already has some measured mutations, the best supervised model gets about 0.30 more Spearman than
+the best zero-shot model. When the position has none, the gain is about 0.09 to 0.16. The deployed
+model is a plain ridge regression on rich features, not the fancier LightGBM or neural network.
+Those two win only when the position was seen in training, and the website mostly shows positions
+that were not. It is deployed only where it clearly pays: the 198 assays with a structure and at
+least 300 measurements. The other 19 show SaProt or ESM-2, labelled zero-shot. This task wrote no
+code. It checked every Phase 3 roadmap item against the repository, regenerated the headline
+numbers from the results files, wrote down what is open or weak in ADR 0026 and pointed the
+project at Phase 4.
+
+**The 3 most important design choices.**
+
+1. **Close the phase with the Hub item open, not ticked.** The done-when line ends with "model
+   cards on the HF Hub". The card exists and the bundles are staged and tested, but `hf auth
+   whoami` says "Not logged in", so nothing from Phase 3 was uploaded. The item stays unticked, is repeated as
+   the first Phase 4 export item, and CLAUDE.md names it.
+2. **One headline table with all four rungs, each against the comparator it can fairly face.**
+   The final table (ADR 0025) has no augmented ridge, but the done-when line asks for 4 rungs, so
+   ADR 0026 adds augmented ridge's row from `supervised_summary.parquet`. Every row keeps its own
+   CI on the first line and the paired difference on the second, with the assay count (217, 213 or
+   198). The rung-against-rung differences come from `supervised_comparisons.parquet`, never from
+   reading two CIs.
+3. **State the deployment decision as a rule, with the numbers that make it hold.** Ridge
+   `seq_struct` is not the best model on every split: the MLP (MSE) beats it by +0.026 under
+   random. The ADR says so and explains why that does not decide the deployment. The website
+   predicts at unmeasured positions (585,637 of the 716,726 unmeasured substitutions are at
+   positions with no measurement at all). There, LightGBM is below ridge (−0.011, −0.020) and the
+   MLP ties it (+0.001 [−0.005, +0.007]) or is below it (−0.011).
+
+**Problems encountered and how they were solved.**
+
+1. **CI on `main` was red for two merges, and no entry said so.** *Found:* `gh run list --branch
+   main` during the audit. The pushes after PR #24 (run 38906523981) and PR #25 (38945800654)
+   both failed on `tests/models/test_cv.py::test_parallel_assays_give_the_serial_table`. *Cause*
+   (from the fix, `e6592db`, in PR #26): with `--jobs 1` the tasks ran in the main process, where
+   OpenBLAS on the Linux runner used every core. Multi-threaded OpenBLAS adds numbers in a
+   different order, and on an ill-conditioned ridge that moved pooled Spearman by up to 3.4e-3
+   against the single-threaded workers. macOS's Accelerate did not show it. *Fix:* the serial
+   path runs under `threadpoolctl`'s one-thread limit. *Verified:* in a linux/amd64 container,
+   serial vs parallel differed by 5.6e-4 at 4 threads and 1.5e-3 at 8, and by 0.0 with the cap.
+   CI on `main` has been green since the PR #26 merge (run 39013659351). The committed results are
+   unaffected. The ridge CV runs predate `--jobs` and ran serially on macOS. Every later run used
+   13 single-threaded workers (`train.jobs` = 13 in MLflow). `train final` reproduced
+   `cv_ridge_seq_struct.parquet` to 3.5e-7 with those workers.
+2. **ADR 0025 understated where supervision fails to help Binding.** *Found:* regenerating the
+   per-function-type table from `final_comparisons.parquet`. ADR 0025 names contiguous as Binding's
+   only interval that includes 0. Modulo includes it too: ridge `seq_struct` − SaProt +0.076
+   [−0.033, +0.172], 13 assays. *Fix:* ADR 0026 has the full 5 × 3 table and says both. ADR 0025
+   is left as accepted.
+3. **Hand-typed numbers were wrong in three places.** *Found:* by printing the headline table
+   from the parquet files with a script and comparing it with the draft. The draft of ADR 0026 had
+   −0.395 where the file rounds to −0.394 (one-hot ridge − ESM-2, contiguous, upper bound
+   −0.394500) and +0.044 where it rounds to +0.043 (LightGBM-PCA `seq_struct` − SaProt,
+   contiguous, lower bound). The same check found ADR 0021 giving augmented ridge − zero-shot under
+   contiguous as −0.006 where the file says −0.005483. *Fix:* the two draft values were corrected.
+   ADR 0021's slip is recorded in ADR 0026 (item 17) next to the ADR 0022 slip that entry 25
+   found. *Verified:* every value in ADR 0026's headline table matches the script's output.
+4. **The draft said the Phase 1 dataset was never pushed.** *Found:* the project map's step 8
+   says commit `54f6ef0` marked it published. *Cause:* "no token now" was read as "never
+   uploaded". The dataset repo is private, so an anonymous API call returns 401 and cannot tell
+   the two apart. *Fix:* ADR 0026 says the dataset repo was marked published, and that the
+   landscapes go to it as a new revision, which waits for a login.
+
+**Supporting details.**
+- *Headline table, per-function-type table, rung comparisons and deployment decision:* ADR 0026.
+  Values are from `results/supervised/final_{summary,comparisons}.parquet` and
+  `supervised_{summary,comparisons}.parquet`. Deployed ridge `seq_struct` (213 assays): 0.721 /
+  0.593 / 0.553 (random / modulo / contiguous), − SaProt +0.263 / +0.135 / +0.092, every interval
+  above 0.
+- *Release checks, reread from `final_checks.parquet`:* 198 assays, no NaN, no bad interval,
+  calibration refit difference 0, out-of-fold Spearman against `train cv` 0 / 3.5e-7 / 6.6e-8,
+  buried below exposed in 194 of 195 assays. The manifest gives `default_model` ridge 198,
+  SaProt 15, ESM-2 650M 4, and 1,379,989 landscape rows.
+- *Unchecked:* Hub publication (moved to Phase 4); LoRA and the leave-protein-out model
+  (stretch); carried from earlier phases, the `docker` profile and ESM-1v / ESM C.
+- *Weak (ADR 0026, items 4–17):* no Phase 3 command is a Nextflow process (now a Phase 4 item);
+  CI trains nothing real; Binding has 13 assays; the deployed model is not the best under random;
+  interval width does not track difficulty; the MLP has no intervals; measured-variant coverage
+  holds by construction; two targets have mostly imputed structure features (108,452 rows); SHAP
+  is on 3 assays; by-size bins use a plain mean; the project map lacks steps 19–25.
+- *Corrected in passing:* CLAUDE.md's summary said uncertainty used MAPIE. It now says CV+ is
+  implemented directly (ADR 0024).
+- *Tests:* `make lint` clean (ruff, format, pyright 0 errors). `make test`: 601 passed, 1
+  skipped, then 15 LightGBM tests passed in their own process. No code changed, so
+  `make test-slow` was not rerun.
+- *Docs changed:* ADR 0026, CLAUDE.md (current phase → Phase 4, MAPIE line), ROADMAP (close
+  note, publish item and Nextflow item in Phase 4, export reads the manifest), README (status
+  line), PROJECT_MAP (step 26).
