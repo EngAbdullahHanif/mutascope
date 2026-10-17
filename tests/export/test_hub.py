@@ -131,6 +131,7 @@ def test_push_needs_a_repo_id(
 @dataclass
 class FakeCommit:
     commit_url: str
+    oid: str = "abc"
 
 
 class FakeHfApi:
@@ -280,7 +281,7 @@ def test_stage_model_copies_the_bundle_and_pushes_a_model_repo(
         )
     FakeHfApi.calls = []
     monkeypatch.setattr(hub, "HfApi", FakeHfApi)
-    hub.push_folder(
+    pushed = hub.push_folder(
         staged,
         "me/model",
         repo_type="model",
@@ -288,6 +289,7 @@ def test_stage_model_copies_the_bundle_and_pushes_a_model_repo(
         message="m",
         delete_patterns=["model/*"],
     )
+    assert pushed.oid == "abc"
     calls = dict(FakeHfApi.calls)
     assert calls["create_repo"]["repo_type"] == "model"
     assert calls["upload_folder"]["delete_patterns"] == ["model/*"]
@@ -296,5 +298,11 @@ def test_stage_model_copies_the_bundle_and_pushes_a_model_repo(
 def test_published_revisions_are_pinned_commits() -> None:
     """Later steps read the published repos by commit (ADR 0026 addendum), never by branch."""
     cfg = load_config(Path("conf"))
-    for revision in (cfg.publish.revision, cfg.train.publish.revision, cfg.export.publish.revision):
+    pins = (
+        cfg.publish.revision,
+        cfg.train.publish.revision,
+        cfg.export.publish.revision,
+        cfg.onnx.publish.revision,
+    )
+    for revision in pins:
         assert re.fullmatch(r"[0-9a-f]{40}", str(revision)), revision

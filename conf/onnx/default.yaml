@@ -61,10 +61,12 @@ latency:
     precise: 1
   seed: 0
 # Publishing (`mutascope onnx publish`): one Hub model repo with both models' files, the results
-# tables and a model card. `revision` is the pushed commit, read by the ONNX scorers' configs.
+# tables and a model card. `revision` is the pushed commit, read by the ONNX scorers' configs:
+# 82e1528, pushed 2026-10-17 from build/hf_onnx (34 files, each matching SHA256SUMS on the
+# Hub), created private and made public after that check.
 publish:
   repo_id: engAbdullahHanif/mutascope-esm2-onnx
-  revision: null
+  revision: 82e15287c50f45f771cca75ac3786f0376ecabb2
   # New repos are created private, so the upload can be checked on the Hub first.
   private: true
   stage_dir: build/hf_onnx
