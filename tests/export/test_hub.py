@@ -296,5 +296,5 @@ def test_stage_model_copies_the_bundle_and_pushes_a_model_repo(
 def test_published_revisions_are_pinned_commits() -> None:
     """Later steps read the published repos by commit (ADR 0026 addendum), never by branch."""
     cfg = load_config(Path("conf"))
-    for revision in (cfg.publish.revision, cfg.train.publish.revision):
+    for revision in (cfg.publish.revision, cfg.train.publish.revision, cfg.export.publish.revision):
         assert re.fullmatch(r"[0-9a-f]{40}", str(revision)), revision

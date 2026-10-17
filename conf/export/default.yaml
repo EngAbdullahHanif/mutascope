@@ -55,8 +55,10 @@ budget:
   total_bytes: 40000000
 # Publishing (`mutascope export push`): into a folder of the dataset repo (publish.repo_id), as a
 # new commit that replaces only that folder, tagged. A tag names one bundle: a new bundle needs a
-# new tag. `revision` is the pushed commit, pinned for the API and the website.
+# new tag. `revision` is the pushed commit, pinned for the API and the website: bundle-v1.0.0,
+# built at 5c8d778 and pushed 2026-10-17 (public; 224 files matching build/bundle, the 14 files
+# outside bundle/ unchanged; checked through the Hub API without a token).
 publish:
   path_in_repo: bundle
   tag: bundle-v1.0.0
-  revision: null
+  revision: 3ae767217bb0a56b8f2e7c79c68b73119e308066
