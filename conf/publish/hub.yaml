@@ -4,6 +4,10 @@
 # Target dataset repo, "<user or org>/<name>"; used only with --push. Published (public) since
 # 2026-10-11 at https://huggingface.co/datasets/engAbdullahHanif/mutascope-proteingym-v1.3.
 repo_id: engAbdullahHanif/mutascope-proteingym-v1.3
+# The published commit later steps read (Phase 4 export, the API): the revision that added the
+# supervised landscapes (2026-10-17, ADR 0026 addendum), public and verified via the Hub API.
+# Read by revision, never by branch, so a later push cannot change what they serve.
+revision: 0b0fe65eb6a34bb0e0a8355f21e7d2d7e6a80fb0
 # New repos are created private, so the upload can be checked on the Hub before going public.
 # An existing repo's visibility is never changed by the upload.
 private: true
