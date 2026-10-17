@@ -207,7 +207,17 @@ Goal: a tested, observable service deployed automatically.
       (passed 2026-10-17: 882 / 882 landscapes complete, coverage table unchanged; ADR 0027).
       Supervised landscapes for the 198 eligible assays from `data/processed/supervised_landscapes`,
       chosen per assay by `default_model` in `results/supervised/final_manifest.parquet` (ADR 0025)
-- [ ] ESM-2 35M/150M → ONNX (`optimum`) → int8 dynamic quantization → onnxruntime CPU
+- [x] ESM-2 35M/150M → ONNX (`optimum`) → int8 dynamic quantization → onnxruntime CPU
+      (ADR 0029, `mutascope onnx ...`): optimum in its own env (`tools/onnx-export`; it needs
+      transformers < 4.58), `tokenizer.json` instead of transformers' tokenizer (it imports
+      torch), a torch-free `OnnxEsm2Scorer` on a shared `scoring.marginals` core. fp32 logits
+      within 1e-4 of PyTorch (max 9.0e-5). int8 fast mode: aggregate Spearman change −0.0005 /
+      −0.0006 (paired CIs include 0), but per-assay agreement < 0.99 on 3 (35M) / 1 (150M) of
+      217 assays, so int8 is rejected: **the API serves fp32 ONNX** (decided 2026-10-17, ADR 0029
+      section 6; 35M fp32 becomes the default if 150M's p95 on the Space exceeds 2 s at
+      1,000 residues). Latency at 2 threads in
+      `results/onnx/latency.parquet`; published to `engAbdullahHanif/mutascope-esm2-onnx`,
+      pinned as `onnx.publish.revision`
 
 ### FastAPI
 - [ ] Pydantic v2, pydantic-settings, models loaded in `lifespan`

@@ -1,0 +1,20 @@
+# ESM-2 35M as an ONNX graph with int8 weights (ADR 0029): `mutascope onnx export` of
+# conf/model/esm2_35m.yaml, served by the API on the CPU without PyTorch.
+name: esm2_35m_int8
+scorer: esm2_onnx
+# The ONNX model repo on the Hugging Face Hub, pinned to the published commit (onnx.publish).
+hf_id: ${onnx.publish.repo_id}
+revision: ${onnx.publish.revision}
+file: esm2_35m/int8/model.onnx
+tokenizer_file: esm2_35m/tokenizer.json
+# The PyTorch config it was exported from, and what the export did to it.
+source_model: esm2_35m
+precision: int8
+# Read the files from an export directory instead of the Hub (checks before a release; no
+# cache): model.local_dir=${onnx.export_dir}.
+local_dir: null
+# ONNX Runtime intra-op threads; null: one per core.
+threads: null
+# As conf/model/esm2_35m.yaml.
+batch_size: 16
+window_tokens: 1024

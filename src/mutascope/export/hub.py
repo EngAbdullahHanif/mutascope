@@ -237,12 +237,24 @@ def stage_model(
     """
     model_files = ("fits.parquet", "coefficients.parquet", "manifest.parquet", "version.json")
     sources = {f"model/{name}": bundle / name for name in model_files} | dict(files)
-    missing = sorted(str(p) for p in sources.values() if not p.is_file())
+    return stage_files(sources, card=card, card_metadata=card_metadata, out_dir=out_dir)
+
+
+def stage_files(
+    files: Mapping[str, Path], *, card: Path, card_metadata: dict[str, Any], out_dir: Path
+) -> Path:
+    """Write a Hub repo folder: ``files`` (published path -> local file), the card with its
+    front matter as ``README.md``, and ``SHA256SUMS`` over all of them.
+
+    Raises:
+        PublishError: A listed file is missing.
+    """
+    missing = sorted(str(p) for p in files.values() if not p.is_file())
     if missing:
         raise PublishError(f"missing files to publish: {missing}")
     tmp = fresh_tmp_dir(out_dir)
     try:
-        for target, source in sources.items():
+        for target, source in files.items():
             (tmp / target).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, tmp / target)
         front = OmegaConf.to_yaml(OmegaConf.create(card_metadata))
@@ -307,7 +319,7 @@ def push_dataset(stage_dir: Path, repo_id: str, *, private: bool, token: str | N
         message=f"Publish processed ProteinGym data (mutascope {__version__})",
         delete_patterns=["data/*", "reports/*"],
         token=token,
-    )
+    ).url
 
 
 def push_folder(
@@ -319,7 +331,7 @@ def push_folder(
     message: str,
     delete_patterns: Sequence[str],
     token: str | None = None,
-) -> str:
+) -> "PushedRevision":
     """Re-verify a staged folder's checksums, create the repo if needed and upload it as one
     commit (a new revision); ``delete_patterns`` remove remote files the folder no longer has.
 
@@ -338,7 +350,7 @@ def push_folder(
         commit_message=message,
         delete_patterns=list(delete_patterns),
     )
-    return commit.commit_url
+    return PushedRevision(url=commit.commit_url, oid=commit.oid)
 
 
 @dataclass(frozen=True)

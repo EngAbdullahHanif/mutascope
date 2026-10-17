@@ -1,0 +1,89 @@
+# ONNX export of ESM-2 35M / 150M for serving on the CPU (`mutascope onnx ...`, ADR 0029).
+#
+# `onnx export` writes <export_dir>/<model>/{fp32,int8}/model.onnx, tokenizer.json, config.json
+# and export.json. The checks, the latency run and the release read that directory; after the
+# release, conf/model/<model>_int8.yaml reads the same files from the Hub at publish.revision.
+
+# The PyTorch configs exported (conf/model/<name>.yaml: Hub id and pinned revision).
+models: [esm2_35m, esm2_150m]
+# The ONNX scorers (conf/model/<name>.yaml), each naming its source_model and precision:
+# `onnx check-scores` checks every one, and `onnx publish` ships their results. The int8 ones
+# were planned for serving; which precision the API serves is open (ADR 0029, section 6).
+scorers: [esm2_35m_int8, esm2_150m_int8, esm2_35m_onnx_fp32, esm2_150m_onnx_fp32]
+export_dir: build/onnx
+# optimum runs in its own locked environment: its ONNX exporter does not support transformers 5.
+exporter:
+  project: tools/onnx-export
+  task: fill-mask
+  opset: 18
+# ONNX Runtime dynamic quantization (onnxruntime.quantization.quantize_dynamic). Fixed before any
+# result was computed (ADR 0029): every MatMul with a constant weight, int8 weights per output
+# channel; reduce_range (7-bit weights) so that x86 CPUs without VNNI cannot saturate in the
+# u8 x s8 kernel and the same file gives the same numbers on every CPU.
+quantization:
+  weight_type: QInt8
+  per_channel: true
+  reduce_range: true
+  op_types: [MatMul]
+# The exported tokenizer.json must give the Hugging Face tokenizer's ids on these sequences
+# (plus each parity protein's target).
+tokenizer_check:
+  sequences: 200
+  max_length: 1022
+  seed: 0
+results_dir: results/onnx
+# Check 1 (`onnx check-parity`): fp32 ONNX logits against the PyTorch model on the CPU, five
+# targets at the length quantiles of the 201 targets that fit one window (37, 66, 222, 448 and
+# 934 residues), each unmasked and with `masked_positions` residues masked one per row.
+parity:
+  assays:
+    - TCRG1_MOUSE_Tsuboyama_2023_1E0L
+    - MBD11_ARATH_Tsuboyama_2023_6ACV
+    - Q6WV12_9MAXI_Somermeyer_2022
+    - SPG1_STRSG_Olson_2014
+    - MSH2_HUMAN_Jia_2020
+  masked_positions: 8
+  logits_atol: 1.0e-4
+# Check 2 (`onnx check-scores`): each scorer's benchmark scores against its PyTorch model's,
+# the model gate's two checks (ADR 0010) with our PyTorch score set as the reference.
+scores:
+  min_assay_spearman: 0.99
+  aggregate_tolerance: 0.01
+# `onnx latency`: wall time of one landscape() call, as the API makes it, on random sequences.
+# threads matches the free Hugging Face Space (2 vCPUs). precise = masked marginal at every
+# residue (L passes, batch_size per call).
+latency:
+  threads: 2
+  lengths: [100, 300, 600, 1000]
+  warmup: 1
+  repeats:
+    fast: 10
+    precise: 1
+  seed: 0
+# Publishing (`mutascope onnx publish`): one Hub model repo with both models' files, the results
+# tables and a model card. `revision` is the pushed commit, read by the ONNX scorers' configs:
+# 82e1528, pushed 2026-10-17 from build/hf_onnx (34 files, each matching SHA256SUMS on the
+# Hub), created private and made public after that check.
+publish:
+  repo_id: engAbdullahHanif/mutascope-esm2-onnx
+  revision: 82e15287c50f45f771cca75ac3786f0376ecabb2
+  # New repos are created private, so the upload can be checked on the Hub first.
+  private: true
+  stage_dir: build/hf_onnx
+  card: docs/ONNX_MODEL_CARD.md
+  card_metadata:
+    license: mit
+    library_name: onnx
+    base_model:
+      - facebook/esm2_t12_35M_UR50D
+      - facebook/esm2_t30_150M_UR50D
+    pipeline_tag: fill-mask
+    tags:
+      - biology
+      - proteins
+      - protein-language-model
+      - esm2
+      - onnx
+      - int8
+      - variant-effect-prediction
+      - proteingym

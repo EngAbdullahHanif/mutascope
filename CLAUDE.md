@@ -10,7 +10,7 @@ presents it as an interactive mutation landscape (heatmap + 3D structure) with a
 - **Data:** ProteinGym DMS substitution benchmark (single mutants only in v1).
 - **Zero-shot models:** ESM-2 (35M / 150M / 650M), SaProt 650M (AF2, structure-aware via Foldseek 3Di tokens). Stretch: ESM-1v, ESM C 300M.
 - **Supervised models:** per-assay models following the ProteinGym supervised protocol (random / modulo / contiguous 5-fold CV): augmented ridge → LightGBM → MLP head. Uncertainty via fold ensembles + CV+ conformal intervals (implemented directly; ADR 0024).
-- **Serving:** FastAPI backend (ONNX-quantized ESM-2 35M/150M for live scoring), Next.js frontend; precomputed landscapes for all ProteinGym proteins served statically.
+- **Serving:** FastAPI backend (fp32 ONNX ESM-2 35M/150M for live scoring; ADR 0029), Next.js frontend; precomputed landscapes for all ProteinGym proteins served statically.
 - **Pipeline:** Nextflow DSL2 orchestrating the `mutascope` Python CLI.
 - **Tracking:** MLflow, local SQLite store in `mlruns/` (no server, no account).
 
@@ -28,13 +28,14 @@ mutascope/
 ├── src/mutascope/
 │   ├── cli.py                # Typer entry point: `mutascope <group> <cmd>`
 │   ├── data/                 # download, parse, validate (pandera), clean, structures, 3Di
-│   ├── scoring/              # Scorer protocol, registry, masked_lm.py, esm2.py, saprot.py, struct_tokens.py, ensemble.py, cache.py
+│   ├── scoring/              # Scorer protocol, registry, marginals.py, masked_lm.py, esm2.py, saprot.py, onnx_esm2.py, struct_tokens.py, ensemble.py, cache.py
 │   ├── features/             # per-variant feature builders
 │   ├── models/               # ridge, lgbm, mlp (plain torch), conformal (CV+), uncertainty
 │   ├── eval/                 # metrics, ProteinGym-style aggregation, bootstrap CIs, figures (matplotlib)
 │   ├── export/               # landscapes → JSON/Arrow, ONNX export + quantization
 │   └── utils/                # hashing, io, logging, seeding, tracking (MLflow)
 ├── pipeline/                 # Nextflow: main.nf, modules/, nextflow.config (profiles: local, docker, test)
+├── tools/onnx-export/        # separate uv project: optimum's ONNX exporter (needs transformers < 4.58)
 ├── api/                      # FastAPI app (app/, tests/), Dockerfile
 ├── web/                      # Next.js + TypeScript + Tailwind + shadcn/ui
 ├── notebooks/                # marimo notebooks — exploration only
@@ -144,6 +145,21 @@ Run `make lint test` before declaring any task done.
   filled by `mutascope score landscapes`, a slice of `scoring.landscapes.checkpoint_tokens` at a
   time, and `mutascope score check-landscapes` must pass before anything reads them.
 - Pin every Hugging Face model by `revision` in config.
+- ONNX (ADR 0029): `scoring.onnx_esm2` (`scorer: esm2_onnx`) serves ESM-2 35M / 150M on ONNX
+  Runtime, CPU only, and never imports torch or transformers (a test runs it in a fresh
+  interpreter). Its tokenizer is the exported `tokenizer.json`. The cache, windows and batching
+  live once, in `scoring.marginals`, for both runtimes. A cache entry's model id is
+  `hf_id/file` (`cache_model_id`). `model.local_dir` reads an unreleased export with the cache
+  off. `mutascope onnx export` runs optimum in `tools/onnx-export`, on a local snapshot of the
+  pinned revision.
+- ONNX checks: `onnx check-parity` (fp32 logits within `onnx.parity.logits_atol` of PyTorch)
+  and `onnx check-scores` (the model gate's checks against our PyTorch score set). The
+  quantization recipe (`onnx.quantization`) was fixed before any result. Never change it, or
+  the thresholds, to make a check pass. The int8 files fail `check-scores` on 3 + 1 assays and
+  are rejected. The API serves fp32 ONNX (`esm2_*_onnx_fp32`, Hub `82e1528`). If 150M's
+  fast-mode p95 on the Space for 1,000 residues exceeds 2 s, the live default becomes 35M fp32.
+  Precise mode is a background job with 35M only, with a length limit of about 3 min on the
+  Space (ADR 0029, section 6).
 
 ## Evaluation rules (non-negotiable)
 
@@ -268,7 +284,7 @@ Run `make lint test` before declaring any task done.
 - Versioned routes under `/v1`: `proteins`, `proteins/{id}/landscape`, `score` (fast mode),
   `jobs` + `jobs/{id}/stream` (precise mode via Server-Sent Events), `benchmarks`; plus `/health`, `/metrics`.
 - Input validation: only canonical 20 amino acids, length 1–1022, max 50 mutations per `score` request.
-- Live inference uses ONNX Runtime (int8-quantized ESM-2 35M/150M). SaProt is not served live.
+- Live inference uses ONNX Runtime (fp32 ONNX ESM-2 35M/150M; int8 rejected, ADR 0029). SaProt is not served live.
 - Caching with `diskcache`; rate limiting with `slowapi`; CORS restricted to configured origins.
 - Logs: structlog JSON. Metrics: prometheus-fastapi-instrumentator.
 - Tests: pytest + httpx AsyncClient, golden-value tests against pipeline outputs, schemathesis against OpenAPI.
