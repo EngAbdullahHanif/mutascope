@@ -2355,3 +2355,122 @@ pinned revision of the dataset repo.
 - *Loose ends:* not a Nextflow process yet; no MLflow run (no model is evaluated); the root
   dataset card does not mention `bundle/` until the next `data publish` (the folder has its own
   README).
+
+---
+
+## Entry 29 — ESM-2 on ONNX Runtime for CPU serving (Phase 4 Task 2, 2026-10-17)
+
+**Plain-language summary.** The API will score user sequences live on a small cloud machine
+with two CPU cores and no PyTorch. So ESM-2 35M and 150M were converted to ONNX, a portable
+model format that the lightweight ONNX Runtime library executes. Each model now exists twice:
+an exact (fp32) copy, and a 4× smaller copy whose weights are stored as 8-bit integers (int8).
+A new scorer runs these files with the same masking, windowing and caching rules as the PyTorch
+scorer, without loading PyTorch at all. Three checks compare the ONNX models with the PyTorch
+ones:
+
+- The fp32 copy reproduces PyTorch's raw outputs to within 1e-4.
+- Across all 217 benchmark assays, the int8 copy changes the headline benchmark number by
+  −0.0005 (35M) and −0.0006 (150M), too little to tell from zero.
+- In 3 assays (35M) and 1 assay (150M), the int8 copy's scores agree with PyTorch's slightly
+  less than the 0.99 the project requires. So the int8 copy fails that check, and the fp32
+  copy passes it.
+
+Speed was measured on two threads. Fast mode scores a 1,000-residue protein in 0.25 s (35M) or
+0.5 s (150M). Precise mode takes minutes. On this machine int8 was not faster than fp32. Both
+copies are published on the Hugging Face Hub with a model card, pinned by commit. Which one the
+API serves is left to the author.
+
+**The 3 most important design choices.**
+
+1. **One torch-free core for both runtimes instead of a second copy of the scoring logic.** The
+   cache rules (which rows are scored, NaN for the rest), the windows and the batching moved out
+   of the PyTorch class into `scoring/marginals.py`. The PyTorch and ONNX scorers now only
+   encode tokens and run forward passes, so a cache or window rule cannot drift between them.
+   *Evidence:* the 109 existing scoring, feature and landscape tests pass unchanged, including
+   the real 8M checkpoint against ProteinGym. With the same stand-in function in both
+   runtimes, the two scorers agree within 1e-5 through windowed and unwindowed, masked and
+   wild-type passes. A test runs the ONNX scorer in a fresh interpreter and fails if torch or
+   transformers is loaded.
+2. **Export from a local snapshot of the pinned revision, in an isolated environment, then judge
+   it against our own PyTorch model.** optimum never sees a revision it could resolve
+   differently. It runs in its own locked uv project because it cannot run on transformers 5
+   (problem 1). Check 1 then compares the result with the transformers-5 model the benchmark
+   uses. *Evidence:* two exports are bit-identical. fp32 logits differ from PyTorch by at most
+   6.7e-5 (35M) and 9.0e-5 (150M) over every token and vocabulary entry of five proteins of 37
+   to 934 residues, unmasked and masked. The fp32 fast-mode scores reproduce PyTorch's aggregate
+   exactly (0.3028, 0.3772) and agree at per-assay Spearman 1.0000 in all 217 assays.
+3. **The int8 recipe was fixed in advance and not tuned to the gate that failed it; both
+   precisions are published and the choice is left open.** The recipe was set before any check:
+   every MatMul, per-channel int8 weights, 7-bit range so x86 CPUs without VNNI cannot saturate.
+   When check 2 failed, I compared alternatives on fidelity to PyTorch only and labelled them
+   post-hoc. None passes, and the gate was not re-run with a new recipe. *Evidence:* four
+   recipes leave 1–3 assays (35M) and 1 (150M) below 0.99, and the failing assay moves between
+   them. Keeping any one group of layers in fp32 recovers at most 21% of the error on the dev
+   proteins. The benchmark rerun from the published Hub revision gives bit-identical scores
+   (696,311 per scorer, four scorers) and identical results tables, so the card's numbers are
+   the published files' numbers.
+
+**Problems encountered and how they were solved.**
+
+1. **optimum's ONNX exporter does not support transformers 5.** *Found:* while checking
+   versions before adding dependencies. optimum-onnx 0.1.0 (latest, 2025-12-23) requires
+   `transformers>=4.36,<4.58`, and so does its `main` branch's `pyproject.toml`. MutaScope runs
+   5.19. Installing it anyway (`--no-deps`, optimum 2.3.0) fails at import: "Could not import
+   module 'main_export'". *Fix:* `tools/onnx-export`, a separate locked uv project
+   (optimum-onnx 0.1.0, optimum 2.1.0, transformers 4.57.6, torch 2.14.1), called by
+   `mutascope onnx export` on a local snapshot. *Verified:* check 1 passes (max |Δ| 9.0e-5
+   against the 1e-4 tolerance), and the export is bit-identical across two runs.
+2. **transformers' ESM tokenizer imports torch.** *Found:* loading `AutoTokenizer` for ESM-2 in
+   transformers 5.19 left `'torch' in sys.modules == True`, which a torch-free server cannot
+   have. *Fix:* the export writes a `tokenizers` `tokenizer.json` (WordLevel over `vocab.txt`,
+   `<cls> … <eos>`). It must give transformers' ids on 205 sequences (200 random, 1–1,022
+   residues, plus the five parity targets) or nothing is written. *Verified:* the export passes
+   that check. A fresh-interpreter test scores with the ONNX scorer and finds neither torch nor
+   transformers loaded.
+3. **int8 fails the per-assay agreement gate.** *Found:* `onnx check-scores --fast` on all 217
+   assays. 35M: 3 assays below 0.99 (NPC1_HUMAN_Erwood_2022_RPE1 0.9780 with 63 variants,
+   VILI_CHICK_Tsuboyama_2023_1YU5 0.9869, NRAM_I33A0_Jiang_2016 0.9882; median 0.9975). 150M:
+   1 assay (DN7A_SACS2_Tsuboyama_2023_1JIC 0.9819; median 0.9980). *Cause:* quantization alone.
+   The fp32 file agrees at ≥ 0.99999996 per assay, so the runtime and export are not the cause.
+   The error is spread over every layer: on the five dev proteins, keeping any one MatMul group
+   in fp32 lowers the mean (1 − ρ) of the fast landscape only from 0.00250 to at best 0.00197
+   (FFN output). *Not fixed:* none of four dynamic-int8 recipes passes (35M: 3, 1, 2 and 1
+   assays below; 150M: 1 each). The threshold was not changed, and the recipe was not tuned to
+   the gate. The fp32 files pass, and the API's choice is recorded as open in ADR 0029 section
+   6, with fp32 recommended.
+4. **The test graphs could not be loaded.** *Found:* 14 of the 15 new scorer tests failed on
+   their first run: "Unsupported model IR version: 14, max supported IR version: 13". *Cause:*
+   onnx 1.23 writes IR 14 by default, which ONNX Runtime 1.31 cannot read. The optimum export
+   was unaffected. *Fix:* the hand-built stand-in graphs set `ir_version=10`. *Verified:* all 15
+   pass.
+
+**Supporting details.**
+- *Checks:* check 1 `results/onnx/logit_parity.parquet` and `landscape_parity.parquet` (fp32
+  landscapes against PyTorch on MPS: Spearman 1.00000, max |Δ| 7.9e-5 nats; int8: fast ≥
+  0.9951, precise ≥ 0.9966). Check 2 `results/onnx/score_parity_*.parquet`. Check 3
+  `results/zero_shot/comparisons.parquet` (two new pairs, 10,000 resamples; the 240 existing
+  rows are bit-identical). Spearman int8 − PyTorch: 35M −0.0005 [−0.0013, +0.0002], 150M −0.0006
+  [−0.0012, +0.0002]. Secondary metrics with CIs excluding 0: 35M AUC −0.0004 and top-10% recall
+  −0.0059; 150M MCC −0.0019 and top-10% recall +0.0014.
+- *Latency (2 threads, M4 Pro, seconds, fp32 / int8):* fast at L = 1,000: 0.247 / 0.265 (35M),
+  0.530 / 0.676 (150M). Precise at L = 1,000: 241 / 253 (35M), 554 / 591 (150M). int8 is 0–28%
+  slower here. The full table is in ADR 0029. The latency run took about 38 min (37.5 min
+  of timed calls), inside the ~40 min estimate.
+- *Hub:* `engAbdullahHanif/mutascope-esm2-onnx` at `82e15287c50f45f771cca75ac3786f0376ecabb2`.
+  The repo was created private, and all 34 files were verified against `SHA256SUMS` (20 by LFS
+  sha256, 14 downloaded and hashed) before it was made public. Read without a token. Pinned as
+  `onnx.publish.revision`. Sizes: 35M fp32 134.5 MB, int8 34.8 MB; 150M fp32 593.8 MB, int8
+  151.8 MB.
+- *Dependencies:* the `onnx` extra adds onnxruntime 1.31.0 (the runtime), onnx 1.23.2 (needed by
+  `onnxruntime.quantization`) and tokenizers 0.23.3 (already a transformers dependency, now
+  imported directly). The export environment's versions are pinned in `tools/onnx-export`.
+- *Run times:* export 22 s for both models (snapshots cached), check 1 22 min (masked
+  landscapes on the CPU), fast benchmark 10–49 s per scorer.
+- *Tests:* `make lint` clean; `make test` passes (675 + 15 LightGBM; 1 pre-existing Foldseek
+  skip); `make test-slow` includes the published 35M int8 file against PyTorch (passes). 24 new
+  tests.
+- *Loose ends:* the API's precision (ADR 0029 section 6; re-measure latency on the Space
+  first); precise mode is not benchmarked on all 217 assays in ONNX (five proteins only); the
+  150M fp32 logit difference is within 10% of the tolerance on the longest protein checked; the
+  next `export bundle` will carry the two int8 pairs in `benchmarks.json` (content, not format);
+  the export and checks are not Nextflow processes (one run per release).
