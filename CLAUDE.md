@@ -226,6 +226,10 @@ Run `make lint test` before declaring any task done.
   lack exactly those assays. The minimum is never chosen from that model's test results.
 - A post-hoc diagnostic run is labelled post-hoc in config, results and ADR and is never a
   headline model.
+- `make pipeline` rebuilds the deployed run and `train check-release` (ADR 0027) must find it
+  bit-identical to the released files (only `train.release.ignore`'s provenance stamps may
+  differ) before `CHECK_RELEASE` publishes it. Turn the check off (`--release_check false`) only
+  for a deliberate model change, and say so in the PR.
 
 ## Uncertainty rules (ADR 0024)
 
@@ -298,9 +302,10 @@ the feature store, the supervised ladder (ridge, LightGBM, MLP) under random / m
 CV against zero-shot on the same folds, CV+ intervals, and the deployed model: ridge `seq_struct`
 on the 198 assays with a structure and ≥ 300 variants, 19 × L landscapes with 80% / 90% intervals
 in `data/processed/supervised_landscapes/`, and a manifest naming each assay's default model
-(ADR 0025, 0026). Open from Phase 3: the Hub push (`train publish --push`, `data publish
---landscapes --push`, staged in `build/`, needs `hf auth login`); the Phase 3 commands are not
-Nextflow processes. The Phase 4 export reads supervised landscapes from the bundle and zero-shot
-ones from the cache.
+(ADR 0025, 0026). Phase 4 Task 0 closed the Phase 3 leftovers: both Hub repos are public and
+pinned by commit (`train.publish.revision`, `publish.revision`; ADR 0026 addendum), and `make
+pipeline` runs `data folds` through `train final` and publishes only after `train check-release`
+(ADR 0027). The Phase 4 export reads supervised landscapes from the bundle and zero-shot ones
+from the cache.
 Update this section at the start of each phase.
 The per-phase task checklist lives in `docs/ROADMAP.md`; mark items `[x]` there as they land.
