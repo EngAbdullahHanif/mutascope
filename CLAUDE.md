@@ -295,10 +295,27 @@ Run `make lint test` before declaring any task done.
   gzip outside it.
 - The API never imports torch or transformers (`api/tests/test_no_torch.py`, fresh interpreter).
 - Input validation: only canonical 20 amino acids, length 1–1022, max 50 mutations per `score` request.
+- Live scoring (ADR 0031): `POST /v1/score` is fast mode (wild-type marginal, `esm2_35m` |
+  `esm2_150m`, default `score_default_model`); `POST /v1/jobs` is precise mode (masked marginal,
+  35M only, at most `precise_max_length` residues: 600, provisional until the Space is
+  measured). One job runs at a time (`api.app.jobs`, in-process worker); `job_queue_size` wait,
+  then 429; finished jobs expire after `job_ttl_seconds`. SSE events are a replayable log per
+  job: `queued`, `running`, one `progress` per forward batch (its rows), then `succeeded` |
+  `failed` | `cancelled`; `id` = index, `Last-Event-ID` resumes. Every live response is
+  `kind: zero_shot`, `label: Zero-shot`. Mutations go through `parse_mutation`, and every bad
+  one is reported with its own `loc`.
+- The live-score cache (`api.app.score_cache`, diskcache) is keyed by sha256 of
+  `[hf_id/file, revision, method, sha256(sequence)]`; files from `onnx_local_dir` are keyed
+  `local:<dir>`, never by a Hub commit. A partial (cancelled, failed) landscape is never cached.
+- Live agreement (slow): fp32 ONNX through the routes against our PyTorch landscapes in
+  `api/tests/golden/` (written from the pipeline cache by `python -m api.tests.make_live_golden`,
+  never recomputed), Spearman ≥ 0.99. The bundle has no 35M / 150M landscapes to compare with.
 - Live inference uses ONNX Runtime (fp32 ONNX ESM-2 35M/150M; int8 rejected, ADR 0029). SaProt is not served live.
 - Caching with `diskcache`; rate limiting with `slowapi`; CORS restricted to configured origins.
 - Logs: structlog JSON. Metrics: prometheus-fastapi-instrumentator.
-- Tests: pytest + httpx AsyncClient, golden-value tests against pipeline outputs, schemathesis against OpenAPI.
+- Tests: pytest + httpx AsyncClient, golden-value tests against pipeline outputs, schemathesis against
+  OpenAPI (`api/tests/test_schemathesis.py`, a real uvicorn server; `positive_data_acceptance` is
+  off because wild-type matching and the precise limit cannot be written in the schema).
 - After changing any response schema, run `make types` and commit the regenerated TypeScript types
   (CI's `types` job fails when `web/src/lib/api-types.ts` is stale).
 
