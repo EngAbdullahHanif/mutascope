@@ -24,6 +24,8 @@ async def test_ready_reports_the_loaded_bundle_and_models(client: httpx.AsyncCli
         "bundle_revision": None,  # a local copy
         "proteins": 217,
         "models": ["esm2_150m_onnx_fp32", "esm2_35m_onnx_fp32"],
+        "score_default_model": "esm2_150m",
+        "precise_max_length": 600,
     }
     assert "etag" not in response.headers
 
