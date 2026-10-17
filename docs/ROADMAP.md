@@ -197,7 +197,12 @@ Goal: a tested, observable service deployed automatically.
       landscapes to the Hub (ADR 0026 addendum): model `45a04b8`, dataset `0b0fe65`, both public,
       every file matching its staged copy; both commits pinned in config (`train.publish.revision`,
       `publish.revision`) for later steps to read by revision
-- [ ] Precomputed landscapes for all ProteinGym proteins → compressed JSON/Arrow (served statically by the frontend).
+- [x] Precomputed landscapes for all ProteinGym proteins → compressed JSON/Arrow (served statically by the frontend).
+      Done as the website bundle (ADR 0028, `mutascope export bundle`): one gzip JSON file per
+      assay (217, 29.2 MB, largest 1.15 MB under a 2 MB budget), `manifest.json`,
+      `benchmarks.json`, versioned JSON Schemas; fixed-point encoding proved to move no Spearman
+      by more than 6.6e-4 and no coverage at all; published to the dataset repo's `bundle/`
+      (tag `bundle-v1.0.0`, pinned as `export.publish.revision`).
       Reads the full landscapes from the cache (ADR 0018); run `mutascope score check-landscapes` first
       (passed 2026-10-17: 882 / 882 landscapes complete, coverage table unchanged; ADR 0027).
       Supervised landscapes for the 198 eligible assays from `data/processed/supervised_landscapes`,
