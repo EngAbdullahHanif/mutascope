@@ -175,9 +175,16 @@ Feature store for all 19 × L substitutions, sets `seq` (217 assays) and `seq_st
       position, 19 × L landscapes with out-of-fold values at measured variants and constant-width
       CV+ intervals; checks against `train calibrate` and `train cv` passed
 - [ ] Publish (`train publish --push`, `data publish --landscapes --push`): staged in `build/`;
-      needs `hf auth login` with a write token
+      needs `hf auth login` with a write token. Left open at the Phase 3 close (ADR 0026); moved
+      to Phase 4 below
 
 Done when: Spearman table (3 splits × 4 rungs vs zero-shot, bootstrap CIs), SHAP figure, calibration plot, model cards on the HF Hub.
+
+Closed 2026-10-17 (ADR 0026): the Spearman table, SHAP figure, calibration plot and model card exist
+and the deployed landscapes are built and checked; the model card is staged, not on the Hub (no
+token on the dev machine), so the publish item stays open, with the two stretch items. Weak points
+carried forward: none of Phase 3 is a Nextflow process, CI trains nothing real, Binding (13 assays)
+is not shown to gain on unseen positions.
 
 ---
 
@@ -186,8 +193,13 @@ Done when: Spearman table (3 splits × 4 rungs vs zero-shot, bootstrap CIs), SHA
 Goal: a tested, observable service deployed automatically.
 
 ### Export
+- [ ] Phase 3 leftover: push the staged model repo and the dataset revision with the supervised
+      landscapes to the Hub (`hf auth login`, then `train publish --push` and
+      `data publish --landscapes --push`; ADR 0025, 0026)
 - [ ] Precomputed landscapes for all ProteinGym proteins → compressed JSON/Arrow (served statically by the frontend).
-      Reads the full landscapes from the cache (ADR 0018); run `mutascope score check-landscapes` first
+      Reads the full landscapes from the cache (ADR 0018); run `mutascope score check-landscapes` first.
+      Supervised landscapes for the 198 eligible assays from `data/processed/supervised_landscapes`,
+      chosen per assay by `default_model` in `results/supervised/final_manifest.parquet` (ADR 0025)
 - [ ] ESM-2 35M/150M → ONNX (`optimum`) → int8 dynamic quantization → onnxruntime CPU
 
 ### FastAPI
@@ -203,6 +215,8 @@ Goal: a tested, observable service deployed automatically.
 - [ ] Build linux/amd64 (buildx or CI)
 - [ ] CI: lint → typecheck → tests + coverage → Nextflow `docker,test` smoke → push to GHCR → deploy to HF Space on tags
 - [ ] Dependabot, release-please
+- [ ] Phase 3 commands (`data folds`, `features embed|build`, `train cv|compare|calibrate|final*`) as
+      Nextflow processes, so `make pipeline` reproduces the supervised results (ADR 0026)
 - [ ] `openapi-typescript` type generation for the frontend
 
 Done when: CI green on every push, tags deploy automatically, `/docs` live, fast-mode response < 2 s.
