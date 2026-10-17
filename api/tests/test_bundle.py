@@ -50,7 +50,9 @@ async def test_startup_refuses_an_unsupported_schema_version(
     root = _copy(bundle_dir, tmp_path)
     manifest = json.loads((root / "manifest.json").read_text())
     _rewrite(root, "manifest.json", manifest | {"schema_version": "2.0.0"})
-    app = create_app(Settings(bundle_dir=root, onnx_local_dir=onnx_dir))
+    app = create_app(
+        Settings(bundle_dir=root, onnx_local_dir=onnx_dir, lock_file=root / "api.lock")
+    )
     with pytest.raises(BundleError, match=r"schema version '2\.0\.0'"):
         async with app.router.lifespan_context(app):
             pass
