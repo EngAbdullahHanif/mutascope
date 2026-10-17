@@ -28,13 +28,14 @@ mutascope/
 ├── src/mutascope/
 │   ├── cli.py                # Typer entry point: `mutascope <group> <cmd>`
 │   ├── data/                 # download, parse, validate (pandera), clean, structures, 3Di
-│   ├── scoring/              # Scorer protocol, registry, masked_lm.py, esm2.py, saprot.py, struct_tokens.py, ensemble.py, cache.py
+│   ├── scoring/              # Scorer protocol, registry, marginals.py, masked_lm.py, esm2.py, saprot.py, onnx_esm2.py, struct_tokens.py, ensemble.py, cache.py
 │   ├── features/             # per-variant feature builders
 │   ├── models/               # ridge, lgbm, mlp (plain torch), conformal (CV+), uncertainty
 │   ├── eval/                 # metrics, ProteinGym-style aggregation, bootstrap CIs, figures (matplotlib)
 │   ├── export/               # landscapes → JSON/Arrow, ONNX export + quantization
 │   └── utils/                # hashing, io, logging, seeding, tracking (MLflow)
 ├── pipeline/                 # Nextflow: main.nf, modules/, nextflow.config (profiles: local, docker, test)
+├── tools/onnx-export/        # separate uv project: optimum's ONNX exporter (needs transformers < 4.58)
 ├── api/                      # FastAPI app (app/, tests/), Dockerfile
 ├── web/                      # Next.js + TypeScript + Tailwind + shadcn/ui
 ├── notebooks/                # marimo notebooks — exploration only
@@ -144,6 +145,18 @@ Run `make lint test` before declaring any task done.
   filled by `mutascope score landscapes`, a slice of `scoring.landscapes.checkpoint_tokens` at a
   time, and `mutascope score check-landscapes` must pass before anything reads them.
 - Pin every Hugging Face model by `revision` in config.
+- ONNX (ADR 0029): `scoring.onnx_esm2` (`scorer: esm2_onnx`) serves ESM-2 35M / 150M on ONNX
+  Runtime, CPU only, and never imports torch or transformers (a test runs it in a fresh
+  interpreter). Its tokenizer is the exported `tokenizer.json`. The cache, windows and batching
+  live once, in `scoring.marginals`, for both runtimes. A cache entry's model id is
+  `hf_id/file` (`cache_model_id`). `model.local_dir` reads an unreleased export with the cache
+  off. `mutascope onnx export` runs optimum in `tools/onnx-export`, on a local snapshot of the
+  pinned revision.
+- ONNX checks: `onnx check-parity` (fp32 logits within `onnx.parity.logits_atol` of PyTorch)
+  and `onnx check-scores` (the model gate's checks against our PyTorch score set). The
+  quantization recipe (`onnx.quantization`) was fixed before any result. Never change it, or
+  the thresholds, to make a check pass. The int8 files fail `check-scores` on 3 + 1 assays,
+  and the API's precision is the author's decision (ADR 0029, section 6).
 
 ## Evaluation rules (non-negotiable)
 
