@@ -1,7 +1,6 @@
 # 0029 — ESM-2 35M / 150M on ONNX Runtime for CPU serving
 
-- Status: accepted (export, scorer, checks, publication). Open: which precision the API serves
-  (section 6).
+- Status: accepted. The API serves the fp32 ONNX models (section 6, decided 2026-10-17).
 - Date: 2026-10-17
 - Builds on: ADR 0010 (model gate), ADR 0012 (ESM-2 scorer, windows), ADR 0013 (cache), ADR
   0014 (paired comparisons, tracking), ADR 0026 addendum (pinned Hub revisions)
@@ -139,17 +138,38 @@ landscape from 0.00250 by at most 21% (FFN out: 0.00197). The error is spread ov
 network, so it is not a few outlier layers that mixed precision could isolate. A recipe that
 passed after more search would have been tuned to the gate it is judged by. R0 stays.
 
-### 6. Open: the precision the API serves
+### 6. Decision: the API serves the fp32 ONNX models
 
-The int8 files fail the per-assay gate on 3 + 1 assays and pass everything else; the fp32
-files pass every check. The API is the next task, and the choice is the author's, not this
-ADR's. Two options, both already published:
+The API serves `esm2_35m_onnx_fp32` and `esm2_150m_onnx_fp32`, the fp32 files of Hub commit
+`82e1528` (`onnx.publish.revision`). The author made this decision on 2026-10-17, from the
+measurements below.
 
-- **fp32 ONNX** (`esm2_*_onnx_fp32`): passes check 2. Per-assay Spearman against PyTorch is
-  1.0000 at four decimals in all 217 assays, and the aggregate is the same (0.3028, 0.3772).
-  135 MB / 594 MB.
-- **int8 ONNX** (`esm2_*_int8`), **with the gate miss documented:** 35 MB / 152 MB; the
-  aggregate is unchanged within the CIs above.
+- **int8 is rejected.**
+  - It failed the per-assay check (Spearman ≥ 0.99 against PyTorch), which was set before any
+    result: 3 assays for 35M (lowest 0.978) and 1 for 150M (0.982).
+  - Its aggregate change was not significant: −0.0005 and −0.0006, with CIs that include 0.
+  - It was 0–28% slower than fp32 on the M4 Pro. Its only advantage was file size (35 MB /
+    152 MB against 135 MB / 594 MB).
+  - The recipe was fixed before checking and was not tuned afterwards.
+- **fp32 ONNX matches PyTorch.** Per-assay Spearman is 1.0000 on all 217 assays, and the
+  aggregate is the same (0.3028, 0.3772). Fast mode on 1,000 residues, M4 Pro, 2 threads
+  (medians): 0.25 s (35M) and 0.53 s (150M); with int8, 150M was 0.68 s, hence 0.5–0.7 s across
+  both precisions. Not yet measured on the Space.
+
+**Deployment rule, set before the first deploy.**
+- After the first deploy, measure fast-mode latency on the Space.
+- If 150M's p95 for a 1,000-residue sequence exceeds 2 s, the live default becomes 35M fp32.
+- int8 stays rejected either way.
+
+**Consequences for later tasks:**
+- Precise mode (masked marginal) runs as a background job (`/v1/jobs`, SSE), with 35M only.
+- Its length limit is set so that the estimated time on the Space stays under about 3 minutes.
+  On the M4 Pro, 35M fp32 precise takes 64 s at 600 residues and 241 s at 1,000 (table below).
+  The Space is slower, so the limit is set from the Space measurement, not from these numbers.
+- The Task 6 image-size target becomes about 1.5 GB, because of the fp32 weights (135 MB +
+  594 MB).
+- The `esm2_*_int8` configs and files stay, as the record of the rejected option. The API does
+  not read them.
 
 **Latency** (`onnx latency`, `results/onnx/latency.parquet`). Wall time of one `landscape()`
 call, in seconds. Machine: Apple M4 Pro, ONNX Runtime 1.31 CPU provider, 2 intra-op threads to
@@ -174,9 +194,8 @@ a few hundred residues (150M: 9–10 min at 1,000), so it has to be the asynchro
 streamed progress that the API plan already has (`/v1/jobs`, SSE).
 
 **Recommendation:** serve the fp32 files. They pass every check, are as fast or faster here, and
-the 594 MB of the larger model fits the Space's memory. Re-measure on the Space first. If int8
-is clearly faster there, it is a trade of a documented gate miss for speed, and that decision is
-the author's.
+the 594 MB of the larger model fits the Space's memory. Re-measure on the Space first. (Adopted
+as the decision above; int8 stays rejected whatever the Space measures.)
 
 ### 7. Publication
 
