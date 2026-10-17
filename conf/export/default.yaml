@@ -1,0 +1,62 @@
+# Website bundle (`mutascope export bundle`, ADR 0028): one gzip JSON file per ProteinGym assay,
+# manifest.json, benchmarks.json and the format's JSON Schemas.
+#
+# Inputs come from the pinned Hub revisions where they exist there: the dataset repo at
+# publish.revision (assays, variants, structure features, supervised landscapes and manifest) and
+# the model repo at train.publish.revision (final results tables), each file checked against the
+# SHA256SUMS of the same commit. The zero-shot landscapes are not on the Hub: they are read from
+# the log-probability cache (scoring.cache_dir; `mutascope score check-landscapes` must pass), the
+# zero-shot benchmark tables from results/.
+out_dir: build/bundle
+# Markdown body of the bundle folder's README on the Hub; the version stamp is appended.
+card: docs/BUNDLE_CARD.md
+# Size and fidelity tables (tracked, like every results table).
+results_dir: results/export
+# Zero-shot landscapes in each protein file: the models the site shows. ESM-2 35M / 150M and the
+# wild-type marginals are benchmark-only: their numbers are in benchmarks.json, their landscapes
+# are not shipped. A structure-aware model appears only where there is a structure.
+zero_shot_models: [esm2_650m, saprot_650m_af2]
+# The model whose benchmark region labels the MSA-region assays (ADR 0012).
+msa_region_model: esm2_650m
+# Score sets whose own summaries go into benchmarks.json
+# (results/zero_shot_<label>_single_summary.parquet).
+zero_shot_results:
+  - esm2_35m
+  - esm2_150m
+  - esm2_650m
+  - esm2_35m_wt
+  - esm2_150m_wt
+  - esm2_650m_wt
+  - saprot_650m_af2
+  - ensemble_esm2_650m_saprot_650m_af2
+# Number encoding (mutascope.export.format): fixed-point integers with a decimals count.
+encoding:
+  # Zero-shot scores, in nats (SD about 3 over a landscape).
+  score_decimals: 3
+  # Fields in DMS_score units (measurement, prediction, intervals) share one decimals count per
+  # assay: at least dms_min_decimals, enough for a step of at most SD / dms_steps_per_sd, and
+  # enough for a step below the smallest gap between a measured value and its interval bounds
+  # (so coverage is exact), up to dms_max_decimals (|value| < 9e6 stays exact in JavaScript).
+  dms_min_decimals: 3
+  dms_steps_per_sd: 1000
+  dms_max_decimals: 9
+  plddt_decimals: 2
+  rel_sasa_decimals: 3
+# Rounding may move no recomputed number by more than this (export.fidelity): per assay and in
+# aggregate, against the unrounded source and, where comparable, the reported value.
+fidelity:
+  spearman: 0.001
+  coverage: 0.002
+# Compressed sizes, set after measuring (2026-10-17, ADR 0028): 217 files, 29,220,004 bytes in
+# all, median 88,113, largest 1,153,899 (ZIKV, 3,423 residues). A protein file is what the
+# browser downloads at once; the total is what the Hub folder and a static deployment hold.
+budget:
+  protein_bytes: 2000000
+  total_bytes: 40000000
+# Publishing (`mutascope export push`): into a folder of the dataset repo (publish.repo_id), as a
+# new commit that replaces only that folder, tagged. A tag names one bundle: a new bundle needs a
+# new tag. `revision` is the pushed commit, pinned for the API and the website.
+publish:
+  path_in_repo: bundle
+  tag: bundle-v1.0.0
+  revision: null

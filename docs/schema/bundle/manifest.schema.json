@@ -1,0 +1,205 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:mutascope:bundle:1.0.0:manifest",
+  "$defs": {
+    "ManifestEntry": {
+      "additionalProperties": false,
+      "description": "One protein in the manifest.",
+      "properties": {
+        "assay_id": {
+          "title": "Assay Id",
+          "type": "string"
+        },
+        "uniprot_id": {
+          "title": "Uniprot Id",
+          "type": "string"
+        },
+        "molecule_name": {
+          "title": "Molecule Name",
+          "type": "string"
+        },
+        "function_type": {
+          "title": "Function Type",
+          "type": "string"
+        },
+        "length": {
+          "minimum": 1,
+          "title": "Length",
+          "type": "integer"
+        },
+        "has_structure": {
+          "title": "Has Structure",
+          "type": "boolean"
+        },
+        "n_measured_variants": {
+          "minimum": 0,
+          "title": "N Measured Variants",
+          "type": "integer"
+        },
+        "default_model": {
+          "title": "Default Model",
+          "type": "string"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Reason"
+        },
+        "file": {
+          "description": "Path relative to the bundle root.",
+          "title": "File",
+          "type": "string"
+        },
+        "bytes": {
+          "minimum": 1,
+          "title": "Bytes",
+          "type": "integer"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "assay_id",
+        "uniprot_id",
+        "molecule_name",
+        "function_type",
+        "length",
+        "has_structure",
+        "n_measured_variants",
+        "default_model",
+        "label",
+        "reason",
+        "file",
+        "bytes",
+        "sha256"
+      ],
+      "title": "ManifestEntry",
+      "type": "object"
+    },
+    "SupervisedStamp": {
+      "additionalProperties": false,
+      "description": "What produced the supervised landscapes (``train final``).",
+      "properties": {
+        "code_version": {
+          "title": "Code Version",
+          "type": "string"
+        },
+        "config_sha256": {
+          "title": "Config Sha256",
+          "type": "string"
+        },
+        "manifest_sha256": {
+          "title": "Manifest Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code_version",
+        "config_sha256",
+        "manifest_sha256"
+      ],
+      "title": "SupervisedStamp",
+      "type": "object"
+    },
+    "VersionStamp": {
+      "additionalProperties": false,
+      "description": "Where every number in the bundle came from.",
+      "properties": {
+        "schema_version": {
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "mutascope_version": {
+          "title": "Mutascope Version",
+          "type": "string"
+        },
+        "code_version": {
+          "description": "Git commit of the export (``-dirty`` if the code had uncommitted changes).",
+          "title": "Code Version",
+          "type": "string"
+        },
+        "proteingym_release": {
+          "title": "Proteingym Release",
+          "type": "string"
+        },
+        "dataset_repo": {
+          "title": "Dataset Repo",
+          "type": "string"
+        },
+        "dataset_revision": {
+          "title": "Dataset Revision",
+          "type": "string"
+        },
+        "model_repo": {
+          "title": "Model Repo",
+          "type": "string"
+        },
+        "model_revision": {
+          "title": "Model Revision",
+          "type": "string"
+        },
+        "supervised": {
+          "$ref": "#/$defs/SupervisedStamp"
+        }
+      },
+      "required": [
+        "schema_version",
+        "mutascope_version",
+        "code_version",
+        "proteingym_release",
+        "dataset_repo",
+        "dataset_revision",
+        "model_repo",
+        "model_revision",
+        "supervised"
+      ],
+      "title": "VersionStamp",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Every protein in the bundle; what the site's index page reads.",
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0",
+      "default": "1.0.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "version": {
+      "$ref": "#/$defs/VersionStamp"
+    },
+    "proteins": {
+      "items": {
+        "$ref": "#/$defs/ManifestEntry"
+      },
+      "title": "Proteins",
+      "type": "array"
+    },
+    "total_bytes": {
+      "minimum": 0,
+      "title": "Total Bytes",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "version",
+    "proteins",
+    "total_bytes"
+  ],
+  "title": "Manifest",
+  "type": "object"
+}
