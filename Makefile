@@ -50,6 +50,8 @@ api:
 web: require-web
 	cd web && pnpm dev
 
+# API types for the frontend, from the OpenAPI schema; committed, and CI fails when they are stale.
+# Needs `pnpm install` in web/ once (pinned openapi-typescript).
 types: require-web
 	uv run python -m api.app.openapi web/openapi.json
 	cd web && pnpm exec openapi-typescript openapi.json -o src/lib/api-types.ts
