@@ -2294,7 +2294,7 @@ pinned revision of the dataset repo.
    inputs and against the results tables wherever the bundle holds the same numbers: zero-shot
    Spearman on the 212 / 210 assays whose benchmark region is the whole target, and coverage
    from the published `final_checks`. *Evidence:* the largest changes are Spearman 4.30e-4
-   (ESM-2), 6.56e-4 (SaProt) and 4.04e-4 (ridge), and the aggregates move by at most 9e-6.
+   (ESM-2), 6.56e-4 (SaProt) and 4.04e-4 (ridge), and the aggregates move by less than 1e-5 (ESM-2: 9.5e-6).
 3. **Read the published revisions and check them.** Supervised landscapes, metadata,
    measurements, structure features and final tables come from the pinned Hub commits. Each
    file is compared with the `SHA256SUMS` published in the same commit, and a branch name is
