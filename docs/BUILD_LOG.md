@@ -2173,3 +2173,91 @@ project at Phase 4.
 - *Docs changed:* ADR 0026, CLAUDE.md (current phase → Phase 4, MAPIE line), ROADMAP (close
   note, publish item and Nextflow item in Phase 4, export reads the manifest), README (status
   line), PROJECT_MAP (steps 19–26, a Phase 3 index and a Phase 3 retrospective).
+
+---
+
+## Entry 27 — Hub publication recorded, Phase 3 in Nextflow (Phase 4 Task 0, 2026-10-17)
+
+**Plain-language summary.** Two loose ends from Phase 3 are tied up. First, the trained model
+and its landscapes are now public on the Hugging Face Hub. This task checked that through the
+Hub's API, confirmed that every published file is exactly the file staged on this machine, and
+pinned both published versions in the config, so the website and API will read those exact
+files, never "whatever is latest". Second, `make pipeline` now rebuilds the deployed model from
+raw data. It builds the feature store, cross-validates the ridge, calibrates its intervals and
+fits the final models. It then publishes the result only if every number matches what was
+released, down to the last bit. The first full run (2 h 07 min) showed that the deployed
+landscapes and intervals reproduce exactly. One committed file of cross-validation scores did
+not, in the 8th decimal, because it had been made before a fix to multithreaded arithmetic. It
+was replaced by the rerun's output, with everything computed from it, and the rerun then passed.
+The slower LightGBM and neural-network runs are an option, off by default. The quick test
+version of the pipeline runs the same ridge steps on two small assays in under a minute.
+
+**The 3 most important design choices.**
+
+1. **Check the rerun against the release, not only against itself.** `train final` already
+   refuses a bundle whose refit disagrees with `train calibrate` or `train cv`. But when one
+   pipeline reruns all three, that only proves the run is self-consistent: a different feature
+   store would move all three together and pass. The new `train check-release` compares every
+   output with the released file: the same files, columns, dtypes and rows, and every number
+   byte for byte (a 1-ulp change fails). The only exceptions are the two provenance stamps (git
+   commit and config hash), which change on every rerun by construction. *Evidence:* it caught
+   the 1.2e-7 difference described below on its first real run.
+2. **Publish only through the check.** The deployed run's processes have no `publishDir`;
+   `CHECK_RELEASE` publishes, and only after a pass. A failed check therefore leaves the released
+   files untouched. It publishes per model label and per file, because a Nextflow copy replaces
+   a target directory whole, and `results/supervised/` holds 40 other runs' files. *Evidence:*
+   after the failed first run, `git status` showed no change in `results/supervised/`
+   (`final_manifest.parquet` changed only after the passing rerun published it).
+3. **Keep the smoke test's assays and override two settings instead.** The two test assays are
+   below the deployed 300-variant minimum, and the real feature sets need two 650M models.
+   Rather than pick new assays (losing the PDB `TITLE` case the smoke test exists for), the
+   test profile lowers the minimum to 100 and uses `conf/features/smoke.yaml`: `seq_struct` with
+   `esm2_8m`, the model the smoke test already scores. *Evidence:* 22 tasks in 55 s, with
+   LightGBM-PCA and the MLP included; CV+ refit and out-of-fold checks both 0.
+
+**Problems encountered and how they were solved.**
+
+1. **The committed ridge CV results could not be reproduced bit for bit.** *Found:* comparing
+   `TRAIN_CV`'s output with the committed file as soon as it finished, and then the release
+   check, which failed on it and on `final_checks.parquet`. *Numbers:* per-fold Spearman 0 of
+   3,189 different and selected penalties identical; per-fold MSE 2,416 of 3,189 different (max
+   5.8e-8), pooled MSE 503 of 639 (5.7e-9), pooled Spearman 3 of 639 (1.2e-7: HMDH_HUMAN,
+   OXDA_RHOTO, SC6A4_HUMAN, contiguous). Calibration rows (213 files) and the bundle (202 files)
+   were bit-identical. *Cause:* the committed file came from the serial run of 2026-10-14, made
+   on uncommitted code (`598c6ad…-dirty`, MLflow) with macOS Accelerate using several threads.
+   Since PR #26 every path runs with one BLAS thread (entry 26, problem 1), which adds floats in
+   another order. Nothing in the current code can recreate those bits. *Fix* (the author chose
+   re-baselining over a tolerance): this run's `cv_ridge_seq_struct.parquet` and
+   `final_checks.parquet` replace the committed ones. `train compare` and `train final-table`
+   were rerun into `results/supervised/` (moved ≤ 1.5e-8; per-assay differences ≤ 1.2e-7),
+   `train leaderboard` did not move, and the two final SVGs changed one coordinate in the sixth
+   decimal (PNGs byte-identical). *Verified:* `nextflow run ... -resume` reran only
+   `CHECK_RELEASE`, which printed "PASS: ridge_seq_struct reproduces the release bit for bit (4
+   results files, 213 calibration files, 202 bundle files)".
+2. **A file-for-file "bit-identical" was impossible by construction.** *Found:* reading
+   `train final` before writing the check. Every landscape row and the manifest carry
+   `code_version` (git commit) and `config_sha256` (hash of the resolved config, which contains
+   absolute paths), so a rerun from a new commit always changes 200 files. *Fix:* the check
+   leaves out exactly those two columns and keys (`train.release.ignore`) and requires them on
+   both sides. `manifest_sha256`, the input-data fingerprint, is compared. *Verified:* after
+   publication, `fits.parquet`, `coefficients.parquet`, the calibration rows and the folds are
+   byte-identical to before. The 198 partitions, `manifest.parquet` and `version.json` differ only
+   in stamps.
+
+**Supporting details.**
+- *Hub* (ADR 0026 addendum): model `engAbdullahHanif/mutascope-ridge-seq-struct` @ `45a04b8`,
+  dataset `engAbdullahHanif/mutascope-proteingym-v1.3` @ `0b0fe65`, both `private: false`,
+  `gated: false`, and both commits were the heads. The 18 LFS files match `build/` by sha256,
+  the 11 small files by size. Pinned as `train.publish.revision` and `publish.revision`.
+- *Landscape check:* `mutascope score check-landscapes` passes, 882 of 882 landscapes complete
+  (ESM-2 35M / 150M / 650M 222 each, SaProt 216). The table equals the committed
+  `landscape_coverage.parquet`.
+- *Default run timings:* Phase 1 and 2, embeddings and the feature store 3 min (all cached);
+  `train cv` 1,878 s, `train calibrate` 3,807 s, `train final` 1,748 s, all with 13 workers.
+  The ~2.5 h estimate scaled from earlier parallel runs; the actual was 2 h 07 min.
+- *Noise:* the run rewrites the tracked run reports (`zero_shot_run_*`, `landscape_run_*`,
+  `embedding_run_*`: only `seconds` and `*_computed`) and `structure_report.md` ("found via"),
+  restored with `git checkout`. `final_manifest.parquet` is committed with the new stamps, to
+  match the republished bundle.
+- *Not wired:* `train compare`, `final-table`, `final-figures`, `canary`, `shap`, `uncertainty`
+  (results-only steps or diagnostics). The `docker` profile waits for the Phase 4 image.

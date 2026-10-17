@@ -174,9 +174,9 @@ Feature store for all 19 × L substitutions, sets `seq` (217 assays) and `seq_st
       and ≥ 300 variants, two fits per assay (penalty by random / contiguous inner CV) matched to the
       position, 19 × L landscapes with out-of-fold values at measured variants and constant-width
       CV+ intervals; checks against `train calibrate` and `train cv` passed
-- [ ] Publish (`train publish --push`, `data publish --landscapes --push`): staged in `build/`;
-      needs `hf auth login` with a write token. Left open at the Phase 3 close (ADR 0026); moved
-      to Phase 4 below
+- [x] Publish (`train publish --push`, `data publish --landscapes --push`): left open at the
+      Phase 3 close (ADR 0026) for lack of a token; pushed 2026-10-17 as Phase 4 Task 0 (ADR 0026
+      addendum)
 
 Done when: Spearman table (3 splits × 4 rungs vs zero-shot, bootstrap CIs), SHAP figure, calibration plot, model cards on the HF Hub.
 
@@ -193,11 +193,13 @@ is not shown to gain on unseen positions.
 Goal: a tested, observable service deployed automatically.
 
 ### Export
-- [ ] Phase 3 leftover: push the staged model repo and the dataset revision with the supervised
-      landscapes to the Hub (`hf auth login`, then `train publish --push` and
-      `data publish --landscapes --push`; ADR 0025, 0026)
+- [x] Phase 3 leftover: push the staged model repo and the dataset revision with the supervised
+      landscapes to the Hub (ADR 0026 addendum): model `45a04b8`, dataset `0b0fe65`, both public,
+      every file matching its staged copy; both commits pinned in config (`train.publish.revision`,
+      `publish.revision`) for later steps to read by revision
 - [ ] Precomputed landscapes for all ProteinGym proteins → compressed JSON/Arrow (served statically by the frontend).
-      Reads the full landscapes from the cache (ADR 0018); run `mutascope score check-landscapes` first.
+      Reads the full landscapes from the cache (ADR 0018); run `mutascope score check-landscapes` first
+      (passed 2026-10-17: 882 / 882 landscapes complete, coverage table unchanged; ADR 0027).
       Supervised landscapes for the 198 eligible assays from `data/processed/supervised_landscapes`,
       chosen per assay by `default_model` in `results/supervised/final_manifest.parquet` (ADR 0025)
 - [ ] ESM-2 35M/150M → ONNX (`optimum`) → int8 dynamic quantization → onnxruntime CPU
@@ -215,8 +217,12 @@ Goal: a tested, observable service deployed automatically.
 - [ ] Build linux/amd64 (buildx or CI)
 - [ ] CI: lint → typecheck → tests + coverage → Nextflow `docker,test` smoke → push to GHCR → deploy to HF Space on tags
 - [ ] Dependabot, release-please
-- [ ] Phase 3 commands (`data folds`, `features embed|build`, `train cv|compare|calibrate|final*`) as
-      Nextflow processes, so `make pipeline` reproduces the supervised results (ADR 0026)
+- [x] Phase 3 in Nextflow (ADR 0027): `FOLDS → EMBED → FEATURES_BUILD → TRAIN_CV (ridge seq_struct)
+      → TRAIN_CALIBRATE → TRAIN_FINAL → CHECK_RELEASE`; `train check-release` publishes only a
+      bit-identical rerun (provenance stamps aside); LightGBM / MLP behind `params.extra_models`
+      (off); test profile runs the ridge path on its 2 assays (55 s). `train compare`,
+      `final-table`, `final-figures`, `canary`, `shap`, `uncertainty` stay by hand: they read
+      results files or are diagnostics
 - [ ] `openapi-typescript` type generation for the frontend
 
 Done when: CI green on every push, tags deploy automatically, `/docs` live, fast-mode response < 2 s.

@@ -35,9 +35,9 @@ pipeline:
 	nextflow run pipeline/main.nf -profile local
 
 # Native uv env until the Docker image exists (Phase 4); see docs/adr/0007. The smoke test's
-# log-probability cache is deleted first, so every run scores with the model (ADR 0018).
+# log-probability and embedding caches are deleted first, so every run uses the model (ADR 0018).
 pipeline-test:
-	rm -rf pipeline/results/logprob_cache
+	rm -rf pipeline/results/logprob_cache pipeline/results/embedding_cache
 	nextflow run pipeline/main.nf -profile local,test
 
 # Local MLflow UI over the tracking store (conf/tracking; ADR 0014). 5001: macOS uses 5000.

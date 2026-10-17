@@ -4,6 +4,8 @@
 - Date: 2026-10-17
 - Changes: nothing. Carries one open Phase 3 item (Hub publication) into Phase 4 (see "Open and
   weak")
+- Addendum (2026-10-17): the Hub publication is done and pinned; open item 1 is closed, weak
+  point 4 is addressed by ADR 0027 (see "Addendum" at the end)
 
 ## Context
 
@@ -241,3 +243,29 @@ None of these changes a number in the tables above.
 - **Numerical determinism:** results must not depend on BLAS threading; `utils.parallel` caps
   every loaded BLAS/OpenMP library at one thread in workers and in the serial path, and the
   linux/amd64 image must keep that.
+
+## Addendum (2026-10-17): Hub publication
+
+Open item 1 is closed. The author ran `hf auth login`, `train publish --push` and `data publish
+--landscapes --push` on 2026-10-17. Checked through the Hub API, without a token:
+
+| Repo | Commit | Visibility | Files |
+|---|---|---|---|
+| model `engAbdullahHanif/mutascope-ridge-seq-struct` | `45a04b8599bf31c850b78c139872e07f7cf2d600` (09:07:23 UTC) | public (`private: false`, `gated: false`) | 16 + `.gitattributes`: model card, `SHA256SUMS`, `config/` (3), `model/` (coefficients, fits, manifest, version), `results/` (7 final tables) |
+| dataset `engAbdullahHanif/mutascope-proteingym-v1.3` | `0b0fe65eb6a34bb0e0a8355f21e7d2d7e6a80fb0` (09:07:49 UTC) | public (`private: false`, `gated: false`) | 13 + `.gitattributes`: Phase 1 tables and reports, `data/supervised_landscapes.parquet` (60.9 MB), `data/supervised_landscape_assays.parquet`, `provenance.json` |
+
+Both commits were the repos' heads when checked. Every published file matches its staged copy in
+`build/`: sha256 for the 18 LFS files (10 model, 8 dataset), size for the 11 small text files.
+The done-when part "model cards on the HF Hub" is met.
+
+Both revisions are pinned in config, so later steps (the Phase 4 export, the API) read the
+published files by commit, never by branch: `publish.revision` (dataset, `conf/publish/hub.yaml`)
+and `train.publish.revision` (model, `conf/train/default.yaml`). A test requires both to be full
+40-character commit hashes.
+
+One correction. Item 1 above calls the dataset repo private. `conf/publish/hub.yaml` has said
+"published (public) since 2026-10-11" since `1e7485a`, and the repo is public now. Item 1 was
+wrong on that point; nothing depended on it.
+
+Weak point 4 ("`make pipeline` reproduces none of Phase 3") is addressed by ADR 0027: the
+pipeline now runs `data folds` through `train final` and checks the result against the release.

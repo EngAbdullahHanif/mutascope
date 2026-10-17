@@ -9,6 +9,7 @@ process DOWNLOAD {
     path 'inputs/DMS_substitutions.csv', emit: reference
     path 'inputs/dms',                   emit: dms_dir
     path 'inputs/structures',            emit: structures_dir
+    path 'inputs/folds',                 emit: folds_dir
 
     script:
     """
