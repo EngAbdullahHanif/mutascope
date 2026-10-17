@@ -727,3 +727,229 @@ def width_error_figure(bins: pd.DataFrame, *, level: float, title: str, dataset:
             "intervals; dotted: constant width. Error of the outer model's point prediction.",
         )
     return fig
+
+
+def _final_comparison(comparisons: pd.DataFrame, run: str, scheme: str) -> pd.Series:
+    """The one overall Spearman comparison of ``run`` against its comparator under ``scheme``."""
+    rows = comparisons[
+        (comparisons["model_a"] == run)
+        & (comparisons["split"] == scheme)
+        & (comparisons["metric"] == "spearman")
+        & (comparisons["level"] == "overall")
+    ]
+    if len(rows) != 1 or rows["diff"].isna().any():
+        raise FigureDataError(
+            f"need one paired comparison of {run} under {scheme}, found {len(rows)}"
+        )
+    return rows.iloc[0]
+
+
+def ladder_figure(
+    summary: pd.DataFrame,
+    comparisons: pd.DataFrame,
+    runs: Sequence[str],
+    names: Mapping[str, str],
+    *,
+    dataset: str,
+    level: str,
+) -> Figure:
+    """The model ladder per scheme: each run's paired difference from its zero-shot comparator.
+
+    One panel per scheme, one row per run (ladder order, top to bottom). The marker and line are
+    the paired difference and its paired-bootstrap CI (filled: excludes zero); the text gives the
+    run's own aggregate and assay count. Own CIs are not drawn: they do not compare runs.
+    """
+
+    def name(label: str) -> str:
+        if label not in names:
+            raise FigureDataError(f"no display name for {label!r} in train.final_table.names")
+        return names[label]
+
+    schemes = [s for s in SCHEME_NAMES if s in set(comparisons["split"].dropna())]
+    with matplotlib.rc_context(_RC):
+        fig = Figure(figsize=(11.5, 1.2 + 0.52 * len(runs) + 1.6))
+        left, right, gap = 0.235, 0.985, 0.025
+        width = (right - left - gap * (len(schemes) - 1)) / len(schemes)
+        axes: list[Axes] = []
+        labels: list[str] = []
+        for k, scheme in enumerate(schemes):
+            ax = fig.add_axes(
+                (left + k * (width + gap), 0.2, width, 0.6), sharex=axes[0] if axes else None
+            )
+            axes.append(ax)
+            ax.axvline(0, color=TEXT_SECONDARY, linewidth=1, zorder=1)
+            for j, run in enumerate(runs):
+                pair = _final_comparison(comparisons, run, scheme)
+                own = summary[
+                    (summary["model"] == run)
+                    & (summary["split"] == scheme)
+                    & (summary["metric"] == "spearman")
+                    & (summary["level"] == "overall")
+                ]
+                if len(own) != 1:
+                    raise FigureDataError(f"need one summary row for {run} under {scheme}")
+                low, high, diff = float(pair["ci_low"]), float(pair["ci_high"]), float(pair["diff"])
+                clear = low > 0 or high < 0
+                ax.plot([low, high], [j, j], color=SERIES[0], linewidth=2, zorder=2)
+                ax.plot(
+                    [diff],
+                    [j],
+                    linestyle="none",
+                    marker="o",
+                    markersize=7,
+                    markerfacecolor=SERIES[0] if clear else SURFACE,
+                    markeredgecolor=SERIES[0],
+                    markeredgewidth=1.5,
+                    zorder=3,
+                )
+                own_value = f"{float(own['value'].iloc[0]):.3f}".replace("-", "\N{MINUS SIGN}")
+                ax.annotate(
+                    f"{_signed(diff)} (own {own_value})",
+                    (diff, j),
+                    xytext=(0, 8),
+                    textcoords="offset points",
+                    ha="center",
+                    fontsize=7,
+                    color=TEXT_SECONDARY,
+                    bbox={"facecolor": SURFACE, "edgecolor": "none", "pad": 1},
+                    zorder=4,
+                )
+                if k == 0:
+                    labels.append(
+                        f"{name(run)}\nvs {name(str(pair['model_b']))}, n = {int(pair['n_assays'])}"
+                    )
+            ax.set_ylim(len(runs) - 0.5, -0.6)
+            ax.set_yticks(range(len(runs)), labels if k == 0 else [""] * len(runs))
+            ax.tick_params(axis="y", labelleft=k == 0, labelsize=7.5)
+            ax.grid(axis="x", color=GRID, linewidth=0.8)
+            ax.set_axisbelow(True)
+            ax.spines["left"].set_visible(False)
+            ax.set_title(SCHEME_NAMES[scheme], fontsize=9.5, loc="left", color=TEXT, pad=6)
+            ax.set_xlabel("Spearman minus zero-shot (paired)")
+            ax.xaxis.set_major_locator(MaxNLocator(nbins=5))
+        lo, hi = axes[0].get_xlim()
+        axes[0].set_xlim(lo - 0.08 * (hi - lo), hi + 0.08 * (hi - lo))
+        _titles(
+            fig,
+            "Supervised models against the best zero-shot model on the same assays",
+            f"{dataset}; pooled Spearman, ProteinGym aggregate; each run paired with SaProt 650M "
+            "(structure features) or ESM-2 650M (sequence only) on the assays both have",
+            f"Lines: {level} paired-bootstrap CI of the difference. Filled marker: excludes zero. "
+            '"own": the run\'s aggregate on its n assays.\nThe MLP runs on assays with at least '
+            "300 variants only, so its n and its comparator's value differ from ridge's.",
+        )
+    return fig
+
+
+def size_figure(
+    differences: pd.DataFrame,
+    by_size: pd.DataFrame,
+    runs: Sequence[str],
+    names: Mapping[str, str],
+    bins: Sequence[str],
+    *,
+    dataset: str,
+    level: str,
+) -> Figure:
+    """Supervised minus zero-shot by assay size: per-bin paired differences, one panel per scheme.
+
+    Each run (colour) gets the paired-bootstrap mean difference within each size bin it has
+    (``final_size_comparisons``); the first run also gets its per-assay differences as grey dots
+    (``final_assay_differences``). Bins a run has no assay in are left empty.
+    """
+    if len(runs) > len(SERIES):
+        raise FigureDataError(f"at most {len(SERIES)} runs per size figure, got {len(runs)}")
+    for run in runs:
+        if run not in names:
+            raise FigureDataError(f"no display name for {run!r} in train.final_table.names")
+        if not (by_size["model_a"] == run).any():
+            raise FigureDataError(f"no size comparisons for {run}")
+    comparators = sorted(set(by_size.loc[by_size["model_a"].isin(runs), "model_b"].astype(str)))
+    schemes = [s for s in SCHEME_NAMES if s in set(by_size["split"].dropna())]
+    index = {label: i for i, label in enumerate(bins)}
+    with matplotlib.rc_context(_RC):
+        fig = Figure(figsize=(12.0, 4.9))
+        left, right, gap = 0.06, 0.985, 0.025
+        width = (right - left - gap * (len(schemes) - 1)) / len(schemes)
+        axes: list[Axes] = []
+        for k, scheme in enumerate(schemes):
+            ax = fig.add_axes(
+                (left + k * (width + gap), 0.24, width, 0.54), sharey=axes[0] if axes else None
+            )
+            axes.append(ax)
+            ax.axhline(0, color=TEXT_SECONDARY, linewidth=1, zorder=1)
+            dots = differences[
+                (differences["model_a"] == runs[0]) & (differences["split"] == scheme)
+            ]
+            ax.plot(
+                [index[b] - 0.3 for b in dots["size_bin"]],
+                dots["diff"],
+                linestyle="none",
+                marker="o",
+                markersize=2.5,
+                color=TEXT_SECONDARY,
+                alpha=0.35,
+                zorder=2,
+            )
+            for i, run in enumerate(runs):
+                rows = by_size[(by_size["model_a"] == run) & (by_size["split"] == scheme)]
+                for row in rows.to_dict("records"):
+                    x = index[str(row["size_bin"])] + (i - (len(runs) - 1) / 2) * 0.17 + 0.08
+                    low, high, diff = (
+                        float(row["ci_low"]),
+                        float(row["ci_high"]),
+                        float(row["diff"]),
+                    )
+                    clear = low > 0 or high < 0
+                    ax.plot([x, x], [low, high], color=SERIES[i], linewidth=1.8, zorder=3)
+                    ax.plot(
+                        [x],
+                        [diff],
+                        marker="o",
+                        markersize=5.5,
+                        color=SERIES[i],
+                        markerfacecolor=SERIES[i] if clear else SURFACE,
+                        markeredgewidth=1.4,
+                        linestyle="none",
+                        zorder=4,
+                        label=names[run]
+                        if k == 0 and row["size_bin"] == rows["size_bin"].iloc[0]
+                        else None,
+                    )
+            counts = by_size[(by_size["model_a"] == runs[0]) & (by_size["split"] == scheme)]
+            n_of = dict(
+                zip(counts["size_bin"].astype(str), counts["n_assays"].astype(int), strict=True)
+            )
+            ax.set_xticks(
+                range(len(bins)), [f"{b}\nn = {n_of[b]}" if b in n_of else b for b in bins]
+            )
+            ax.tick_params(axis="x", labelsize=7)
+            ax.set_xlim(-0.6, len(bins) - 0.4)
+            ax.grid(axis="y", color=GRID, linewidth=0.8)
+            ax.set_axisbelow(True)
+            ax.set_title(SCHEME_NAMES[scheme], fontsize=9.5, loc="left", color=TEXT)
+            ax.set_xlabel("Measured variants per assay")
+            if k == 0:
+                ax.set_ylabel("Spearman minus zero-shot")
+            else:
+                ax.tick_params(axis="y", labelleft=False)
+        fig.legend(
+            loc="upper left",
+            bbox_to_anchor=(0.012, 0.875),
+            ncol=len(runs),
+            frameon=False,
+            fontsize=7.5,
+        )
+        shown = ", ".join(names.get(c, c) for c in comparators)
+        _titles(
+            fig,
+            "Where supervision pays: supervised minus zero-shot by assay size",
+            f"{dataset}; pooled Spearman; comparator {shown} "
+            f"on the same assays; n = assays of {names[runs[0]]} per bin",
+            f"Markers and lines: per-bin mean of per-assay differences, {level} paired-bootstrap "
+            "CI over assays (filled: excludes zero). A plain mean: a bin has too few assays per "
+            "function type\nfor the ProteinGym aggregate. Grey dots: per-assay differences of "
+            f"{names[runs[0]]}. The MLP has no assay below 300 variants (its minimum); final "
+            "landscapes start at 300.",
+        )
+    return fig

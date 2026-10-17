@@ -1,8 +1,11 @@
-"""Streaming checksums for large files."""
+"""Streaming checksums for large files, and a stable hash of a resolved config."""
 
 import hashlib
+import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 CHUNK_SIZE = 1 << 20
 
@@ -46,3 +49,9 @@ def file_digests(path: Path) -> Digests:
         while chunk := fh.read(CHUNK_SIZE):
             acc.update(chunk)
     return acc.result()
+
+
+def config_sha256(config: Mapping[str, Any]) -> str:
+    """sha256 of a resolved config as canonical JSON (sorted keys), to stamp outputs with it."""
+    text = json.dumps(config, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(text.encode()).hexdigest()

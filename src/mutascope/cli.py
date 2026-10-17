@@ -13,9 +13,11 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Annotated
 
+import duckdb
 import httpx
 import numpy as np
 import pandas as pd
+import pandera.pandas as pa
 import typer
 from omegaconf import DictConfig, OmegaConf
 
@@ -53,6 +55,14 @@ from mutascope.eval.benchmark import (
     write_results,
 )
 from mutascope.eval.compare import paired_bootstrap_diff, shared_assays, summarise_shared
+from mutascope.eval.final import (
+    assay_differences,
+    comparator,
+    final_comparisons,
+    final_summary,
+    size_bin_labels,
+    size_comparisons,
+)
 from mutascope.eval.gate import GateThresholds, join_scores, model_gate
 from mutascope.eval.landscapes import (
     LandscapeTarget,
@@ -78,14 +88,21 @@ from mutascope.eval.region import (
 )
 from mutascope.eval.schemas import (
     AgreementSchema,
+    AssayDifferenceSchema,
     CalibrationSchema,
     CanarySchema,
     ComparisonSchema,
+    FinalCheckSchema,
+    FinalLandscapeSchema,
+    FinalManifestSchema,
     LandscapeCoverageSchema,
     LandscapeRunSchema,
+    RidgeCoefficientSchema,
+    RidgeFitSchema,
     ScoringRunSchema,
     SelectedHyperparameterSchema,
     ShapImportanceSchema,
+    SizeComparisonSchema,
     SummarySchema,
     SupervisedLeaderboardSchema,
     SupervisedMetricSchema,
@@ -109,12 +126,23 @@ from mutascope.eval.zero_shot import (
     with_labels,
     write_scores,
 )
-from mutascope.export.hub import PublishError, push_dataset, stage_dataset
+from mutascope.export.hub import (
+    PublishError,
+    push_dataset,
+    push_folder,
+    stage_dataset,
+    stage_model,
+)
 from mutascope.features.base import FEATURE_SETS, KEY_COLUMNS, KeyDesign
-from mutascope.features.schemas import EmbeddingRunSchema, FeatureStoreReportSchema
+from mutascope.features.schemas import (
+    SUBSTITUTIONS_PER_RESIDUE,
+    EmbeddingRunSchema,
+    FeatureStoreReportSchema,
+)
 from mutascope.features.sets import (
     FeatureSet,
     FeatureSetError,
+    LandscapeDesign,
     StoreDesign,
     assays_of,
     feature_sets,
@@ -136,6 +164,13 @@ from mutascope.models.cv import (
     ModelFactory,
     cv_metrics_table,
 )
+from mutascope.models.final import (
+    FinalAssay,
+    FinalSettings,
+    eligibility,
+    final_failures,
+    final_landscape,
+)
 from mutascope.models.importance import shap_assay
 from mutascope.models.pca import PCAError
 from mutascope.models.registry import model_factory
@@ -151,11 +186,18 @@ from mutascope.scoring.cache import CacheError, LogProbCache
 from mutascope.scoring.ensemble import zscore_mean
 from mutascope.scoring.struct_tokens import AssayStructure, StructTokenError, load_struct_tokens
 from mutascope.utils.config import as_str_dict, load_config
-from mutascope.utils.io import write_table
+from mutascope.utils.hashing import config_sha256, file_digests
+from mutascope.utils.io import fresh_tmp_dir, replace_dir, write_partition, write_table
 from mutascope.utils.logging import configure_logging
 from mutascope.utils.parallel import default_jobs, run_parallel
 from mutascope.utils.seeding import seed_all
-from mutascope.utils.tracking import TrackedRun, TrackingError, TrackingSettings, log_run
+from mutascope.utils.tracking import (
+    TrackedRun,
+    TrackingError,
+    TrackingSettings,
+    code_version,
+    log_run,
+)
 
 app = typer.Typer(
     name="mutascope",
@@ -555,6 +597,13 @@ def data_publish(
             help="Upload the staged folder to publish.repo_id. Without it, only stage locally.",
         ),
     ] = False,
+    landscapes: Annotated[
+        bool,
+        typer.Option(
+            "--landscapes",
+            help="Also publish the `train final` landscapes and their assay manifest (ADR 0025).",
+        ),
+    ] = False,
     config_dir: ConfigDir = Path("conf"),
     overrides: Overrides = None,
 ) -> None:
@@ -603,6 +652,9 @@ def data_publish(
                 reports_dir=reports,
                 provenance=provenance,
                 out_dir=Path(publish.stage_dir),
+                landscapes_dir=(
+                    Path(str(cfg.train.final.out_dir)) / _final_label(cfg) if landscapes else None
+                ),
             )
         except PublishError as exc:
             typer.echo(f"error: {exc}", err=True)
@@ -1627,6 +1679,520 @@ def train_leaderboard(
         {"kind": "supervised"},
         experiment=str(cfg.train.experiment),
     )
+
+
+def _run_feature_set(results_dir: Path, label: str) -> str:
+    """The ``feature_set`` column of ``cv_<label>.parquet``."""
+    sets = sorted(set(read_results(results_path(results_dir, label))["feature_set"].astype(str)))
+    if len(sets) != 1:
+        raise typer.BadParameter(f"cv_{label}.parquet holds feature sets {sets}")
+    return sets[0]
+
+
+FINAL_TABLE_FILES = {
+    "summary": "final_summary.parquet",
+    "comparisons": "final_comparisons.parquet",
+    "differences": "final_assay_differences.parquet",
+    "by_size": "final_size_comparisons.parquet",
+}
+
+
+@train_app.command("final-table")
+def train_final_table(
+    results_dir: Annotated[
+        Path,
+        typer.Option(help="Directory of cv_<label>.parquet.", exists=True, file_okay=False),
+    ],
+    reference: Reference,
+    out_dir: Annotated[Path, typer.Option(help="Where the final_*.parquet tables go.")],
+    config_dir: ConfigDir = Path("conf"),
+    overrides: Overrides = None,
+) -> None:
+    """The final results table: every run against the best zero-shot model (ADR 0025).
+
+    Results only, read from ``train cv``'s files. For each run in ``train.final_table.runs``:
+    its aggregate pooled Spearman with its own bootstrap CI, overall and per function type
+    (``final_summary.parquet``), and the paired bootstrap of ``run - zero-shot`` on the same
+    assays (``final_comparisons.parquet``): SaProt for a structure feature set, ESM-2 650M
+    otherwise. Also the per-assay differences and their paired bootstrap per assay-size bin
+    (``final_assay_differences.parquet``, ``final_size_comparisons.parquet``).
+    """
+    cfg = load_config(config_dir, overrides)
+    spec = cfg.train.final_table
+    runs = [str(r) for r in spec.runs]
+    comparators = {str(k): str(v) for k, v in spec.comparators.items()}
+    edges = [int(e) for e in spec.size_edges]
+    sets = feature_sets(
+        as_str_dict(OmegaConf.to_container(cfg.features.sets, resolve=True), "features.sets")
+    )
+    labels = [*runs, *sorted(set(comparators.values()) - set(runs))]
+    pooled = _pooled_runs(results_dir, labels)
+    pairs: list[tuple[str, str]] = []
+    for run in runs:
+        feature_set = _run_feature_set(results_dir, run)
+        if feature_set not in sets:
+            typer.echo(f"error: {run}: feature set {feature_set!r} not in features.sets", err=True)
+            raise typer.Exit(code=1)
+        pairs.append((run, comparator(sets[feature_set].structure, comparators)))
+    table = pd.read_csv(reference)
+    bootstrap = BootstrapParams(
+        int(cfg.eval.bootstrap.n_resamples), float(cfg.eval.bootstrap.confidence)
+    )
+    seed = int(cfg.eval.bootstrap.seed)
+    seed_all(seed)
+    counts = table.set_index("DMS_id")["DMS_number_single_mutants"]
+    sizes = {str(a): int(n) for a, n in counts.items()}
+    exceptions = cfg.data.structure_exceptions
+    no_structure = [] if exceptions is None else [str(a) for a in exceptions]
+    # A run of a model with train.min_variants lacks exactly the assays below it (ADR 0023).
+    absent = {
+        label: [
+            *no_structure,
+            *below_minimum(sizes, _min_variants(cfg, _run_model(results_dir, label))),
+        ]
+        for label in labels
+    }
+    try:
+        summary = final_summary(pooled, table, bootstrap, seed)
+        comparisons = final_comparisons(pooled, pairs, table, bootstrap, seed, absent)
+        differences = assay_differences(pooled, pairs, sizes, edges)
+        by_size = size_comparisons(differences, bootstrap, seed, edges)
+    except (ValueError, KeyError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    schemas: dict[str, type[pa.DataFrameModel]] = {
+        "summary": SummarySchema,
+        "comparisons": ComparisonSchema,
+        "differences": AssayDifferenceSchema,
+        "by_size": SizeComparisonSchema,
+    }
+    frames = {
+        "summary": summary,
+        "comparisons": comparisons,
+        "differences": differences,
+        "by_size": by_size,
+    }
+    paths = [
+        write_table(frames[k], schemas[k], out_dir / name) for k, name in FINAL_TABLE_FILES.items()
+    ]
+    overall = summary[(summary["level"] == "overall") & (summary["metric"] == "spearman")]
+    headline = comparisons[
+        (comparisons["level"] == "overall") & (comparisons["metric"] == "spearman")
+    ]
+    metrics: dict[str, float] = {}
+    typer.echo(
+        "pooled Spearman (own CI) and paired difference vs zero-shot, "
+        f"{bootstrap.n_resamples:,} resamples:"
+    )
+    for run, zero_shot in pairs:
+        for scheme in CV_SCHEMES:
+            own = overall[(overall["model"] == run) & (overall["split"] == scheme)].iloc[0]
+            pair = headline[
+                (headline["model_a"] == run)
+                & (headline["model_b"] == zero_shot)
+                & (headline["split"] == scheme)
+            ].iloc[0]
+            typer.echo(
+                f"  {run:<22} {scheme:<10} {own.value:.3f} [{own.ci_low:.3f}, {own.ci_high:.3f}]"
+                f" ({own.n_assays})  - {zero_shot}: {pair['diff']:+.3f} "
+                f"[{pair.ci_low:+.3f}, {pair.ci_high:+.3f}] ({pair.n_assays})"
+            )
+            metrics[f"spearman/{run}/{scheme}"] = float(own.value)
+            metrics[f"spearman_diff/{run}-vs-{zero_shot}/{scheme}"] = float(pair["diff"])
+    for path in paths:
+        typer.echo(f"results: {path}")
+    _log_run(
+        cfg,
+        "final-table",
+        "supervised",
+        {
+            "pairs": ", ".join(f"{a} - {b}" for a, b in pairs),
+            "bootstrap.n_resamples": bootstrap.n_resamples,
+            "bootstrap.seed": seed,
+            "train.final_table.size_edges": edges,
+        },
+        metrics,
+        paths,
+        {"kind": "supervised"},
+        experiment=str(cfg.train.experiment),
+    )
+
+
+@train_app.command("final-figures")
+def train_final_figures(
+    results_dir: Annotated[
+        Path,
+        typer.Option(help="Directory of the final_*.parquet tables.", exists=True, file_okay=False),
+    ],
+    out_dir: Annotated[Path, typer.Option(help="Figure directory.")],
+    config_dir: ConfigDir = Path("conf"),
+    overrides: Overrides = None,
+) -> None:
+    """The model ladder per scheme and supervised vs zero-shot by assay size (ADR 0025), drawn
+    from ``train final-table``'s files only. The calibration figure is ``train
+    uncertainty-figures``'."""
+    from mutascope.eval.figures import FigureDataError, ladder_figure, save_figure, size_figure
+
+    cfg = load_config(config_dir, overrides)
+    spec, style = cfg.train.final_table, cfg.eval.figures
+    missing = [n for n in FINAL_TABLE_FILES.values() if not (results_dir / n).exists()]
+    if missing:
+        typer.echo(f"error: no {missing} in {results_dir} (run `train final-table`)", err=True)
+        raise typer.Exit(code=1)
+    summary = SummarySchema.validate(pd.read_parquet(results_dir / FINAL_TABLE_FILES["summary"]))
+    comparisons = ComparisonSchema.validate(
+        pd.read_parquet(results_dir / FINAL_TABLE_FILES["comparisons"])
+    )
+    differences = AssayDifferenceSchema.validate(
+        pd.read_parquet(results_dir / FINAL_TABLE_FILES["differences"])
+    )
+    by_size = SizeComparisonSchema.validate(
+        pd.read_parquet(results_dir / FINAL_TABLE_FILES["by_size"])
+    )
+    names = {str(k): str(v) for k, v in spec.names.items()}
+    dataset = f"ProteinGym {cfg.data.release.version}"
+    level = f"{float(cfg.eval.bootstrap.confidence):.0%}"
+    try:
+        figures = {
+            "final_ladder": ladder_figure(
+                summary,
+                comparisons,
+                [str(r) for r in spec.runs],
+                names,
+                dataset=dataset,
+                level=level,
+            ),
+            "final_by_size": size_figure(
+                differences,
+                by_size,
+                [str(r) for r in spec.size_figure],
+                names,
+                size_bin_labels([int(e) for e in spec.size_edges]),
+                dataset=dataset,
+                level=level,
+            ),
+        }
+    except FigureDataError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    for name, figure in figures.items():
+        for path in save_figure(
+            figure, out_dir, name, [str(f) for f in style.formats], int(style.dpi)
+        ):
+            typer.echo(f"figure: {path}")
+
+
+def _final_settings(cfg: DictConfig) -> FinalSettings:
+    """``train.final`` as :class:`FinalSettings` (ADR 0025)."""
+    spec = cfg.train.final
+    return FinalSettings(
+        levels=tuple(float(v) for v in spec.levels),
+        interval=str(spec.interval),
+        epsilon=float(spec.epsilon),
+        measured_scheme=str(spec.scheme_by_position.measured),
+        unmeasured_scheme=str(spec.scheme_by_position.unmeasured),
+        buried_rel_sasa=float(spec.buried_rel_sasa),
+    )
+
+
+def _final_label(cfg: DictConfig) -> str:
+    return supervised_label(str(cfg.train.final.model), str(cfg.train.final.feature_set))
+
+
+@train_app.command("final")
+def train_final(
+    variants_dir: Annotated[
+        Path, typer.Option(help="Processed variant partitions.", exists=True, file_okay=False)
+    ],
+    folds_dir: Annotated[
+        Path,
+        typer.Option(help="Fold partitions (`data folds`).", exists=True, file_okay=False),
+    ],
+    reference: Reference,
+    store_dir: Annotated[
+        Path,
+        typer.Option(help="Feature store (`features build`).", exists=True, file_okay=False),
+    ],
+    results_dir: Annotated[
+        Path,
+        typer.Option(
+            help="Supervised results: reads cv_<label>.parquet, writes final_checks / "
+            "final_manifest.",
+            exists=True,
+            file_okay=False,
+        ),
+    ],
+    out_dir: Annotated[
+        Path | None,
+        typer.Option(help="Landscape bundle directory (default: train.final.out_dir)."),
+    ] = None,
+    jobs: Jobs = None,
+    config_dir: ConfigDir = Path("conf"),
+    overrides: Overrides = None,
+) -> None:
+    """Final deployment models and full landscapes of every eligible assay (ADR 0025).
+
+    One fixed model (``train.final``: ridge on ``seq_struct``) for every assay with a structure
+    and at least ``train.final.min_variants`` measured variants; no per-assay selection. Per
+    assay, CV+ is refit on the same inputs as ``train calibrate`` (and must reproduce its rows),
+    and all ``19 x L`` substitutions get a prediction (out-of-fold if measured) and 80% / 90%
+    CV+ intervals. Writes ``<out_dir>/<label>/``: ``assay_id=<id>/data.parquet`` per assay,
+    ``manifest.parquet`` (every assay: eligible or why not, and the website default),
+    ``fits.parquet`` and ``coefficients.parquet`` (the published ridges) and ``version.json``;
+    and ``final_checks.parquet`` / ``final_manifest.parquet`` to ``results_dir``. Fails, and
+    leaves any previous bundle in place, if a check fails.
+    """
+    cfg = load_config(config_dir, overrides)
+    spec = cfg.train.final
+    label = _final_label(cfg)
+    calibration_label = supervised_label(
+        str(cfg.train.uncertainty.model), str(cfg.train.uncertainty.feature_set)
+    )
+    if calibration_label != label:
+        typer.echo(
+            f"error: calibration rows are {calibration_label}, the final model {label}", err=True
+        )
+        raise typer.Exit(code=1)
+    bundle = (Path(str(spec.out_dir)) if out_dir is None else out_dir) / label
+    calibration_dir = Path(str(cfg.train.uncertainty.calibration_dir)) / label
+    jobs = default_jobs() if jobs is None else jobs
+    seed_all(int(cfg.train.seed))
+    started = time.monotonic()
+    reference_table = pd.read_csv(reference)
+    try:
+        settings = _final_settings(cfg)
+        make_model = _model(cfg, str(spec.model))
+        _, covered = _design(cfg, store_dir, str(spec.feature_set))
+        sets = feature_sets(
+            as_str_dict(OmegaConf.to_container(cfg.features.sets, resolve=True), "features.sets")
+        )
+        design = LandscapeDesign(store_dir, sets[str(spec.feature_set)])
+        defaults = {str(k): str(v) for k, v in spec.zero_shot_default.items()}
+        manifest = eligibility(
+            reference_table, structured_assays(store_dir), int(spec.min_variants), label, defaults
+        )
+        eligible = manifest.loc[manifest["eligible"], "assay_id"].astype(str).tolist()
+        if cfg.train.assays is not None:
+            eligible = [a for a in eligible if a in {str(x) for x in cfg.train.assays}]
+        # The same call as `train calibrate`, so each assay's rows come in the same order.
+        data = load_cv_table(variants_dir, folds_dir, covered)
+        groups = data.groupby("assay_id", sort=True).indices
+        columns = [*KEY_COLUMNS, "DMS_score", *(f"fold_{s}" for s in CV_SCHEMES)]
+        measured = {a: data.iloc[groups[a]][columns].reset_index(drop=True) for a in eligible}
+        saved: dict[str, pd.DataFrame] = {}
+        for a in eligible:
+            path = calibration_dir / f"{a}.parquet"
+            if not path.exists():
+                raise FeatureSetError(f"no calibration rows {path} (run `train calibrate`)")
+            rows = CalibrationSchema.validate(pd.read_parquet(path))
+            saved[a] = rows[rows["mode"] == "scheme"].reset_index(drop=True)
+        lengths = manifest.set_index("assay_id")["target_length"]
+        weights = [SUBSTITUTIONS_PER_RESIDUE * int(lengths[a]) + len(measured[a]) for a in eligible]
+        order = sorted(range(len(eligible)), key=lambda i: (-weights[i], eligible[i]))
+
+        def done(index: int, output: FinalAssay) -> None:
+            del output
+            typer.echo(f"  {eligible[order[index]]}: done")
+
+        outputs = run_parallel(
+            final_landscape,
+            [
+                (
+                    eligible[i],
+                    measured[eligible[i]],
+                    saved[eligible[i]],
+                    design,
+                    make_model,
+                    settings,
+                )
+                for i in order
+            ],
+            jobs=jobs,
+            weights=[weights[i] for i in order],
+            budget=int(spec.max_rows_in_flight),
+            on_done=done,
+        )
+    except (*TRAIN_ERRORS, ValueError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    finished = {eligible[i]: out for i, out in zip(order, outputs, strict=True)}
+    wall = time.monotonic() - started
+    resolved = as_str_dict(OmegaConf.to_container(cfg, resolve=True), "config")
+    version = {
+        "code_version": code_version(),
+        "config_sha256": config_sha256(resolved),
+        "manifest_sha256": file_digests(Path(str(cfg.data.manifest_path))).sha256,
+    }
+    landscape_rows = {a: len(out.landscape) for a, out in finished.items()}
+    manifest["landscape_rows"] = manifest["assay_id"].map(landscape_rows).fillna(0).astype(np.int64)
+    for key, value in version.items():
+        manifest[key] = value
+    if cfg.train.assays is not None:
+        manifest = manifest[manifest["assay_id"].isin(finished) | ~manifest["eligible"]]
+    cv = read_results(results_path(results_dir, label))
+    cv = cv[cv["fold"].isna() & (cv["metric"] == "spearman")]
+    task4 = cv.pivot_table(index="assay_id", columns="scheme", values="value")
+    checks = pd.DataFrame.from_records([finished[a].check for a in sorted(finished)])
+    for scheme in CV_SCHEMES:
+        checks[f"cv_spearman_{scheme}"] = checks["assay_id"].map(task4[scheme])
+    order_columns = list(FinalCheckSchema.to_schema().columns)
+    checks = checks[order_columns].astype({"buried_lower": "boolean"})
+    paths = [
+        write_table(checks, FinalCheckSchema, results_dir / "final_checks.parquet"),
+        write_table(manifest, FinalManifestSchema, results_dir / "final_manifest.parquet"),
+    ]
+    failures = final_failures(
+        checks, manifest, float(spec.calibration_tolerance), float(spec.oof_tolerance)
+    )
+    if failures:
+        for line in failures[:50]:
+            typer.echo(f"check failed: {line}", err=True)
+        typer.echo(
+            f"error: {len(failures)} checks failed; the bundle at {bundle} was not replaced",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    tmp = fresh_tmp_dir(bundle)
+    with duckdb.connect() as con:
+        for a in sorted(finished):
+            frame = finished[a].landscape.assign(**version)
+            validated = FinalLandscapeSchema.validate(frame, lazy=True)
+            write_partition(con, validated, tmp / f"assay_id={a}")
+    write_table(manifest, FinalManifestSchema, tmp / "manifest.parquet")
+    write_table(
+        pd.concat([finished[a].fits for a in sorted(finished)], ignore_index=True),
+        RidgeFitSchema,
+        tmp / "fits.parquet",
+    )
+    write_table(
+        pd.concat([finished[a].coefficients for a in sorted(finished)], ignore_index=True),
+        RidgeCoefficientSchema,
+        tmp / "coefficients.parquet",
+    )
+    (tmp / "version.json").write_text(
+        json.dumps(version | {"model": label, "assays": len(finished)}, indent=2) + "\n"
+    )
+    replace_dir(tmp, bundle)
+    buried = checks["buried_lower"].dropna()
+    share = float(buried.mean()) if len(buried) else float("nan")
+    rows_total = int(sum(landscape_rows.values()))
+    typer.echo(
+        f"{label}: {len(finished)} eligible assays, {rows_total:,} substitutions, "
+        f"{len(manifest) - int(manifest['eligible'].sum())} assays default to zero-shot; "
+        f"{wall:.0f} s with {jobs} job(s)"
+    )
+    typer.echo(
+        f"  checks passed: no NaN, lower < upper, CV+ refit max diff "
+        f"{checks['calibration_max_abs_diff'].max():.3g}, out-of-fold Spearman vs train cv max "
+        + ", ".join(
+            f"{s} {(checks[f'oof_spearman_{s}'] - checks[f'cv_spearman_{s}']).abs().max():.2g}"
+            for s in CV_SCHEMES
+        )
+    )
+    typer.echo(
+        f"  buried residues predicted lower than exposed in {int(buried.sum())} of {len(buried)} "
+        f"assays ({share:.1%}); out-of-fold coverage of measured variants, mean over assays: "
+        f"80% {checks['oof_coverage_80'].mean():.3f}, 90% {checks['oof_coverage_90'].mean():.3f}"
+    )
+    typer.echo(f"bundle: {bundle}")
+    for path in paths:
+        typer.echo(f"results: {path}")
+    params: dict[str, object] = {
+        "train.final": as_str_dict(OmegaConf.to_container(spec, resolve=True), "train.final"),
+        "train.params": as_str_dict(
+            OmegaConf.to_container(cfg.train.params, resolve=True), "train.params"
+        ).get(str(spec.model), {}),
+        "train.jobs": jobs,
+    }
+    _log_run(
+        cfg,
+        "final",
+        f"{spec.model} {spec.feature_set}",
+        params | version,
+        {
+            "assays": float(len(finished)),
+            "substitutions": float(rows_total),
+            "buried_lower_share": share,
+            "calibration_max_abs_diff": float(checks["calibration_max_abs_diff"].max()),
+            "oof_coverage_80_mean": float(checks["oof_coverage_80"].mean()),
+            "oof_coverage_90_mean": float(checks["oof_coverage_90"].mean()),
+        },
+        paths,
+        {"model": str(spec.model), "feature_set": str(spec.feature_set), "kind": "final"},
+        experiment=str(cfg.train.experiment),
+    )
+
+
+@train_app.command("publish")
+def train_publish(
+    results_dir: Annotated[
+        Path,
+        typer.Option(help="Supervised results (final_* tables).", exists=True, file_okay=False),
+    ],
+    push: Annotated[
+        bool,
+        typer.Option("--push", help="Upload to train.publish.repo_id. Without it, only stage."),
+    ] = False,
+    config_dir: ConfigDir = Path("conf"),
+    overrides: Overrides = None,
+) -> None:
+    """Stage the final ridges as a Hugging Face model repo, and optionally push it (ADR 0025).
+
+    The repo holds every eligible assay's ridge fits and coefficients (``DMS_score`` units on
+    raw feature values), the assay manifest and version, the configs that produced them (as
+    committed, plus the resolved config), the final results tables and the model card.
+    """
+    cfg = load_config(config_dir, overrides)
+    spec = cfg.train.publish
+    bundle = Path(str(cfg.train.final.out_dir)) / _final_label(cfg)
+    resolved = OmegaConf.to_yaml(OmegaConf.create(OmegaConf.to_container(cfg, resolve=True)))
+    stage = Path(str(spec.stage_dir))
+    config_copy = stage.with_name(stage.name + ".config.yaml")
+    config_copy.parent.mkdir(parents=True, exist_ok=True)
+    config_copy.write_text(resolved)
+    tables = [
+        *FINAL_TABLE_FILES.values(),
+        "final_checks.parquet",
+        "final_manifest.parquet",
+        "uncertainty_ridge_seq_struct_summary.parquet",
+    ]
+    files = {f"results/{name}": results_dir / name for name in tables} | {
+        "config/train.yaml": config_dir / "train" / "default.yaml",
+        "config/features.yaml": config_dir / "features" / "default.yaml",
+        "config/resolved.yaml": config_copy,
+    }
+    try:
+        staged = stage_model(
+            bundle=bundle,
+            files=files,
+            card=Path(str(spec.card)),
+            card_metadata=as_str_dict(
+                OmegaConf.to_container(spec.card_metadata, resolve=True), "card_metadata"
+            ),
+            out_dir=stage,
+        )
+    except PublishError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    finally:
+        config_copy.unlink(missing_ok=True)
+    typer.echo(f"staged -> {staged}")
+    if not push:
+        typer.echo("not pushed (pass --push to upload)")
+        return
+    try:
+        url = push_folder(
+            staged,
+            str(spec.repo_id),
+            repo_type="model",
+            private=bool(spec.private),
+            message=f"Publish final ridge models (mutascope {__version__})",
+            delete_patterns=["model/*", "results/*", "config/*"],
+        )
+    except PublishError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"pushed -> {url}")
 
 
 @eval_app.command("precomputed")
