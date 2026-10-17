@@ -4,6 +4,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -68,3 +69,20 @@ def test_bad_arguments_fail() -> None:
         run_parallel(fail_on, [(0,)], jobs=0)
     with pytest.raises(ValueError, match="1 weights for 2 tasks"):
         run_parallel(fail_on, [(0,), (1,)], jobs=2, weights=[1])
+
+
+def _thread_counts() -> list[int]:
+    import numpy as np  # loads the BLAS library threadpoolctl reports
+    from threadpoolctl import threadpool_info  # pyright: ignore[reportMissingTypeStubs]
+
+    _ = np.ones((2, 2)) @ np.ones((2, 2))
+    infos = cast("list[dict[str, object]]", threadpool_info())
+    return [int(str(info["num_threads"])) for info in infos]
+
+
+def test_a_serial_run_is_single_threaded_like_a_worker() -> None:
+    """``jobs = 1`` caps the loaded BLAS / OpenMP libraries at one thread: on a multi-core Linux
+    runner, multi-threaded OpenBLAS otherwise gave a serial CV table that differed from the
+    workers' by up to 3.4e-3 (``test_cv.py::test_parallel_assays_give_the_serial_table``)."""
+    [counts] = run_parallel(_thread_counts, [()], jobs=1)
+    assert all(n == 1 for n in counts), counts

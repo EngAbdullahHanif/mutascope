@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import duckdb
+import numpy as np
 import pytest
 from omegaconf import OmegaConf
 from typer.testing import CliRunner
@@ -173,3 +174,118 @@ def test_push_refuses_a_folder_changed_after_staging(
     with pytest.raises(PublishError, match="changed since it was staged"):
         push_dataset(staged, "me/toy", private=True)
     assert FakeHfApi.calls == []
+
+
+def _bundle(root: Path) -> Path:
+    """A two-row ``train final`` bundle for assay A (B is not eligible)."""
+    import pandas as pd
+
+    from mutascope.eval.schemas import FinalLandscapeSchema, FinalManifestSchema
+    from mutascope.utils.io import write_partition
+
+    bundle = root / "landscapes" / "ridge_seq_struct"
+    bundle.mkdir(parents=True)
+    version = {"code_version": "abc", "config_sha256": "0" * 64, "manifest_sha256": "1" * 64}
+    landscape = pd.DataFrame(
+        {
+            "assay_id": "A",
+            "position": [0, 0],
+            "wt_aa": "M",
+            "mt_aa": ["C", "A"],
+            "position_status": "partially_measured",
+            "measured": [False, True],
+            "dms_score": [np.nan, 0.5],
+            "prediction": [0.1, 0.4],
+            "prediction_source": ["final_model", "out_of_fold"],
+            "calibration_scheme": "random",
+            "lower_80": [-0.5, -0.2],
+            "upper_80": [0.7, 1.0],
+            "lower_90": [-0.7, -0.4],
+            "upper_90": [0.9, 1.2],
+            "structure_imputed": False,
+        }
+        | version
+    )
+    with duckdb.connect() as con:
+        write_partition(con, FinalLandscapeSchema.validate(landscape), bundle / "assay_id=A")
+    manifest = pd.DataFrame(
+        {
+            "assay_id": ["A", "B"],
+            "eligible": [True, False],
+            "reason": [None, "no structure"],
+            "default_model": ["ridge_seq_struct", "esm2_650m"],
+            "has_structure": [True, False],
+            "n_measured": [4, 2],
+            "target_length": [4, 5],
+            "landscape_rows": [2, 0],
+        }
+        | version
+    )
+    FinalManifestSchema.validate(manifest).to_parquet(bundle / "manifest.parquet")
+    for name in ("fits.parquet", "coefficients.parquet"):
+        (bundle / name).write_bytes(b"x")
+    (bundle / "version.json").write_text("{}\n")
+    return bundle
+
+
+def test_stage_publishes_landscapes_as_new_configs(
+    processed_root: Path, processed_overrides: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(processed_root)
+    _bundle(processed_root)
+    overrides = [*processed_overrides, "train.final.out_dir=landscapes"]
+    code, output = publish(processed_root, overrides, "--landscapes")
+    assert code == 0, output
+    stage = processed_root / "stage"
+    with duckdb.connect() as con:
+        assert con.sql(
+            f"SELECT assay_id, mt_aa FROM '{stage}/data/supervised_landscapes.parquet'"
+        ).fetchall() == [("A", "A"), ("A", "C")]
+        assert con.sql(
+            f"SELECT count(*) FROM '{stage}/data/supervised_landscape_assays.parquet'"
+        ).fetchone() == (2,)
+    card = (stage / "README.md").read_text()
+    assert "config_name: supervised_landscapes" in card
+    assert checksums(stage) == (stage / CHECKSUMS_FILE).read_text()
+
+
+def test_stage_model_copies_the_bundle_and_pushes_a_model_repo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle = _bundle(tmp_path)
+    (tmp_path / "CARD.md").write_text(CARD_BODY)
+    (tmp_path / "train.yaml").write_text("model: ridge\n")
+    staged = hub.stage_model(
+        bundle=bundle,
+        files={"config/train.yaml": tmp_path / "train.yaml"},
+        card=tmp_path / "CARD.md",
+        card_metadata={"license": "mit"},
+        out_dir=tmp_path / "stage",
+    )
+    files = sorted(p.relative_to(staged).as_posix() for p in staged.rglob("*") if p.is_file())
+    assert files == [
+        "README.md", "SHA256SUMS", "config/train.yaml", "model/coefficients.parquet",
+        "model/fits.parquet", "model/manifest.parquet", "model/version.json",
+    ]  # fmt: skip
+    assert (staged / "README.md").read_text().startswith("---\nlicense: mit\n---\n\n# Toy card")
+    with pytest.raises(PublishError, match="missing files"):
+        hub.stage_model(
+            bundle=bundle,
+            files={"x": tmp_path / "absent"},
+            card=tmp_path / "CARD.md",
+            card_metadata={},
+            out_dir=tmp_path / "stage2",
+        )
+    FakeHfApi.calls = []
+    monkeypatch.setattr(hub, "HfApi", FakeHfApi)
+    hub.push_folder(
+        staged,
+        "me/model",
+        repo_type="model",
+        private=True,
+        message="m",
+        delete_patterns=["model/*"],
+    )
+    calls = dict(FakeHfApi.calls)
+    assert calls["create_repo"]["repo_type"] == "model"
+    assert calls["upload_folder"]["delete_patterns"] == ["model/*"]

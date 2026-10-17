@@ -10,6 +10,7 @@ import pandas as pd
 import pandera.pandas as pa
 from pandera.typing.pandas import Series
 
+from mutascope.alphabet import AA_ORDER
 from mutascope.data.parse import SINGLE_MUTATION_PATTERN
 from mutascope.data.schemas import CV_SCHEMES, FUNCTION_TYPES
 from mutascope.eval.metrics import METRICS, SUPERVISED_METRICS
@@ -320,6 +321,229 @@ class ComparisonSchema(pa.DataFrameModel):
         strict = True
         ordered = True
         unique = ["model_a", "model_b", "split", "metric", "level", "group"]  # noqa: RUF012 — read by pandera
+
+
+class AssayDifferenceSchema(pa.DataFrameModel):
+    """One assay's pooled Spearman of a supervised run and its zero-shot comparator (ADR 0025).
+
+    ``n_variants`` is the reference's single-mutant count; ``size_bin`` its bin
+    (``train.final_table.size_edges``). A per-assay ``diff`` is a diagnostic for the by-size
+    figure; statements about a difference come from :class:`SizeComparisonSchema` rows.
+    """
+
+    model_a: Series[str]
+    model_b: Series[str]
+    split: Series[str] = pa.Field(isin=list(SPLITS))
+    assay_id: Series[str]
+    n_variants: Series[int] = pa.Field(ge=1)
+    size_bin: Series[str]
+    value_a: Series[float] = pa.Field(nullable=True)
+    value_b: Series[float] = pa.Field(nullable=True)
+    diff: Series[float] = pa.Field(nullable=True)
+
+    class Config:  # pyright: ignore[reportIncompatibleVariableOverride]
+        strict = True
+        ordered = True
+        unique = ["model_a", "model_b", "split", "assay_id"]  # noqa: RUF012 — read by pandera
+
+
+class SizeComparisonSchema(pa.DataFrameModel):
+    """Paired bootstrap of the **plain mean** per-assay ``A - B`` over the assays of one size bin.
+
+    Not the ProteinGym aggregate: within a bin the function types are too few for its stratified
+    bootstrap (:func:`mutascope.eval.final.size_comparisons`). A diagnostic, never a headline.
+    """
+
+    model_a: Series[str]
+    model_b: Series[str]
+    split: Series[pd.StringDtype] = pa.Field(isin=list(SPLITS), nullable=True)
+    metric: Series[str] = pa.Field(isin=list(METRICS))
+    value_a: Series[float] = pa.Field(nullable=True)
+    value_b: Series[float] = pa.Field(nullable=True)
+    diff: Series[float] = pa.Field(nullable=True)
+    ci_low: Series[float] = pa.Field(nullable=True)
+    ci_high: Series[float] = pa.Field(nullable=True)
+    share_a_better: Series[float] = pa.Field(ge=0, le=1, nullable=True)
+    n_assays: Series[int] = pa.Field(ge=0)
+    size_bin: Series[str]
+
+    class Config:  # pyright: ignore[reportIncompatibleVariableOverride]
+        strict = True
+        ordered = True
+        unique = ["model_a", "model_b", "split", "metric", "size_bin"]  # noqa: RUF012 — read by pandera
+
+
+POSITION_STATUSES = ("measured", "partially_measured", "unmeasured")
+"""A residue with all 19 substitutions measured, some, or none."""
+PREDICTION_SOURCES = ("out_of_fold", "final_model")
+LANDSCAPE_SCHEMES = ("random", "contiguous")
+"""Calibration schemes a final landscape draws from (``train.final.scheme_by_position``)."""
+
+
+class FinalLandscapeSchema(pa.DataFrameModel):
+    """One substitution of a final supervised landscape (``train final``; ADR 0025).
+
+    Every one of the 19 x L substitutions of an eligible assay. ``dms_score`` is the measurement
+    if there is one. ``prediction`` is out-of-fold for a measured variant (from the fold model
+    that never saw it) and the final all-data model's for an unmeasured one; never an in-sample
+    fit. The intervals (constant-width CV+, ``DMS_score`` units) and the prediction come from
+    ``calibration_scheme``'s folds. ``structure_imputed``: a structure feature was missing at the
+    residue (outside a partial structure) and was replaced by its mean over measured variants.
+    The last three columns identify what produced the landscape.
+    """
+
+    assay_id: Series[str]
+    position: Series[int] = pa.Field(ge=0)
+    wt_aa: Series[str] = pa.Field(isin=list(AA_ORDER))
+    mt_aa: Series[str] = pa.Field(isin=list(AA_ORDER))
+    position_status: Series[str] = pa.Field(isin=list(POSITION_STATUSES))
+    measured: Series[bool]
+    dms_score: Series[float] = pa.Field(nullable=True)
+    prediction: Series[float]
+    prediction_source: Series[str] = pa.Field(isin=list(PREDICTION_SOURCES))
+    calibration_scheme: Series[str] = pa.Field(isin=list(LANDSCAPE_SCHEMES))
+    lower_80: Series[float]
+    upper_80: Series[float]
+    lower_90: Series[float]
+    upper_90: Series[float]
+    structure_imputed: Series[bool]
+    code_version: Series[str]
+    config_sha256: Series[str] = pa.Field(str_length=64)
+    manifest_sha256: Series[str] = pa.Field(str_length=64)
+
+    class Config:  # pyright: ignore[reportIncompatibleVariableOverride]
+        strict = True
+        ordered = True
+        unique = ["assay_id", "position", "mt_aa"]  # noqa: RUF012 — read by pandera
+
+    @pa.dataframe_check  # pyright: ignore[reportUnknownMemberType] — untyped in pandera
+    @classmethod
+    def consistent(cls, df: pd.DataFrame) -> "pd.Series[bool]":
+        """A measurement exactly for measured rows, out-of-fold exactly for them, no wild type,
+        finite values, ``lower < upper`` and the 90% interval holding the 80% one."""
+        values = df[["prediction", "lower_80", "upper_80", "lower_90", "upper_90"]]
+        return (
+            (df["measured"] == df["dms_score"].notna())
+            & (df["measured"] == (df["prediction_source"] == "out_of_fold"))
+            & (df["wt_aa"] != df["mt_aa"])
+            & values.abs().lt(float("inf")).all(axis=1)
+            & (df["lower_80"] < df["upper_80"])
+            & (df["lower_90"] < df["upper_90"])
+            & (df["lower_90"] <= df["lower_80"])
+            & (df["upper_80"] <= df["upper_90"])
+        ).astype(bool)
+
+
+class FinalManifestSchema(pa.DataFrameModel):
+    """Every assay's entry in the landscape bundle: supervised or why not (ADR 0025).
+
+    ``default_model`` is what the website shows: the supervised run for an eligible assay, else
+    the zero-shot model ``train.final.zero_shot_default`` names, with ``reason`` saying why.
+    """
+
+    assay_id: Series[str] = pa.Field(unique=True)
+    eligible: Series[bool]
+    reason: Series[str] = pa.Field(nullable=True)
+    default_model: Series[str]
+    has_structure: Series[bool]
+    n_measured: Series[int] = pa.Field(ge=0)
+    target_length: Series[int] = pa.Field(ge=1)
+    landscape_rows: Series[int] = pa.Field(ge=0)
+    code_version: Series[str]
+    config_sha256: Series[str] = pa.Field(str_length=64)
+    manifest_sha256: Series[str] = pa.Field(str_length=64)
+
+    class Config:  # pyright: ignore[reportIncompatibleVariableOverride]
+        strict = True
+        ordered = True
+
+    @pa.dataframe_check  # pyright: ignore[reportUnknownMemberType] — untyped in pandera
+    @classmethod
+    def reason_iff_ineligible(cls, df: pd.DataFrame) -> "pd.Series[bool]":
+        """A reason exactly when not eligible, and a landscape exactly when eligible."""
+        return (
+            (df["eligible"] == df["reason"].isna()) & (df["eligible"] == (df["landscape_rows"] > 0))
+        ).astype(bool)
+
+
+class FinalCheckSchema(pa.DataFrameModel):
+    """The checks of one eligible assay's final landscape (``train final``; ADR 0025).
+
+    ``calibration_max_abs_diff``: refit CV+ against ``train calibrate``'s rows (predictions and
+    spreads). ``oof_spearman_<scheme>``: pooled Spearman of the out-of-fold predictions, on each
+    fold's training scale as ``train cv`` pools them; ``cv_spearman_<scheme>`` the Task 4 value.
+    ``oof_coverage_<level>``: share of measured variants inside their out-of-fold interval.
+    ``buried_lower``: median prediction at buried residues below that at exposed ones (null
+    without both).
+    """
+
+    assay_id: Series[str] = pa.Field(unique=True)
+    n_measured: Series[int] = pa.Field(ge=1)
+    n_variants: Series[int] = pa.Field(ge=1)
+    alpha_random: Series[float] = pa.Field(gt=0)
+    alpha_contiguous: Series[float] = pa.Field(gt=0)
+    calibration_max_abs_diff: Series[float] = pa.Field(ge=0)
+    oof_spearman_random: Series[float] = pa.Field(nullable=True)
+    oof_spearman_modulo: Series[float] = pa.Field(nullable=True)
+    oof_spearman_contiguous: Series[float] = pa.Field(nullable=True)
+    cv_spearman_random: Series[float] = pa.Field(nullable=True)
+    cv_spearman_modulo: Series[float] = pa.Field(nullable=True)
+    cv_spearman_contiguous: Series[float] = pa.Field(nullable=True)
+    n_nan: Series[int] = pa.Field(ge=0)
+    n_bad_interval: Series[int] = pa.Field(ge=0)
+    n_structure_imputed: Series[int] = pa.Field(ge=0)
+    oof_coverage_80: Series[float] = pa.Field(ge=0, le=1)
+    oof_coverage_90: Series[float] = pa.Field(ge=0, le=1)
+    n_buried: Series[int] = pa.Field(ge=0)
+    n_exposed: Series[int] = pa.Field(ge=0)
+    buried_median: Series[float] = pa.Field(nullable=True)
+    exposed_median: Series[float] = pa.Field(nullable=True)
+    buried_lower: Series[pd.BooleanDtype] = pa.Field(nullable=True, coerce=True)
+
+    class Config:  # pyright: ignore[reportIncompatibleVariableOverride]
+        strict = True
+        ordered = True
+
+
+class RidgeFitSchema(pa.DataFrameModel):
+    """One final ridge fit of one assay: ``DMS_score ~ intercept + x @ coefficients``.
+
+    ``fit`` is the scheme whose folds chose ``alpha`` (``train.final.scheme_by_position``).
+    ``intercept`` and the coefficients (:class:`RidgeCoefficientSchema`) are in ``DMS_score``
+    units on raw feature values; ``target_mean`` / ``target_sd`` standardised the targets.
+    """
+
+    assay_id: Series[str]
+    fit: Series[str] = pa.Field(isin=list(LANDSCAPE_SCHEMES))
+    alpha: Series[float] = pa.Field(gt=0)
+    intercept: Series[float]
+    target_mean: Series[float]
+    target_sd: Series[float] = pa.Field(gt=0)
+    n_train: Series[int] = pa.Field(ge=1)
+
+    class Config:  # pyright: ignore[reportIncompatibleVariableOverride]
+        strict = True
+        ordered = True
+        unique = ["assay_id", "fit"]  # noqa: RUF012 — read by pandera
+
+
+class RidgeCoefficientSchema(pa.DataFrameModel):
+    """One feature's coefficient in one final ridge fit (``DMS_score`` per raw feature unit).
+
+    ``impute`` is the value a missing feature takes (its mean over the assay's measured
+    variants); null for features that are never missing.
+    """
+
+    assay_id: Series[str]
+    fit: Series[str] = pa.Field(isin=list(LANDSCAPE_SCHEMES))
+    feature: Series[str]
+    coefficient: Series[float]
+    impute: Series[float] = pa.Field(nullable=True)
+
+    class Config:  # pyright: ignore[reportIncompatibleVariableOverride]
+        strict = True
+        ordered = True
+        unique = ["assay_id", "fit", "feature"]  # noqa: RUF012 — read by pandera
 
 
 class ZeroShotScoreSchema(pa.DataFrameModel):
