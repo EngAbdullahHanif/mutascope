@@ -15,6 +15,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.routing import Match
 
 from mutascope.utils.logging import get_logger
 
@@ -77,6 +78,43 @@ def model_not_available(assay_id: str, model: str, why: str) -> ApiError:
     )
 
 
+def job_not_found(job_id: str) -> ApiError:
+    return ApiError(
+        404,
+        "job-not-found",
+        "Job not found",
+        f"No job {job_id!r}. Finished jobs are deleted one hour after they finish.",
+    )
+
+
+def job_finished(job_id: str, status: str) -> ApiError:
+    return ApiError(
+        409,
+        "job-finished",
+        "Job already finished",
+        f"Job {job_id} has {status}; nothing to cancel.",
+    )
+
+
+def queue_full(size: int) -> ApiError:
+    return ApiError(
+        429,
+        "queue-full",
+        "Job queue full",
+        f"{size} precise-mode jobs are already waiting behind the running one. Try again later.",
+    )
+
+
+def too_long_for_precise(length: int, limit: int) -> ApiError:
+    return ApiError(
+        422,
+        "sequence-too-long",
+        "Sequence too long for precise mode",
+        f"Precise mode accepts at most {limit} residues (about 3 minutes on the server); "
+        f"this sequence has {length}. Fast mode (POST /v1/score) accepts up to 1022.",
+    )
+
+
 def not_ready(detail: str) -> ApiError:
     return ApiError(503, "not-ready", "Not ready", detail)
 
@@ -103,11 +141,29 @@ async def _api_problem(request: Request, exc: Exception) -> JSONResponse:
     return problem_response(request, _problem(request, exc.status, exc.detail, exc.type, exc.title))
 
 
+def allowed_methods(request: Request) -> list[str]:
+    """Every method some route serves at this path.
+
+    Starlette's 405 names only the methods of the first route that matched the path, but one
+    path can have several routes (``GET`` and ``DELETE /v1/jobs/{id}``), and RFC 9110 asks
+    ``Allow`` to list them all.
+    """
+    methods: set[str] = set()
+    scope = {**request.scope, "method": "GET"}
+    for route in request.app.router.routes:
+        match, _ = route.matches(scope)
+        if match is not Match.NONE:
+            methods |= set(getattr(route, "methods", None) or ())
+    return sorted(methods)
+
+
 async def _http_error(request: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, StarletteHTTPException)
     response = problem_response(request, _problem(request, exc.status_code, exc.detail))
     if exc.headers:
         response.headers.update(exc.headers)
+    if exc.status_code == 405:
+        response.headers["Allow"] = ", ".join(allowed_methods(request))
     return response
 
 

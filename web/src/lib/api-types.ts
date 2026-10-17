@@ -128,6 +128,102 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/score": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Score
+         * @description Fast mode: the wild-type marginal of ESM-2 35M or 150M (one forward pass).
+         *
+         *     Without ``mutations`` the full 19 x L landscape; with them, just their scores. An identical
+         *     request (model, revision, sequence) is answered from the cache.
+         */
+        post: operations["score_v1_score_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Job
+         * @description Precise mode: the masked marginal of ESM-2 35M (one pass per residue), as a job.
+         *
+         *     The job runs when the ones before it have finished (one at a time); follow it with
+         *     ``GET /v1/jobs/{id}/stream``. An identical earlier job's result is returned at once,
+         *     already ``succeeded``. 429 when the queue is full.
+         */
+        post: operations["create_job_v1_jobs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/jobs/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Job Status
+         * @description Status, progress and, once it has succeeded, the full landscape.
+         */
+        get: operations["get_job_status_v1_jobs__job_id__get"];
+        put?: never;
+        post?: never;
+        /**
+         * Cancel Job
+         * @description Cancel a queued or running job (409 if it has already finished).
+         */
+        delete: operations["cancel_job_v1_jobs__job_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/jobs/{job_id}/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream Job
+         * @description Server-Sent Events: ``queued``, ``running``, one ``progress`` per forward batch (its
+         *     landscape rows), then ``succeeded`` (with the landscape), ``failed`` or ``cancelled``.
+         *
+         *     Each event's ``id`` is its index; reconnecting with ``Last-Event-ID`` resumes after it.
+         *     The stream ends when the job has finished. Event data are JSON: the job (``JobResponse``)
+         *     for status events, ``JobProgress`` for ``progress``.
+         */
+        get: operations["stream_job_v1_jobs__job_id__stream_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -415,11 +511,124 @@ export interface components {
             version: string;
         };
         /**
+         * JobRequest
+         * @description Precise mode (masked marginal) for one sequence, as a background job.
+         */
+        JobRequest: {
+            /**
+             * Sequence
+             * @description Protein sequence: 1-1022 canonical amino acids, uppercase.
+             */
+            sequence: string;
+            /**
+             * Model
+             * @description Precise mode runs on ESM-2 35M only.
+             * @default esm2_35m
+             * @constant
+             */
+            model: "esm2_35m";
+        };
+        /**
+         * JobResponse
+         * @description A precise-mode job: masked marginal, ``log P(mt | x_masked) - log P(wt | x_masked)``.
+         */
+        JobResponse: {
+            /**
+             * Kind
+             * @default zero_shot
+             * @constant
+             */
+            kind: "zero_shot";
+            /**
+             * Label
+             * @description Always zero-shot: no measurement was used. Not a clinical prediction.
+             * @default Zero-shot
+             * @constant
+             */
+            label: "Zero-shot";
+            /**
+             * Model
+             * @description The served model config, e.g. ``esm2_150m_onnx_fp32``.
+             */
+            model: string;
+            /** Hf Id */
+            hf_id: string;
+            /** File */
+            file: string;
+            /**
+             * Revision
+             * @description Hub commit of the ONNX file; ``local:<dir>`` for a development copy.
+             */
+            revision: string;
+            /** Target Seq */
+            target_seq: string;
+            /** Length */
+            length: number;
+            /** Aa Order */
+            aa_order: string;
+            version: components["schemas"]["ApiVersion"];
+            /** Id */
+            id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+            /**
+             * Method
+             * @default masked_marginal
+             * @constant
+             */
+            method: "masked_marginal";
+            /**
+             * Done
+             * @description Residues scored so far.
+             */
+            done: number;
+            /**
+             * Total
+             * @description Residues to score (the sequence length).
+             */
+            total: number;
+            /**
+             * Cached
+             * @description The result came from the cache (an identical earlier job); nothing was run.
+             */
+            cached: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Started At */
+            started_at: string | null;
+            /** Finished At */
+            finished_at: string | null;
+            /**
+             * Expires At
+             * @description When a finished job and its result are deleted (one hour after it finished).
+             */
+            expires_at: string | null;
+            /** Error */
+            error: string | null;
+            /**
+             * Scores
+             * @description The full landscape once ``succeeded``, ``(L, 20)`` row-major; null before.
+             */
+            scores: (number | null)[] | null;
+        };
+        /**
          * LandscapeModel
          * @description Which landscape to return: the protein's default model, or a zero-shot one.
          * @enum {string}
          */
         LandscapeModel: "default" | "esm2_650m" | "saprot";
+        /**
+         * LiveModelName
+         * @description A model served live, by the key a request uses.
+         * @enum {string}
+         */
+        LiveModelName: "esm2_35m" | "esm2_150m";
         /**
          * MsaRegion
          * @description The benchmark scored this assay on part of its target (ADR 0012).
@@ -444,6 +653,28 @@ export interface components {
              * @description 0-indexed, exclusive.
              */
             end: number;
+        };
+        /** MutationScore */
+        MutationScore: {
+            /**
+             * Mutation
+             * @description As given (1-indexed).
+             */
+            mutation: string;
+            /**
+             * Position
+             * @description 0-indexed, as in the landscape grids.
+             */
+            position: number;
+            /** Wt */
+            wt: string;
+            /** Mt */
+            mt: string;
+            /**
+             * Score
+             * @description ``log P(mt) - log P(wt)`` in nats; higher = predicted fitter.
+             */
+            score: number;
         };
         /** ProteinDetail */
         ProteinDetail: {
@@ -508,6 +739,91 @@ export interface components {
             proteins: number;
             /** Models */
             models: string[];
+            /**
+             * Score Default Model
+             * @description Model of ``POST /v1/score`` when the request names none.
+             */
+            score_default_model: string;
+            /**
+             * Precise Max Length
+             * @description Longest sequence ``POST /v1/jobs`` accepts.
+             */
+            precise_max_length: number;
+        };
+        /**
+         * ScoreRequest
+         * @description Fast mode (wild-type marginal) for one sequence.
+         */
+        ScoreRequest: {
+            /**
+             * Sequence
+             * @description Protein sequence: 1-1022 canonical amino acids, uppercase.
+             */
+            sequence: string;
+            /**
+             * @description ``esm2_35m`` or ``esm2_150m``; null: the live default (``esm2_150m`` unless the Space
+             *     measurement moved it to 35M, ADR 0029).
+             */
+            model?: components["schemas"]["LiveModelName"] | null;
+            /**
+             * Mutations
+             * @description Up to 50 substitutions to score; null: the full 19 x L landscape.
+             */
+            mutations?: string[] | null;
+        };
+        /**
+         * ScoreResponse
+         * @description Wild-type marginal: ``log P(mt | x) - log P(wt | x)`` from one unmasked pass.
+         */
+        ScoreResponse: {
+            /**
+             * Kind
+             * @default zero_shot
+             * @constant
+             */
+            kind: "zero_shot";
+            /**
+             * Label
+             * @description Always zero-shot: no measurement was used. Not a clinical prediction.
+             * @default Zero-shot
+             * @constant
+             */
+            label: "Zero-shot";
+            /**
+             * Model
+             * @description The served model config, e.g. ``esm2_150m_onnx_fp32``.
+             */
+            model: string;
+            /** Hf Id */
+            hf_id: string;
+            /** File */
+            file: string;
+            /**
+             * Revision
+             * @description Hub commit of the ONNX file; ``local:<dir>`` for a development copy.
+             */
+            revision: string;
+            /** Target Seq */
+            target_seq: string;
+            /** Length */
+            length: number;
+            /** Aa Order */
+            aa_order: string;
+            version: components["schemas"]["ApiVersion"];
+            /**
+             * Method
+             * @default wt_marginal
+             * @constant
+             */
+            method: "wt_marginal";
+            /**
+             * Scores
+             * @description The full landscape, ``(L, 20)`` row-major, wild type 0; null when ``mutations`` were
+             *     given.
+             */
+            scores: (number | null)[] | null;
+            /** Mutations */
+            mutations: components["schemas"]["MutationScore"][] | null;
         };
         /**
          * SummaryRow
@@ -739,6 +1055,45 @@ export interface components {
              */
             errors: components["schemas"]["FieldError"][] | null;
         };
+        /** LandscapeRow */
+        LandscapeRow: {
+            /**
+             * Position
+             * @description 0-indexed residue.
+             */
+            position: number;
+            /**
+             * Scores
+             * @description 20 scores in ``aa_order``, wild type 0.
+             */
+            scores: number[];
+        };
+        /**
+         * JobProgress
+         * @description One finished forward batch of a running job (SSE ``progress`` event).
+         */
+        JobProgress: {
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @default zero_shot
+             * @constant
+             */
+            kind: "zero_shot";
+            /**
+             * Label
+             * @default Zero-shot
+             * @constant
+             */
+            label: "Zero-shot";
+            /** Done */
+            done: number;
+            /** Total */
+            total: number;
+            /** Rows */
+            rows: components["schemas"]["LandscapeRow"][];
+        };
     };
     responses: never;
     parameters: never;
@@ -957,6 +1312,275 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BenchmarksResponse"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    score_v1_score_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScoreRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScoreResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    create_job_v1_jobs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JobRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_job_status_v1_jobs__job_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    cancel_job_v1_jobs__job_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    stream_job_v1_jobs__job_id__stream_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Last-Event-ID"?: string | null;
+            };
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": unknown;
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
                 };
             };
             /** @description Service Unavailable */

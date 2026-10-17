@@ -227,11 +227,18 @@ Goal: a tested, observable service deployed automatically.
 - [x] Read-only routes (ADR 0030): `/v1/proteins` (function type filter, search),
       `/v1/proteins/{id}`, `/v1/proteins/{id}/landscape?model=default|esm2_650m|saprot`,
       `/v1/benchmarks`, `/health`, `/ready`; golden tests against `bundle-v1.0.0`
-- [ ] `POST /v1/score` (fast mode), `POST /v1/jobs` + `GET /v1/jobs/{id}/stream` (precise mode,
-      SSE), `/metrics`
-- [ ] Validation: 20 canonical AAs, length 1–1022, ≤ 50 mutations per request
-- [ ] diskcache, slowapi rate limiting, CORS to configured origins, structlog JSON, Prometheus metrics, Sentry
-- [ ] Tests: httpx AsyncClient, golden values vs pipeline outputs, schemathesis
+- [x] `POST /v1/score` (fast mode), `POST /v1/jobs` + `GET /v1/jobs/{id}/stream` (precise mode,
+      SSE), `GET` / `DELETE /v1/jobs/{id}` (ADR 0031): one job at a time, queue of 4 then 429,
+      results kept 1 h; precise limit 600 residues, provisional until the Space is measured
+- [ ] `/metrics`
+- [x] Validation: 20 canonical AAs, length 1–1022, ≤ 50 mutations per request (ADR 0031;
+      every bad mutation reported with its own `loc`)
+- [x] diskcache (ADR 0031: model + revision + method + sequence hash; identical requests and jobs
+      are answered from it)
+- [ ] slowapi rate limiting, CORS to configured origins, structlog JSON, Prometheus metrics, Sentry
+- [x] Tests: httpx AsyncClient, golden values vs pipeline outputs, schemathesis (ADR 0031: live
+      fp32 vs our PyTorch landscapes of TCRG1, Spearman ≥ 0.99; schemathesis on a real server
+      over all 11 operations)
 
 ### Docker and CI/CD
 - [ ] Multi-stage `python:3.11-slim`, uv, CPU-only wheels, non-root, HEALTHCHECK, port 7860, pinned HF revisions

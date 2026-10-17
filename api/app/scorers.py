@@ -11,7 +11,8 @@ from typing import Any
 
 from omegaconf import OmegaConf
 
-from mutascope.scoring.base import Scorer, build_scorer
+from mutascope.scoring.base import build_scorer
+from mutascope.scoring.onnx_esm2 import OnnxEsm2Scorer
 from mutascope.utils.config import as_str_dict, load_config
 from mutascope.utils.logging import get_logger
 
@@ -53,13 +54,19 @@ def load_scorers(
     revision: str,
     threads: int,
     local_dir: Path | None,
-) -> Mapping[str, Scorer]:
-    """Build each named scorer once, on the CPU, without the log-probability cache."""
-    scorers: dict[str, Scorer] = {}
+) -> Mapping[str, OnnxEsm2Scorer]:
+    """Build each named scorer once, on the CPU, without the log-probability cache.
+
+    The API keeps its own cache of live landscapes (:mod:`api.app.score_cache`).
+    """
+    scorers: dict[str, OnnxEsm2Scorer] = {}
     for name in names:
         cfg = model_config(
             config_dir, name, revision=revision, threads=threads, local_dir=local_dir
         )
-        scorers[name] = build_scorer(cfg, device="cpu", cache_dir=None)
+        scorer = build_scorer(cfg, device="cpu", cache_dir=None)
+        if not isinstance(scorer, OnnxEsm2Scorer):  # model_config checked the config already
+            raise ScorerLoadError(f"{name} did not build an ONNX scorer")
+        scorers[name] = scorer
         log.info("scorer_ready", model=name, revision=revision[:7], threads=threads)
     return scorers
