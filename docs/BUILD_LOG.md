@@ -2566,3 +2566,107 @@ ADR 0030.
   schemathesis are later Phase 4 tasks. The 0.69 s worst case is response building and could
   be cached as bytes if the Space needs it. `bundle_dir` and `onnx_local_dir` are for tests
   and development, and a local bundle reports `bundle_revision: null`.
+
+## Entry 31 — Live scoring: fast mode, precise-mode jobs with SSE, the score cache (Phase 4 Task 4, 2026-10-17)
+
+**Plain-language summary.** The API can now score any protein sequence, not only the 217
+ProteinGym ones. `POST /v1/score` (fast mode) runs ESM-2 35M or 150M once over the sequence
+and returns either the full landscape (every one of the 19 × L substitutions) or the scores of
+up to 50 named mutations, in well under a second. `POST /v1/jobs` (precise mode) runs the
+slower and better masked marginal on 35M: one model pass per residue, so about a minute for 600
+residues. It runs in the background. The client follows it on a live stream (Server-Sent
+Events) that sends a progress message with the newly scored rows after each batch of 16
+residues, and the finished landscape at the end. Only one job runs at a time (the server has 2
+CPUs). Four more can wait, a fifth is told to retry (429), a job can be cancelled, and results
+are kept for an hour. Identical requests are answered from a disk cache. Every input is checked
+before any model runs, and every response says "Zero-shot". A slow test shows that the served
+ONNX models give the same rankings as our PyTorch scores for a ProteinGym protein, and a fuzzer
+(schemathesis) sends about a thousand generated requests to check that every response matches
+the published API description. Decisions in ADR 0031.
+
+**The 3 most important design choices.**
+
+1. **Each job event is one forward batch of the real scorer, and events are a replayable
+   log.** The job asks the ONNX scorer how it would batch the masked passes (16 residues per
+   call) and runs exactly those batches. A progress event therefore is real work done, not a
+   timer. Each job keeps its events in a list, and a stream replays the list and then waits,
+   with `Last-Event-ID` to resume. A client that connects late or reconnects sees every event
+   once, in order. *Evidence:* a 76-residue job streams `queued, running, progress × 5,
+   succeeded`, ids 0–7. Its rows cover residues 0–75 once each and equal the final landscape,
+   which equals the scorer's own masked marginal. A 600-residue job with the real 35M model
+   took 63.8 s through the API against 63.9 s for the bare scorer (ADR 0029), so the batching
+   adds no measurable time.
+2. **The cache key never trusts a revision that the files did not come from.** Keys are
+   `[hf_id/file, revision, method, sha256(sequence)]`, the pipeline cache's fields. Files read
+   from a local directory are keyed `local:<dir>`, not by the pinned Hub commit, so stand-in
+   or unreleased files can never fill entries that the released model will read. A cancelled
+   or failed job's partial landscape is never written. *Evidence:* tests show a repeat request
+   returns the same bytes with no new forward pass (also after a restart, since the cache is on
+   disk), that a mutations request reuses the full landscape's entry, that fast and precise
+   results of one sequence are separate entries, and that a cancelled job's sequence is
+   computed again.
+3. **The agreement test compares like with like.** The task asked for live scores against
+   "the bundle's scores". The bundle has zero-shot landscapes of ESM-2 650M and SaProt only,
+   and the live models are 35M and 150M. Comparing them would test model similarity, not
+   serving. The reference became our PyTorch landscapes of the same models and methods for the
+   bundle's TCRG1 target, written from the pipeline cache into a 31 kB golden file. *Evidence:*
+   Spearman 0.99999997 for all three (35M fast, 150M fast, 35M precise) with the real fp32
+   files at `82e1528`, against a 0.99 threshold.
+
+**Problems encountered and how they were solved.**
+
+1. **The requested agreement test could not pass as specified.** *Found:* before writing it,
+   reading `conf/export/default.yaml`: `zero_shot_models: [esm2_650m, saprot_650m_af2]`, with
+   the comment that 35M / 150M landscapes are not shipped. *Fix:* asked the author, who chose a
+   golden file of our PyTorch landscapes, read from the cache only
+   (`make_live_golden` fails on a missing or partial entry; all three entries were cache hits).
+   *Verified:* the slow test passes (above). The test can also tell the methods apart: the
+   golden 35M wild-type and masked landscapes differ by up to 4.64 nats, with a Spearman of
+   0.977 between them, below 0.99.
+2. **Two agreement numbers were identical to 16 digits.** *Found:* the first slow run printed
+   0.9999999740953683 for both 35M fast and 35M precise, two different methods. *Cause:* not
+   a mix-up. Rounding the responses to 4 decimals creates tied values: 3 ties in each 35M
+   landscape and 4 in the 150M one. The Spearman of each golden landscape with its own rounded
+   copy is exactly the live number (0.9999999740953684 for both 35M, 0.9999999654604911 for
+   150M). *Verified:* the two golden landscapes differ (problem 1), so the identical numbers
+   come from the rounding: apart from the ties it creates, the live ranks match PyTorch's.
+3. **Schemathesis: an undocumented 400.** *Found:* the first fuzzing run sent request bodies
+   that are not valid UTF-8 to both POST routes. FastAPI answers "There was an
+   error parsing the body" with 400, which the schema did not list. In the counting run it
+   happened 6 times on `/v1/score` and 4 on `/v1/jobs`. *Fix:* document 400 as a problem
+   response on both routes (a body that is not UTF-8 is a bad request, not a validation
+   error). *Verified:* the fuzz test passes.
+4. **Schemathesis: a 405 with the wrong `Allow` header.** *Found:* `OPTIONS /v1/jobs/0`
+   returned `Allow: GET`, but that path also serves `DELETE`. *Cause:* `GET` and `DELETE
+   /v1/jobs/{id}` are two routes, and Starlette's 405 names only the first route that
+   matched. *Fix:* the 405 handler lists every method of every route that matches the path
+   (`problems.allowed_methods`). *Verified:* the fuzz test passes, over about 100–156 requests
+   per operation (11 operations).
+5. **FastAPI's own error schema came back.** *Found:* `test_openapi_documents_problem_responses`
+   failed on the first full run: `HTTPValidationError` was in the components again. *Cause:*
+   the same as Entry 30's problem 3. The job routes have path and header parameters and did
+   not declare 422, so FastAPI added its default. *Fix:* declare the problem 422 on them.
+   *Verified:* the test passes, and the generated TypeScript types have no
+   `HTTPValidationError`.
+
+**Supporting details.**
+- *Cost* (M4 Pro, real fp32 files, 2 threads, random sequences): fast mode at 1,000 residues,
+  the whole request with JSON: 0.29 s (35M) and 0.60 s (150M) on a miss, 0.037 s on a hit.
+  Precise mode at 600 residues: 63.8 s, 38 progress events.
+- *Settings:* `score_default_model` (`esm2_150m`, ADR 0029's switch to 35M is this variable),
+  `precise_max_length` (600, provisional: under 3 min unless the Space is more than 2.8×
+  slower than the M4 Pro), `job_queue_size` (4), `job_ttl_seconds` (3,600), `score_cache_dir`,
+  `score_cache_bytes` (256 MB). `/ready` reports the default model and the limit.
+- *Dependencies:* `diskcache` 5.6.3 (`api` extra; the live-score cache the plan named),
+  `schemathesis` 4.31.1 (dev; fuzzing against the OpenAPI schema). The fastapi lower bound
+  moves from 0.115 to 0.143, the version tested, for `fastapi.sse.EventSourceResponse`
+  (no `sse-starlette` needed).
+- *Types:* `make types` regenerated `web/src/lib/api-types.ts` (+624 lines, `JobProgress`
+  included through the OpenAPI components), identical across two runs.
+- *Tests:* `make lint` clean. `make test` passes: 741 tests plus 15 LightGBM (Entry 30: 712 +
+  15). New: 28 in `test_live.py` and the schemathesis test (11 operations as subtests), plus
+  the slow agreement test, which passes (4 s with the models in the local Hugging Face cache).
+- *Loose ends:* jobs live in one process's memory, so a restart loses queued and running jobs
+  (finished results stay in the score cache). Rate limiting (slowapi), CORS, `/metrics` and
+  Sentry are the next task. Nothing yet limits fast-mode request rate. After the first
+  deploy, the Space measurement sets the precise limit and the default model.
