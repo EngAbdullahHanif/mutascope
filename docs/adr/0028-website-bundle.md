@@ -95,8 +95,8 @@ publication) and in their provenance stamps; the bundle reads the published ones
 
 ### 6. Budgets set from measurement
 
-Measured before setting them (decision 3's encoding, 2026-10-17): 217 files, 29,220,004 bytes
-compressed (79,168,400 bytes of JSON), median 88,113, largest 1,153,899
+Measured before setting them (decision 3's encoding, 2026-10-17): 217 files, 29,218,051 bytes
+compressed (79,167,098 bytes of JSON), median 88,105, largest 1,153,890
 (`A0A140D2T1_ZIKV_Sourisseau_2019`, 3,423 residues). Budgets (`export.budget`): 2,000,000 bytes
 per protein file (the browser downloads one at a time) and 40,000,000 for all of them, about
 35% above the measurement. The build fails and names every file over budget.
@@ -128,7 +128,7 @@ stated by the rule rather than by hand.
 | `LYAM1_HUMAN_Elazar_2016` | coverage 90% | 0.0028 | 1 of 359 |
 
 A per-assay tolerance of 0.002 allows no tie in an assay under 500 variants, so the gap rule
-(decision 3) replaced "make ties rare" with "make ties impossible". It costs 12% (29,220,004
+(decision 3) replaced "make ties rare" with "make ties impossible". It costs 12% (29,218,051
 bytes against 26,088,727). Decimals chosen for the `DMS_score` fields: 3 in 36 assays, 4 in 120,
 5 in 52, 6 in 6, 7 in 2, 9 in 1 (CCDB, at the cap; its numbers pass).
 

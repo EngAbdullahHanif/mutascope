@@ -47,8 +47,8 @@ encoding:
 fidelity:
   spearman: 0.001
   coverage: 0.002
-# Compressed sizes, set after measuring (2026-10-17, ADR 0028): 217 files, 29,220,004 bytes in
-# all, median 88,113, largest 1,153,899 (ZIKV, 3,423 residues). A protein file is what the
+# Compressed sizes, set after measuring (2026-10-17, ADR 0028): 217 files, 29,218,051 bytes in
+# all, median 88,105, largest 1,153,890 (ZIKV, 3,423 residues). A protein file is what the
 # browser downloads at once; the total is what the Hub folder and a static deployment hold.
 budget:
   protein_bytes: 2000000
