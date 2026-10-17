@@ -174,6 +174,7 @@ from mutascope.models.final import (
 from mutascope.models.importance import shap_assay
 from mutascope.models.pca import PCAError
 from mutascope.models.registry import model_factory
+from mutascope.models.release import compare_file, compare_trees
 from mutascope.models.ridge import RidgeError
 from mutascope.models.uncertainty import (
     FrameCheckpoint,
@@ -2193,6 +2194,96 @@ def train_publish(
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(f"pushed -> {url}")
+
+
+@train_app.command("check-release")
+def train_check_release(
+    bundle_dir: Annotated[
+        Path,
+        typer.Option(help="The rerun's landscape bundles (`train final --out-dir`).", exists=True),
+    ],
+    results_dir: Annotated[
+        Path,
+        typer.Option(
+            help="The rerun's cv_<label> and final_* tables.", exists=True, file_okay=False
+        ),
+    ],
+    calibration_dir: Annotated[
+        Path,
+        typer.Option(
+            help="The rerun's calibration rows (`train calibrate --out-dir`).", exists=True
+        ),
+    ],
+    released_bundle_dir: Annotated[
+        Path | None, typer.Option(help="Released bundles (default: train.final.out_dir).")
+    ] = None,
+    released_results_dir: Annotated[
+        Path,
+        typer.Option(help="Released supervised results (committed).", file_okay=False),
+    ] = Path("results/supervised"),
+    released_calibration_dir: Annotated[
+        Path | None,
+        typer.Option(
+            help="Released calibration rows (default: train.uncertainty.calibration_dir)."
+        ),
+    ] = None,
+    config_dir: ConfigDir = Path("conf"),
+    overrides: Overrides = None,
+) -> None:
+    """Fail unless a rerun of the deployed model reproduces the released files exactly.
+
+    Compares ``train cv``'s results and hyperparameters, ``train calibrate``'s rows, ``train
+    final``'s checks and manifest and the landscape bundle of ``train.final`` with the released
+    ones: the same files, columns, dtypes and rows, every value equal to the bit. Only the
+    provenance stamps in ``train.release.ignore`` may differ. ``train final``'s own checks show
+    that a run agrees with itself; this one shows that it agrees with the release.
+    """
+    cfg = load_config(config_dir, overrides)
+    label = _final_label(cfg)
+    ignore = [str(c) for c in cfg.train.release.ignore]
+    released_bundle = (
+        Path(str(cfg.train.final.out_dir)) if released_bundle_dir is None else released_bundle_dir
+    )
+    released_calibration = (
+        Path(str(cfg.train.uncertainty.calibration_dir))
+        if released_calibration_dir is None
+        else released_calibration_dir
+    )
+    names = [
+        results_path(Path(), label).name,
+        hyperparameters_path(Path(), label).name,
+        "final_checks.parquet",
+        "final_manifest.parquet",
+    ]
+    lines: list[str] = []
+    for name in names:
+        actual, released = results_dir / name, released_results_dir / name
+        missing = [str(p) for p in (actual, released) if not p.is_file()]
+        if missing:
+            lines += [f"{p}: missing" for p in missing]
+            continue
+        reason = compare_file(actual, released, ignore)
+        if reason:
+            lines.append(f"{name}: {reason}")
+    checked = {"results": len(names)}
+    for what, actual, released in (
+        ("calibration", calibration_dir / label, released_calibration / label),
+        ("bundle", bundle_dir / label, released_bundle / label),
+    ):
+        lines += [f"{what}: {line}" for line in compare_trees(actual, released, ignore)]
+        checked[what] = (
+            sum(1 for p in released.rglob("*") if p.is_file()) if released.is_dir() else 0
+        )
+    summary = ", ".join(f"{n} {what} files" for what, n in checked.items())
+    if lines:
+        for line in lines[:50]:
+            typer.echo(f"differs: {line}", err=True)
+        typer.echo(f"FAIL: {len(lines)} differences from the release ({summary})", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(
+        f"PASS: {label} reproduces the release bit for bit ({summary}; "
+        f"ignored: {', '.join(ignore)})"
+    )
 
 
 @eval_app.command("precomputed")
