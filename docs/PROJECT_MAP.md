@@ -692,6 +692,29 @@ A map of what exists after steps 9–18, by the question it answers.
 - **Outputs:** none. The audit read `results/supervised/*.parquet`, the MLflow store and the CI
   history, and reran `make lint test`.
 
+## Step 27 — Hub publication recorded, Phase 3 in Nextflow (Phase 4 Task 0, 2026-10-17)
+
+- **What this step did:** recorded the Hub push (both repos public, every file matching its staged
+  copy) and pinned both commits in config (ADR 0026 addendum); wired `data folds` through `train
+  final` into the pipeline behind a new release check that publishes only a bit-identical rerun;
+  put LightGBM and the MLP behind a flag; ran the landscape check (ADR 0027).
+- **Files created or modified:**
+
+| Path | What it does | Why it exists |
+|---|---|---|
+| `pipeline/modules/{folds,embed,features_build,train_cv,train_calibrate,train_final,check_release}.nf`, `pipeline/main.nf`, `pipeline/nextflow.config` | The Phase 3 processes, their order, `params.supervised`, `final_run`, `release_check`, `extra_models` | `make pipeline` rebuilds the deployed model |
+| `pipeline/modules/download.nf`, `src/mutascope/data/staging.py` | The staged layout also links the CV folds | `FOLDS` needs them as a path |
+| `src/mutascope/models/release.py`, `src/mutascope/cli.py` | `train check-release`: files, columns, dtypes, rows and every value's bytes, stamps aside | A rerun must match the release, not only itself |
+| `conf/train/default.yaml`, `conf/publish/hub.yaml` | `train.release.ignore`; `train.publish.revision`, `publish.revision` | Stamps named in config; published files read by commit |
+| `conf/features/smoke.yaml` | `seq_struct` with `esm2_8m` | The smoke test runs Phase 3 without 650M models |
+| `Makefile` | `pipeline-test` also deletes the embedding cache | Every smoke run uses the model |
+| `tests/models/test_release.py`, `tests/data/test_staging.py`, `tests/export/test_hub.py` | Comparison cases, CLI pass and fail, folds link, pinned revisions | Tests alongside the code |
+| `docs/adr/0027-phase-3-in-nextflow.md`, `docs/adr/0026-phase-3-close.md`, `docs/ROADMAP.md`, `CLAUDE.md`, `docs/BUILD_LOG.md` | Decision; addendum; items ticked; current phase and release-check rule; entry 27 | Decision record and docs |
+
+- **CLI commands added:** `mutascope train check-release`.
+- **Outputs:** none new in git; the default `make pipeline` republished the deployed run after the
+  release check passed.
+
 ## Where Phase 3 left things
 
 A map of what exists after steps 19–26, by the question it answers.
@@ -705,7 +728,7 @@ A map of what exists after steps 19–26, by the question it answers.
 | Where are the numbers? | `results/supervised/final_{summary,comparisons,assay_differences,size_comparisons}.parquet`, `supervised_{summary,comparisons}.parquet`, `cv_*.parquet`; summary in ADR 0026 |
 | How are the intervals made and judged? | `src/mutascope/models/conformal.py`, `models/uncertainty.py`, `eval/uncertainty.py`, `results/supervised/uncertainty_*.parquet`; ADR 0024 |
 | What is deployed, and is it right? | `src/mutascope/models/final.py`, `eval/final.py`, `results/supervised/final_{checks,manifest}.parquet`, `docs/MODEL_CARD.md`; the bundle in `data/processed/supervised_landscapes/`; ADR 0025 |
-| What runs in the pipeline, and what by hand? | `pipeline/main.nf` stops at the zero-shot landscapes. `data folds`, `features embed|build` and every `train` command are run by hand |
+| What runs in the pipeline, and what by hand? | `pipeline/main.nf` runs through the zero-shot landscapes and, since step 27, `data folds` to `train final` with a release check (ADR 0027). `train compare`, `final-table`, `final-figures`, `canary`, `shap` and `uncertainty` are run by hand |
 | What is not in git? | `data/processed/{features,calibration,supervised_landscapes}/`, the embedding cache, `build/hf_model`, `build/hf_dataset` (staged Hub repos), `mlruns/` |
 
 ## Phase 3 retrospective

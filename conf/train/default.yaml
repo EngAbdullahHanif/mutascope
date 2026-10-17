@@ -227,11 +227,20 @@ final:
   # in flight. A worker holds its target's 19 x L x 2,647 features in float64 (1.4 GB for the
   # largest, 3,423 residues) on top of the ridge fits (ADR 0022's ~2 GB at 16,897 variants).
   max_rows_in_flight: 250000
+# Release check (`mutascope train check-release`): a rerun of train cv, train calibrate and train
+# final must reproduce the released files bit for bit except for these provenance columns (and
+# version.json keys): the git commit and the sha256 of the resolved config, which holds absolute
+# paths. They name how a file was made, not what is in it, so any rerun changes them.
+release:
+  ignore: [code_version, config_sha256]
 # Publishing the final models (`mutascope train publish`): one Hugging Face model repo with every
 # assay's ridge coefficients, the configs and a model card. The landscapes go to the dataset repo
 # (publish.repo_id) as a new revision. Staging is the default; --push uploads.
 publish:
   repo_id: engAbdullahHanif/mutascope-ridge-seq-struct
+  # The published commit later steps read, as publish.revision for the dataset (2026-10-17, ADR
+  # 0026 addendum; public, verified via the Hub API).
+  revision: 45a04b8599bf31c850b78c139872e07f7cf2d600
   # New repos are created private, so the upload can be checked on the Hub first.
   private: true
   stage_dir: build/hf_model

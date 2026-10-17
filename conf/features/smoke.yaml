@@ -1,0 +1,16 @@
+# Feature config of the pipeline's `test` profile only (`features=smoke`; ADR 0027). The deployed
+# set, seq_struct, with esm2_8m (the 30 MB checkpoint the tests and the smoke test score with) in
+# place of ESM-2 650M and SaProt, so the smoke test runs the real Phase 3 steps without either
+# 650M model. Every other key is default.yaml's; the other sets are left out because each one
+# names a model the smoke test does not score.
+models: [esm2_8m]
+embedding_layers: 4
+embedding_cache_dir: ${data.data_dir}/cache/embeddings
+store_dir: ${data.processed_dir}/features
+experiment: features
+sets:
+  seq_struct:
+    structure: true
+    blocks: [onehot, blosum62, rel_position,
+             esm2_8m:score, esm2_8m:log_probs, esm2_8m:embedding,
+             structure]

@@ -114,7 +114,7 @@ def release_of(raw_dir: Path) -> Release:
         rf("reference", "DMS_substitutions.csv", False),
         rf("dms_substitutions", "DMS_ProteinGym_substitutions.zip", True),
         rf("af2_structures", "ProteinGym_AF2_structures.zip", True),
-        rf("cv_folds_singles", "cv_folds.zip", True),  # not part of the layout
+        rf("cv_folds_singles", "cv_folds.zip", True),
     )
     return Release("v9", raw_dir, raw_dir / "manifest.yaml", files)
 
@@ -123,12 +123,19 @@ def test_link_release_points_layout_at_raw_download(tmp_path: Path) -> None:
     raw = tmp_path / "raw"
     (raw / "DMS_ProteinGym_substitutions").mkdir(parents=True)
     (raw / "ProteinGym_AF2_structures").mkdir()
+    (raw / "cv_folds").mkdir()
     (raw / "DMS_substitutions.csv").write_text("DMS_id\n")
     (raw / "DMS_ProteinGym_substitutions" / "A.csv").write_text("mutant\n")
 
     link_release(release_of(raw), tmp_path / "task")
     task = tmp_path / "task"
-    assert sorted(p.name for p in task.iterdir()) == ["DMS_substitutions.csv", "dms", "structures"]
+    assert sorted(p.name for p in task.iterdir()) == [
+        "DMS_substitutions.csv",
+        "dms",
+        "folds",
+        "structures",
+    ]
+    assert (task / "folds").resolve() == (raw / "cv_folds").resolve()
     assert all((task / name).is_symlink() for name in ("DMS_substitutions.csv", "dms"))
     assert (task / "dms").resolve() == (raw / "DMS_ProteinGym_substitutions").resolve()
     assert (task / "dms" / "A.csv").read_text() == "mutant\n"

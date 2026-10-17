@@ -10,6 +10,10 @@ Every step after the download reads the same three inputs::
 copies a few named assays into it for the fast ``test`` profile. Nothing downstream can tell
 the two apart. Test assays are named explicitly rather than picked by a rule, so a test run
 always covers the same data.
+
+:func:`link_release` also links ``<dir>/folds/``, ProteinGym's CV folds (``<DMS_id>.csv`` per
+assay), for ``data folds``. A subset needs no copy of them: ``data folds`` reads only the files
+of the assays that were processed.
 """
 
 import csv
@@ -26,12 +30,14 @@ log = get_logger(__name__)
 REFERENCE_NAME = "DMS_substitutions.csv"
 DMS_DIRNAME = "dms"
 STRUCTURES_DIRNAME = "structures"
+FOLDS_DIRNAME = "folds"
 
 
 # Config keys (conf/data/proteingym.yaml `files`) of the release files the layout points at.
 REFERENCE_KEY = "reference"
 DMS_KEY = "dms_substitutions"
 STRUCTURES_KEY = "af2_structures"
+FOLDS_KEY = "cv_folds_singles"
 
 
 class SubsetError(ValueError):
@@ -49,6 +55,7 @@ def link_release(release: Release, out_dir: Path) -> None:
         REFERENCE_NAME: raw_dir / release.file(REFERENCE_KEY).filename,
         DMS_DIRNAME: raw_dir / release.file(DMS_KEY).extract_dirname,
         STRUCTURES_DIRNAME: raw_dir / release.file(STRUCTURES_KEY).extract_dirname,
+        FOLDS_DIRNAME: raw_dir / release.file(FOLDS_KEY).extract_dirname,
     }
     missing = [str(t) for t in targets.values() if not t.exists()]
     if missing:
