@@ -108,6 +108,8 @@ venv = ".venv"
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "api/tests"]
+# The repo root, so `tests` and `api` import as packages whichever test files are collected.
+pythonpath = ["."]
 # Slow tests (real 650M models on MPS) only run via `make test-slow`; a later `-m slow` overrides this.
 # LightGBM tests run in a process of their own (`make test`): on macOS LightGBM's and torch's OpenMP
 # runtimes cannot share one (ADR 0022).
