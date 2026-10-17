@@ -13,10 +13,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 import numpy as np
 
+from api.app.metrics import Metrics
 from api.app.score_cache import ScoreCache, cache_key
 from mutascope.data.parse import parse_mutation
 from mutascope.scoring.base import FloatArray
@@ -102,16 +104,21 @@ def live_models(
     return models
 
 
-def fast_landscape(model: LiveModel, sequence: str, cache: ScoreCache) -> tuple[FloatArray, bool]:
+def fast_landscape(
+    model: LiveModel, sequence: str, cache: ScoreCache, metrics: Metrics
+) -> tuple[FloatArray, bool]:
     """The wild-type-marginal landscape of ``sequence`` and whether it came from the cache.
 
     Blocking (one forward pass on a cache miss): call it from a worker thread.
     """
     key = model.key_for("wt", sequence)
     cached = cache.get(key, len(sequence))
+    metrics.cache_lookup("wt", hit=cached is not None)
     if cached is not None:
         return cached, True
+    start = perf_counter()
     landscape = model.scorer.landscape(sequence, fast=True)
+    metrics.observe_inference(model.key, "wt", perf_counter() - start)
     cache.put(key, landscape)
     return landscape, False
 

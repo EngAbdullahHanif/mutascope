@@ -7,6 +7,7 @@ else is mapped here too: HTTP errors from routing (404 for an unknown path, 405)
 ``errors``, and an unhandled exception a 500 that says nothing about the internals.
 """
 
+from collections.abc import Mapping
 from http import HTTPStatus
 from typing import Any
 
@@ -51,12 +52,41 @@ class Problem(BaseModel):
     """Invalid fields, for 422."""
 
 
+REQUEST_ID_HEADER = "X-Request-ID"
+
+
 class ApiError(Exception):
     """An error the API reports on purpose."""
 
-    def __init__(self, status: int, slug: str, title: str, detail: str) -> None:
+    def __init__(
+        self,
+        status: int,
+        slug: str,
+        title: str,
+        detail: str,
+        headers: Mapping[str, str] | None = None,
+    ) -> None:
         super().__init__(detail)
         self.status, self.type, self.title, self.detail = status, URN + slug, title, detail
+        self.headers = dict(headers or {})
+
+
+class BodyTooLarge(StarletteHTTPException):
+    """A streamed request body passed the limit (raised while the body is read).
+
+    An HTTP exception, not an :class:`ApiError`: FastAPI re-raises HTTP exceptions met while
+    reading a body (any other exception becomes a 400), so the handler below formats it.
+    """
+
+    def __init__(self, limit: int) -> None:
+        super().__init__(413, detail=body_too_large_detail(limit))
+
+
+def body_too_large_detail(limit: int) -> str:
+    return f"The request body is larger than {limit} bytes."
+
+
+BODY_TOO_LARGE = URN + "body-too-large"
 
 
 def protein_not_found(assay_id: str) -> ApiError:
@@ -115,6 +145,45 @@ def too_long_for_precise(length: int, limit: int) -> ApiError:
     )
 
 
+def rate_limited(what: str, limit: str, retry_after: int) -> ApiError:
+    return ApiError(
+        429,
+        "rate-limited",
+        "Too many requests",
+        f"Rate limit for {what} exceeded ({limit}). Retry after {retry_after} s.",
+        headers={"Retry-After": str(retry_after)},
+    )
+
+
+def too_many_streams(limit: int, scope: str) -> ApiError:
+    return ApiError(
+        429,
+        "too-many-streams",
+        "Too many open streams",
+        f"{limit} event streams are already open {scope}. Close one, or poll GET /v1/jobs/{{id}}.",
+    )
+
+
+def too_many_jobs(limit: int) -> ApiError:
+    return ApiError(
+        429,
+        "too-many-jobs",
+        "Too many active jobs",
+        f"You already have {limit} queued or running precise-mode job(s). Wait for it to "
+        "finish, or cancel it (DELETE /v1/jobs/{id}).",
+    )
+
+
+def unauthorized() -> ApiError:
+    return ApiError(
+        401,
+        "unauthorized",
+        "Unauthorized",
+        "This route needs a bearer token.",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
 def not_ready(detail: str) -> ApiError:
     return ApiError(503, "not-ready", "Not ready", detail)
 
@@ -138,7 +207,11 @@ def _problem(
 
 async def _api_problem(request: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, ApiError)
-    return problem_response(request, _problem(request, exc.status, exc.detail, exc.type, exc.title))
+    response = problem_response(
+        request, _problem(request, exc.status, exc.detail, exc.type, exc.title)
+    )
+    response.headers.update(exc.headers)
+    return response
 
 
 def allowed_methods(request: Request) -> list[str]:
@@ -159,7 +232,11 @@ def allowed_methods(request: Request) -> list[str]:
 
 async def _http_error(request: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, StarletteHTTPException)
-    response = problem_response(request, _problem(request, exc.status_code, exc.detail))
+    if isinstance(exc, BodyTooLarge):
+        problem = _problem(request, 413, exc.detail, BODY_TOO_LARGE, "Request body too large")
+    else:
+        problem = _problem(request, exc.status_code, exc.detail)
+    response = problem_response(request, problem)
     if exc.headers:
         response.headers.update(exc.headers)
     if exc.status_code == 405:
@@ -181,9 +258,27 @@ async def _validation_error(request: Request, exc: Exception) -> JSONResponse:
     return problem_response(request, problem.model_copy(update={"errors": errors}))
 
 
+def body_too_large(request: Request, limit: int) -> JSONResponse:
+    """The 413 response, for middleware that rejects a body before any route runs."""
+    problem = _problem(
+        request, 413, body_too_large_detail(limit), BODY_TOO_LARGE, "Request body too large"
+    )
+    return problem_response(request, problem)
+
+
 async def _unhandled(request: Request, exc: Exception) -> JSONResponse:
-    log.error("unhandled_error", path=request.url.path, error=repr(exc))
-    return problem_response(request, _problem(request, 500, "An internal error occurred."))
+    """A 500 that says nothing about the internals.
+
+    Starlette runs this handler outside every middleware, after the request-context middleware
+    has reset its log context, so the request id is taken from the request state here, for the
+    log line and the response header. (Sentry's Starlette integration reports the exception.)
+    """
+    request_id = getattr(request.state, "request_id", None)
+    log.error("unhandled_error", path=request.url.path, error=repr(exc), request_id=request_id)
+    response = problem_response(request, _problem(request, 500, "An internal error occurred."))
+    if request_id is not None:
+        response.headers[REQUEST_ID_HEADER] = request_id
+    return response
 
 
 def install(app: FastAPI) -> None:
