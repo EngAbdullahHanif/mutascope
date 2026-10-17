@@ -1,0 +1,16 @@
+# Isolated environment for the local load test of the API (Locust; ADR 0032, docs/load-test.md).
+#
+# Locust brings gevent, Flask and their pins, none of which the API or the pipeline needs, so it
+# gets its own locked environment, like the ONNX exporter (tools/onnx-export). The API under test
+# runs from the main environment with its own start command (`python -m api.app.serve`).
+[project]
+name = "mutascope-loadtest"
+version = "0.1.0"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "locust==2.46.7",
+    "psutil==7.2.2",
+]
+
+[tool.uv]
+package = false

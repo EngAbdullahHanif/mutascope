@@ -230,12 +230,17 @@ Goal: a tested, observable service deployed automatically.
 - [x] `POST /v1/score` (fast mode), `POST /v1/jobs` + `GET /v1/jobs/{id}/stream` (precise mode,
       SSE), `GET` / `DELETE /v1/jobs/{id}` (ADR 0031): one job at a time, queue of 4 then 429,
       results kept 1 h; precise limit 600 residues, provisional until the Space is measured
-- [ ] `/metrics`
+- [x] `/metrics` (ADR 0032): latency by route, job queue length, cache hit rate, inference time;
+      bearer token (constant-time), 404 without one, not in the OpenAPI schema
 - [x] Validation: 20 canonical AAs, length 1–1022, ≤ 50 mutations per request (ADR 0031;
       every bad mutation reported with its own `loc`)
 - [x] diskcache (ADR 0031: model + revision + method + sequence hash; identical requests and jobs
       are answered from it)
-- [ ] slowapi rate limiting, CORS to configured origins, structlog JSON, Prometheus metrics, Sentry
+- [x] slowapi rate limiting, CORS to configured origins, structlog JSON, Prometheus metrics, Sentry
+      (ADR 0032): per-client limits by trusted-proxy client address, global fast-mode limit, one
+      active job per client, stream slots, 413 body limit, request ids, no sequence in any log,
+      one process enforced (`python -m api.app.serve` + lock); Locust run in `docs/load-test.md`,
+      threats in `docs/threat-model.md`
 - [x] Tests: httpx AsyncClient, golden values vs pipeline outputs, schemathesis (ADR 0031: live
       fp32 vs our PyTorch landscapes of TCRG1, Spearman ≥ 0.99; schemathesis on a real server
       over all 11 operations)

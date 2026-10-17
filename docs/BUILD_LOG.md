@@ -2670,3 +2670,117 @@ the published API description. Decisions in ADR 0031.
   (finished results stay in the score cache). Rate limiting (slowapi), CORS, `/metrics` and
   Sentry are the next task. Nothing yet limits fast-mode request rate. After the first
   deploy, the Space measurement sets the precise limit and the default model.
+
+---
+
+## Entry 32 — API hardening and observability (Phase 4 Task 5, 2026-10-17)
+
+**Plain-language summary.** The API is now safe to put on the public internet. Every client
+(an IP address) has rate limits: 120 reads, 20 fast scores and 2 precise jobs a minute (10 an
+hour). Fast mode also has one limit for everyone together (120 a minute), so many addresses
+cannot add up to more than the 2 CPUs can do. A client may have one job queued or running at a
+time and four event streams open. Bodies over 16 KiB are refused (413). Only the configured
+website may call the API from a browser (CORS). Every refusal is the API's usual problem
+format, and a rate-limit refusal says when to retry. Every request gets an id, returned in a
+header and written in every log line it causes. Logs are JSON and never contain a submitted
+sequence or mutation list, only the sequence's hash and length, and a test fails if one ever
+appears. `/metrics` reports latency, the job queue, the cache hit rate and model time to
+Prometheus, behind a token. Sentry error reports are optional and scrubbed. Because the queue
+and the counters live in one process's memory, the server must run as one process, and the
+start command and a lock enforce that. A local Locust run showed the 429s starting exactly at
+each limit, no server errors at 5 and 20 users, and memory levelling off. Decisions in ADR
+0032; threats and the limit for each in `docs/threat-model.md`; the run in `docs/load-test.md`.
+
+**The 3 most important design choices.**
+
+1. **The client is an address it cannot choose.** `X-Forwarded-For` is read only when the
+   connection comes from a configured proxy (the Space's), and from the right: the proxy
+   appends the address it saw, so anything the client wrote is further left and ignored.
+   uvicorn's own proxy-header handling is off, since it believes the header from 127.0.0.1.
+   *Evidence:* a direct client sending a new `X-Forwarded-For` on each of 5 reads under a
+   3/minute limit gets `200, 200, 200, 429, 429`. Behind the proxy, a client that prepends a
+   fake address is still counted as itself. In the load test, 10 users behind the proxy each
+   had their own count.
+2. **Per-client and global limits together, and a per-client cap on jobs.** Per-client limits
+   alone let many addresses exceed the CPU, and a global limit alone lets one client use it
+   all. The job queue (4) bounded jobs globally, but one client could fill it within its rate
+   limit, so a client may have one active job. *Evidence:* in 50 s, inside one 60 s moving
+   window, the load test accepted exactly 120 reads, 20 scores for one client, 120 scores over
+   10 clients (10–13 each, none near its own 20), 2 jobs, and at most 4 open streams, with
+   191,413 / 182,489 / 246,403 / 48 / 22 refusals. Each refusal took about 1 ms.
+3. **One process, enforced where a deployment would break it.** With two workers every limit
+   would silently double, two precise jobs could share 2 vCPUs, and a job could 404 on the
+   other worker. `python -m api.app.serve` hands uvicorn the app object with `workers=1`
+   (uvicorn cannot fork workers from an object) and refuses `WEB_CONCURRENCY` above 1. A
+   `flock` taken in the lifespan stops any other launch, like `uvicorn --workers 4` or
+   gunicorn. *Evidence:* tests for both, and the lock caught a real second app in the existing
+   tests (problem 1).
+
+**Problems encountered and how they were solved.**
+
+1. **The new lock failed an existing test.** *Found:* the first API test run after adding the
+   lock: `test_identical_requests_are_cache_hits` failed with `SecondProcessError`. *Cause:*
+   the test checks that the disk cache survives a restart by starting a second app on the same
+   settings while the first is still running. That is exactly what the lock forbids. *Fix:* the
+   "restarted" app gets its own lock file (`model_copy`), with a comment saying why.
+   *Verified:* the test passes, and `test_second_server_refuses_to_start` keeps the
+   same-lock case as a deliberate failure.
+2. **The limits broke tests of other behaviour.** *Found:* the same run:
+   `test_cancel_queued_and_running_jobs` got a 429 on its second job. *Cause:* every
+   in-process test client is 127.0.0.1, so tests that submit several jobs met the new
+   one-active-job rule and the 2/minute job limit. *Fix:* the shared fixtures use loose limits
+   (`LOOSE_LIMITS`: 10,000 a minute, 100 active jobs and streams), and `test_hardening.py` sets
+   each limit explicitly. The defaults were not changed to make tests pass. *Verified:* all API
+   tests pass, schemathesis included.
+3. **The leak test first failed on pytest's own log copy.** *Found:* the first run of
+   `test_no_sequence_or_mutation_in_any_log` found the sequence in the checked output.
+   *Cause:* the test read `caplog.text` as well as stderr. `caplog` is pytest's unformatted
+   copy of standard-library records (here, a deliberate `logger.exception` with the sequence in
+   its traceback), not what the API writes. *Fix:* check what the API writes (stderr, where
+   structlog and the API's JSON handler for library loggers both go). The same test asserts
+   that the sequence's hash does appear, so the check cannot pass on empty output.
+   *Verified:* the test passes. The API's handler output had the traceback redacted.
+4. **Was the 500 reported to Sentry twice?** *Found:* the 500 handler called
+   `sentry_sdk.capture_exception` explicitly, and the Starlette integration may also report.
+   The test saw exactly 1 event. *Probe:* removing the explicit call still gave 1 event, so
+   the integration reports a 500 by itself, and Sentry had deduplicated the second capture of
+   the same exception. *Fix:* the handler no longer calls it. A failed job is not a request
+   error, so the worker keeps its explicit call, and the test now expects exactly 2 events (one
+   500, one failed job), both without bodies or sequences. *Verified:* passes.
+5. **Two tracebacks in every server log of the first load run.** *Found:* the dry run's summary
+   counted 2 tracebacks per scenario, with no error lines. *Cause:* the runner stopped the
+   server with SIGINT, and uvicorn re-raises it as `KeyboardInterrupt` after a clean shutdown.
+   *Fix:* the runner sends SIGTERM, which is what Docker and the Space send. *Verified:* 0
+   tracebacks and 0 error lines in all 7 scenarios of the final run.
+6. **Secrets as plain strings in tests.** *Found:* two tests failed with `'str' object has no
+   attribute 'get_secret_value'`. *Cause:* `Settings.model_copy(update=...)` does not
+   validate, so a token or DSN passed as `str` stayed a `str`. *Fix:* the tests pass
+   `SecretStr`. *Verified:* both pass.
+
+**Supporting details.**
+
+- **Load test** (M4 Pro, not representative of the Space; one process, ONNX threads = 2, real
+  fp32 models): at 5 users (180 s) 524 requests and at 20 users (600 s) 6,922 requests, with 0
+  failures, 0 5xx and 0 error lines. At 20 users the 360 refused scores match the global
+  limit: 1.97 accepted a second, 118 a minute. Memory at 20 users levelled off at about 2.5 GB
+  (quarter means 2,406 → 2,471 → 2,503 → 2,523 MB). At 5 users it was still rising after 3
+  minutes (1,264 → 1,998 MB). The likely cause is ONNX Runtime's arena keeping the buffers of
+  the largest concurrent passes (inferred, not measured), and Task 7 should watch memory on the
+  Space. One unexplained reading: in the nearly idle `jobs` scenario resident memory fell from
+  939 to 281 MB, probably macOS compressing idle pages. Fast-mode p95 was 390 ms (5 users) and
+  520 ms (20 users), max 1.0 s.
+- The first load run was a dry run. A code change during it (`/metrics` under the read limit)
+  would have mixed code versions across scenarios, because each scenario starts a fresh
+  server. All 7 scenarios were therefore run again on the final code, and only that run is
+  reported.
+- Found while writing the threat note: `/metrics` had no rate limit, so wrong-token guesses
+  were free. It is now under the read limit (a scrape every 15 s uses 4 of 120 a minute).
+- Dependencies (`api` extra): slowapi 0.1.10, limits 5.8.0, prometheus-client 0.26.0,
+  prometheus-fastapi-instrumentator 8.1.0, sentry-sdk 2.72.0. Locust 2.46.7 and psutil 7.2.2
+  live in `tools/loadtest/` (their own lock), like the ONNX exporter.
+- To set at deploy (Task 6): `MUTASCOPE_API_TRUSTED_PROXIES` (the Space proxy's range; empty
+  means all users share one quota), `MUTASCOPE_API_CORS_ORIGINS` (the production site does not
+  exist yet), `MUTASCOPE_API_METRICS_TOKEN`, and optionally `MUTASCOPE_API_SENTRY_DSN`. The
+  limits are provisional until the Space is measured (Task 7).
+- Loose end: IPv6 clients are keyed by full address, so one /64 is many clients (threat note,
+  "What is left").

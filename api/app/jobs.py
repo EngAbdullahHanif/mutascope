@@ -16,9 +16,15 @@ lock is needed.
   the worker drops the batch in flight and moves on.
 - **Expiry.** A finished job is deleted ``ttl_seconds`` after it finished; later requests get
   404. Expired jobs are swept whenever the manager is used.
+- **Per client.** A client may have ``max_active_per_client`` jobs queued or running; another
+  is a 429, so one client cannot fill the queue (ADR 0032).
+
+Log lines carry the job id, the id of the request that submitted it, and the sequence's sha256
+and length, never the sequence.
 """
 
 import asyncio
+import time
 import uuid
 from collections import deque
 from collections.abc import AsyncIterator, Callable
@@ -26,10 +32,14 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 import numpy as np
+import sentry_sdk
+import structlog
 from fastapi.sse import ServerSentEvent
 
 from api.app import problems
 from api.app.live import DECIMALS, LiveModel, to_grid
+from api.app.logs import sequence_fields
+from api.app.metrics import Metrics
 from api.app.schemas import (
     ApiVersion,
     JobProgress,
@@ -67,6 +77,10 @@ class Job:
     model: LiveModel
     sequence: str
     created_at: datetime
+    client: str
+    """The address that submitted it (``max_active_per_client``)."""
+    request_id: str | None
+    """The id of the submitting request, bound into the worker's log lines for this job."""
     landscape: FloatArray
     """``(L, 20)``, NaN until a row's batch finishes."""
     status: JobStatus = "queued"
@@ -95,24 +109,41 @@ class JobManager:
         version: ApiVersion,
         queue_size: int,
         ttl_seconds: float,
+        metrics: Metrics,
+        max_active_per_client: int,
         now: Callable[[], datetime] = _utcnow,
     ) -> None:
         self.cache = cache
+        self.metrics = metrics
+        self.max_active_per_client = max_active_per_client
         self.version = version
         self.queue_size = queue_size
         self.ttl = timedelta(seconds=ttl_seconds)
         self.now = now
         self._jobs: dict[str, Job] = {}
         self._pending: deque[Job] = deque()
+        self._running: Job | None = None
         self._wakeup = asyncio.Event()
+
+    @property
+    def waiting(self) -> int:
+        """Jobs in the queue (not the running one)."""
+        return len(self._pending)
+
+    @property
+    def running(self) -> int:
+        return int(self._running is not None and not self._running.finished)
 
     # -- requests -----------------------------------------------------------------------------
 
-    def submit(self, model: LiveModel, sequence: str) -> Job:
+    def submit(
+        self, model: LiveModel, sequence: str, *, client: str, request_id: str | None = None
+    ) -> Job:
         """A new job for ``sequence``: finished at once from the cache, or queued.
 
         Raises:
-            ApiError: 429 when ``queue_size`` jobs are already waiting.
+            ApiError: 429 when ``client`` already has ``max_active_per_client`` unfinished
+                jobs, or ``queue_size`` jobs are already waiting.
         """
         self._sweep()
         now = self.now()
@@ -121,22 +152,28 @@ class JobManager:
             model=model,
             sequence=sequence,
             created_at=now,
+            client=client,
+            request_id=request_id,
             landscape=np.full((len(sequence), len(AA_ORDER)), np.nan, dtype=np.float32),
         )
         cached = self.cache.get(model.key_for("masked", sequence), len(sequence))
+        self.metrics.cache_lookup("masked", hit=cached is not None)
         if cached is not None:
             job.landscape, job.done, job.cached, job.started_at = cached, len(sequence), True, now
             self._jobs[job.id] = job
             self._finish(job, "succeeded")
-            log.info("job_cached", job=job.id, length=len(sequence))
+            log.info("job_cached", job=job.id, **sequence_fields(sequence))
             return job
+        active = sum(1 for j in self._jobs.values() if j.client == client and not j.finished)
+        if active >= self.max_active_per_client:
+            raise problems.too_many_jobs(self.max_active_per_client)
         if len(self._pending) >= self.queue_size:
             raise problems.queue_full(self.queue_size)
         self._jobs[job.id] = job
         self._pending.append(job)
         self._publish(job, "queued", self.response(job).model_dump_json())
         self._wakeup.set()
-        log.info("job_queued", job=job.id, length=len(sequence), waiting=len(self._pending))
+        log.info("job_queued", job=job.id, waiting=len(self._pending), **sequence_fields(sequence))
         return job
 
     def get(self, job_id: str) -> Job:
@@ -209,24 +246,30 @@ class JobManager:
                 self._wakeup.clear()
                 await self._wakeup.wait()
             job = self._pending.popleft()
-            await self._execute(job)
+            self._running = job
+            with structlog.contextvars.bound_contextvars(request_id=job.request_id, job=job.id):
+                await self._execute(job)
+            self._running = None
             self._sweep()
 
     async def _execute(self, job: Job) -> None:
         job.status, job.started_at = "running", self.now()
         self._publish(job, "running", self.response(job).model_dump_json())
-        log.info("job_started", job=job.id, length=len(job.sequence))
+        log.info("job_started", **sequence_fields(job.sequence))
         scorer = job.model.scorer
         try:
             for positions in job.model.precise_batches(job.sequence):
+                start = time.perf_counter()
                 rows = await asyncio.to_thread(scorer.landscape, job.sequence, positions=positions)
+                self.metrics.observe_inference(job.model.key, "masked", time.perf_counter() - start)
                 if job.finished:  # cancelled while the batch ran: drop it
                     return
                 job.landscape[positions] = rows[positions]
                 job.done += len(positions)
                 self._publish(job, "progress", self._progress(job, positions))
         except Exception as exc:
-            log.error("job_failed", job=job.id, error=repr(exc))
+            log.error("job_failed", error=repr(exc))
+            sentry_sdk.capture_exception(exc)
             if job.finished:  # cancelled meanwhile: it stays cancelled
                 return
             job.error = "Scoring failed; the error was logged."
@@ -235,7 +278,7 @@ class JobManager:
         self.cache.put(job.model.key_for("masked", job.sequence), job.landscape)
         self._finish(job, "succeeded")
         seconds = (job.finished_at or job.started_at) - job.started_at
-        log.info("job_succeeded", job=job.id, seconds=round(seconds.total_seconds(), 2))
+        log.info("job_succeeded", seconds=round(seconds.total_seconds(), 2))
 
     # -- internals ----------------------------------------------------------------------------
 

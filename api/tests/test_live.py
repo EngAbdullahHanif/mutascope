@@ -200,8 +200,11 @@ async def test_identical_requests_are_cache_hits(
     assert shorter.headers["x-mutascope-cache"] == "miss"
     assert len(started.state.mutascope.score_cache) == 3
 
-    # The cache is on disk: a restarted API answers from it.
-    restarted = create_app(settings)
+    # The cache is on disk: a restarted API answers from it. (The first app is still running,
+    # so the second one needs its own process lock.)
+    restarted = create_app(
+        settings.model_copy(update={"lock_file": settings.lock_file.with_name("restart.lock")})
+    )
     async with restarted.router.lifespan_context(restarted):
         transport = httpx.ASGITransport(app=restarted)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as again:

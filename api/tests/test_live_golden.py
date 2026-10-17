@@ -39,7 +39,9 @@ MIN_SPEARMAN = 0.99
 @pytest.fixture
 async def hub_client(bundle_dir: Path, tmp_path: Path) -> AsyncIterator[httpx.AsyncClient]:
     """The API with the pinned Hub fp32 models (cache in a fresh directory)."""
-    app: FastAPI = create_app(Settings(bundle_dir=bundle_dir, score_cache_dir=tmp_path))
+    app: FastAPI = create_app(
+        Settings(bundle_dir=bundle_dir, score_cache_dir=tmp_path, lock_file=tmp_path / "api.lock")
+    )
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
