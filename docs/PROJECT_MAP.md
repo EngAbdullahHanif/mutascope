@@ -487,3 +487,287 @@ A map of what exists after steps 9–18, by the question it answers.
 | What runs in the pipeline, and what by hand? | `pipeline/main.nf` runs `SCORE_ZERO_SHOT` and `BENCHMARK_ZERO_SHOT` per model and method. `score ensemble`, `eval compare`, `eval shared`, `eval figures` and the model gate are run by hand |
 | Where are the full landscapes? | The cache, one entry per model, sequence, structure tokens and region; `results/data/landscape_coverage.parquet` lists them; ADR 0018 |
 | What is not in git? | `data/cache/logprobs/` (cache and checkpoint), `data/processed/zero_shot/` (score sets), `mlruns/` (MLflow store) |
+
+## Step 19 — Supervised CV harness and a leakage canary (Phase 3, 2026-10-14, `5573742`–`579672a`)
+
+- **What this step did:** joined ProteinGym's fold assignments to the processed variants and
+  built the per-assay cross-validation loop (random / modulo / contiguous, pooled Spearman and
+  MSE as ProteinGym computes them), with a training-mean baseline and a label-permutation canary
+  (ADR 0019). No real model yet.
+- **Files created or modified:**
+
+| Path | What it does | Why it exists |
+|---|---|---|
+| `src/mutascope/data/folds.py` | Joins `fold_random_5`, `fold_modulo_5`, `fold_contiguous_5` to the processed single mutants and checks every variant has a fold | The supervised protocol needs ProteinGym's own folds, not ours |
+| `src/mutascope/data/schemas.py` | Schema of the folds table | Every written table has a schema |
+| `src/mutascope/models/cv.py` | Per-assay CV loop: fit on four folds, predict the fifth, pool, score | One loop for every model; the test fold is never passed to `fit` |
+| `src/mutascope/models/baselines.py` | `TrainingMean` (predicts the training mean) | Floor every model must clear |
+| `src/mutascope/models/canary.py` | Retrains with shuffled training labels; test Spearman must be about 0 | Catches leaks the code review misses |
+| `src/mutascope/models/registry.py` | Models by name (`train.model`), built from `train.params.<name>` | No model names in code |
+| `src/mutascope/features/base.py` | Key-only feature sets; the rule that builders never read labels | Features cannot carry the label |
+| `src/mutascope/eval/metrics.py`, `src/mutascope/eval/schemas.py` | Supervised metric schema (`model, feature_set, assay_id, scheme, fold, metric, value`) | Long results format with the scheme and pooled rows |
+| `src/mutascope/cli.py` | `data folds`, `train cv`; MLflow experiment `supervised` | Pipeline steps are CLI commands |
+| `conf/train/default.yaml`, `conf/config.yaml` | `train` config group | No hard-coded settings |
+| `tests/data/test_folds.py`, `tests/models/test_{cv,canary,cli_train}.py` | Fold join, CV loop, canary, CLI | Tests alongside the code |
+| `tests/synthetic_assays.py`, `tests/models/probe.py`, `tests/models/proteingym_reference.py` | Synthetic assays with folds; a learner known to find signal; ProteinGym's metric code as a test oracle | Pooled Spearman must match ProteinGym's own code |
+| `results/supervised/cv_training_mean_none.parquet` | Baseline under the three schemes | Committed evidence |
+| `docs/adr/0019-supervised-cv-harness.md`, `CLAUDE.md`, `docs/ROADMAP.md`, `docs/BUILD_LOG.md` | Decisions; supervised rules; item ticked; entry 19 | Decision record and docs |
+
+- **CLI commands added:** `mutascope data folds`, `mutascope train cv`.
+- **Outputs:** `data/processed/folds/` (not in git); the baseline results file.
+
+## Step 20 — Feature store for the supervised models (Phase 3, 2026-10-14, `5e2de8b`–`7747581`)
+
+- **What this step did:** built one store with every possible substitution (19 × L) of every
+  target and its features, per-residue embeddings of ESM-2 650M and SaProt, and the named feature
+  sets `seq` (217 assays) and `seq_struct` (213) (ADR 0020).
+- **Files created or modified:**
+
+| Path | What it does | Why it exists |
+|---|---|---|
+| `src/mutascope/scoring/cache.py` | Cache entries may hold per-residue arrays of any width | Embeddings (1,280-d) reuse the logit cache's keys and checkpointing |
+| `src/mutascope/features/embeddings.py` | Mean of the last `features.embedding_layers` hidden states from one unmasked pass | Position-i embeddings without a model run per variant |
+| `src/mutascope/features/store.py` | The store: `variants/` (per-variant scalars), `positions/` (structure, source region), `arrays/` (`.npy` log-probabilities and embeddings) | Per-residue data stored once, repeated only when one assay's matrix is built |
+| `src/mutascope/features/sets.py` | Feature sets assembled into one matrix per assay | Never all assays at once (memory) |
+| `src/mutascope/features/schemas.py` | Store and run-report schemas | Validate on write |
+| `conf/features/default.yaml` | Embedding layers and cache directory; `seq`, `seq_struct` | Sets are config, not code |
+| `src/mutascope/cli.py` | `features embed`, `features build` | Pipeline steps are CLI commands |
+| `tests/features/test_{embeddings,feature_store,feature_sets,cli_features}.py` | Embeddings, store, sets, CLI | Tests alongside the code |
+| `results/data/embedding_run_{esm2_650m,saprot_650m_af2}.parquet`, `results/data/feature_store.parquet` | Embedding runs and the store report | Committed evidence |
+| `docs/adr/0020-feature-store.md`, `CLAUDE.md`, `docs/ROADMAP.md`, `docs/BUILD_LOG.md` | Decisions; feature rules; items ticked; entry 20 | Decision record and docs |
+
+- **CLI commands added:** `mutascope features embed`, `mutascope features build`.
+- **Outputs:** `data/processed/features/` and the embedding cache (not in git).
+
+## Step 21 — Ridge rung: one-hot, augmented and all-feature ridge (Phase 3, 2026-10-14, `598c6ad`–`1af33ea`)
+
+- **What this step did:** wired the feature store into `train cv` one assay at a time and ran the
+  first real models: one-hot ridge, augmented ridge (Hsu et al., 2022) and ridge on `seq` /
+  `seq_struct`, each with its penalty chosen by inner CV split like the outer scheme. Added the
+  zero-shot comparator through the same loop, paired comparisons, the leaderboard sanity range and
+  the canary on real models (ADR 0021).
+- **Files created or modified:**
+
+| Path | What it does | Why it exists |
+|---|---|---|
+| `src/mutascope/models/ridge.py` | Ridge with penalty by inner CV over the training folds; the augmented score exactly unpenalised | Penalty never sees the test fold; Hsu et al.'s model |
+| `src/mutascope/features/matrix.py` | Dense columns plus `SiteOneHot` (two entries per row, never densified) | A dense site one-hot of MSH2 alone is 2.5 GB |
+| `src/mutascope/features/sets.py`, `src/mutascope/features/base.py` | Assemble one assay's matrix from its variant keys only | `train cv` assembles one assay at a time |
+| `src/mutascope/models/cv.py`, `src/mutascope/models/registry.py` | CV loop takes a `DesignBuilder` (`(assay_id, keys) -> FeatureMatrix`, defined here); registry builds ridge and zero-shot models | Every rung plugs into `fit(x, y, groups)` |
+| `src/mutascope/models/baselines.py` | `ZeroShot`: the zero-shot score run through the CV loop | The comparator on the same test folds |
+| `src/mutascope/models/canary.py` | Canary on the real models, with "informative" cases | The canary must test models that can learn |
+| `src/mutascope/eval/supervised.py`, `src/mutascope/eval/schemas.py` | Summaries, paired bootstrap comparisons, leaderboard check | No difference judged from two CIs |
+| `src/mutascope/cli.py` | `train canary`, `train compare`, `train leaderboard` | Pipeline steps are CLI commands |
+| `conf/train/default.yaml`, `conf/features/default.yaml` | Penalty grid, comparisons, canary assays; `site_onehot` | No hard-coded settings |
+| `conf/data/proteingym.yaml`, `data/manifest.yaml`, `tests/data/test_release.py` | ProteinGym's supervised leaderboard files pinned with sha256 | Inputs are pinned and checksummed |
+| `tests/models/test_{ridge,cv,canary,cli_train}.py`, `tests/models/probe.py`, `tests/synthetic_assays.py` | Ridge, leakage (bit-identical predictions when a test fold's labels change), CLI | Tests alongside the code |
+| `results/supervised/cv_{ridge_site_onehot,augmented_ridge_site_onehot_esm2,ridge_seq,ridge_seq_struct,zero_shot_esm2_score,zero_shot_saprot_score}*.parquet`, `canary_*.parquet`, `supervised_{summary,comparisons}.parquet`, `leaderboard.parquet` | CV results, chosen penalties, canaries, comparisons, leaderboard | Committed evidence |
+| `docs/adr/0021-ridge-models.md`, `CLAUDE.md`, `docs/ROADMAP.md`, `docs/BUILD_LOG.md` | Decisions; supervised rules; item ticked; entry 21 | Decision record and docs |
+
+- **CLI commands added:** `mutascope train canary`, `mutascope train compare`,
+  `mutascope train leaderboard`.
+- **Outputs:** the results files above.
+
+## Step 22 — LightGBM rung, parallel `train cv`, SHAP (Phase 3, 2026-10-15 to 10-16, `d796156`–`2036f3a`)
+
+- **What this step did:** ran assays in parallel worker processes under a memory budget, added
+  LightGBM with Optuna inside the training folds and PCA fitted on training rows only, a post-hoc
+  run without embeddings and TreeSHAP on 3 assays. LightGBM beat ridge under random only, which
+  set the rule that the deployed model is chosen on unseen positions (ADR 0022; the rule was
+  added in `2036f3a`, PR #23).
+- **Files created or modified:**
+
+| Path | What it does | Why it exists |
+|---|---|---|
+| `src/mutascope/utils/parallel.py` | Spawned single-threaded workers, largest assay first, `max_variants_in_flight`; results in task order | 13 workers without swapping; results never depend on `--jobs` |
+| `src/mutascope/models/cv.py` | `--jobs`, per-assay checkpoints | Long runs resume after a kill |
+| `src/mutascope/models/lgbm.py` | LightGBM, 10 Optuna trials per outer fold, inner CV split like the outer scheme | Nested search; LightGBM imported only inside `fit` |
+| `src/mutascope/models/pca.py` | PCA per embedding block, fitted on the rows the model trains on | No test rows in the components |
+| `src/mutascope/models/importance.py` | Exact TreeSHAP (`pred_contrib`) summed per feature block | Which features the model uses; no `shap` dependency |
+| `src/mutascope/eval/figures.py`, `src/mutascope/eval/schemas.py` | SHAP figure; SHAP schema | Figures from results files only |
+| `src/mutascope/models/registry.py`, `src/mutascope/models/canary.py`, `src/mutascope/scoring/cache.py`, `src/mutascope/features/*` | Registry entries; parallel canary; small fixes | Same interfaces for the new rung |
+| `src/mutascope/cli.py` | `train shap`, `train figures`; `--jobs` on `train cv` and `train canary` | Pipeline steps are CLI commands |
+| `conf/train/default.yaml`, `conf/features/default.yaml` | LightGBM search space, jobs, memory budget; post-hoc `seq_struct_noemb` | No hard-coded settings |
+| `Makefile`, `tests/conftest.py`, `tests/test_openmp_isolation.py` | LightGBM tests in a second process; a guard that fails a test loading torch and LightGBM together | Two OpenMP runtimes segfault together on macOS |
+| `tests/models/test_{lgbm,pca,cv,cli_train}.py`, `tests/test_parallel.py`, `tests/models/embedding_data.py` | LightGBM, PCA leakage, serial = parallel tables | Tests alongside the code |
+| `pyproject.toml`, `uv.lock`, `.gitignore` | `lightgbm`, `optuna`; checkpoints ignored | New dependencies |
+| `results/supervised/cv_lgbm*.parquet`, `canary_lgbm*.parquet`, `shap_lgbm_seq_struct.parquet`, `results/figures/shap_lgbm_seq_struct.{svg,png}` | CV, post-hoc run, canaries, SHAP | Committed evidence |
+| `docs/adr/0022-lightgbm-parallel-cv.md`, `CLAUDE.md`, `docs/ROADMAP.md`, `docs/BUILD_LOG.md` | Decisions and the deployment rule; parallel and OpenMP rules; items ticked; entry 22 | Decision record and docs |
+
+- **CLI commands added:** `mutascope train shap`, `mutascope train figures`.
+- **Outputs:** the results and figure files above.
+
+## Step 23 — MLP head, MSE vs RankNet (Phase 3, 2026-10-16, `5dc3328`–`a9cce63`)
+
+- **What this step did:** added a small MLP (plain torch) on the same features, trained with
+  squared error and with a within-assay ranking loss, early-stopped on a training fold split like
+  the outer scheme, on the 198 assays with at least 300 variants (ADR 0023).
+- **Files created or modified:**
+
+| Path | What it does | Why it exists |
+|---|---|---|
+| `src/mutascope/models/mlp.py` | LayerNorm → 512 → GELU → Dropout → 128 → GELU → 1; MSE or RankNet; early stopping, then refit for the chosen epochs; one thread, seeded | Third rung; deterministic whatever process runs it |
+| `src/mutascope/models/registry.py`, `src/mutascope/eval/supervised.py` | MLP entries; comparisons that allow exactly the assays below a model's minimum to be missing | Runs on fewer assays are still paired correctly |
+| `src/mutascope/cli.py` | `train.min_variants.<model>` in `train cv` and `train compare` | Small assays skipped by rule |
+| `conf/train/default.yaml` | Architecture, optimiser, epochs, `min_variants.mlp: 300`, fixed before any result | Nothing tuned on test folds |
+| `tests/models/test_{mlp,cli_mlp}.py`, `tests/test_openmp_isolation.py` | Leakage, validation split, determinism, CLI; `models.mlp` imports neither library | Tests alongside the code |
+| `results/supervised/cv_mlp_{mse,rank}_seq_struct*.parquet`, `canary_mlp_*.parquet`, `supervised_{summary,comparisons}.parquet` | CV, canaries, comparisons | Committed evidence |
+| `docs/adr/0023-mlp-head.md`, `CLAUDE.md`, `docs/ROADMAP.md`, `docs/BUILD_LOG.md` | Decisions; supervised rules; item ticked; entry 23 | Decision record and docs |
+
+- **CLI commands added:** none (options on `train cv` and `train compare`).
+- **Outputs:** the results files above.
+
+## Step 24 — Prediction intervals: CV+ with fold-ensemble spreads (Phase 3, 2026-10-16, `011abcc`–`5885598`)
+
+- **What this step did:** implemented CV+ conformal intervals directly (MAPIE cannot normalise
+  cross-conformal scores or take per-row folds), judged them on test folds they never saw for
+  ridge `seq_struct`, and wrote all-data calibration rows for the final models (ADR 0024).
+- **Files created or modified:**
+
+| Path | What it does | Why it exists |
+|---|---|---|
+| `src/mutascope/models/conformal.py` | CV+ with absolute and normalised scores | Intervals with a coverage guarantee |
+| `src/mutascope/models/uncertainty.py` | Intervals inside each outer fold, calibrated on training rows only; all-data calibration rows | Test labels compared only afterwards |
+| `src/mutascope/models/ridge.py` | `fold_predict`: the inner-CV fits kept as a fold ensemble | Ridge's spread for free |
+| `src/mutascope/eval/uncertainty.py`, `src/mutascope/eval/schemas.py`, `src/mutascope/eval/figures.py` | Coverage, width, width-vs-error; calibration and width figures | Judging intervals; figures from results files |
+| `src/mutascope/cli.py` | `train uncertainty`, `train calibrate`, `train uncertainty-figures` | Pipeline steps are CLI commands |
+| `conf/train/default.yaml` | `train.uncertainty` design, fixed before any result | Not tuned on coverage |
+| `tests/models/test_{conformal,uncertainty,cli_uncertainty}.py` | Known-noise coverage, bit-identical intervals when test labels change, CLI | Tests alongside the code |
+| `results/supervised/uncertainty_ridge_seq_struct{,_bins,_summary}.parquet`, `results/figures/{calibration,width_error}_ridge_seq_struct.{svg,png}` | Coverage and width per assay, bin and scheme; figures | Committed evidence |
+| `docs/adr/0024-conformal-intervals.md`, `CLAUDE.md`, `docs/ROADMAP.md`, `docs/BUILD_LOG.md` | Decisions; uncertainty rules; items ticked; entry 24 | Decision record and docs |
+
+- **CLI commands added:** `mutascope train uncertainty`, `mutascope train calibrate`,
+  `mutascope train uncertainty-figures`.
+- **Outputs:** `data/processed/calibration/ridge_seq_struct/` (3,994,758 rows, not in git); the
+  results and figures above.
+
+## Step 25 — Final models: results table, deployed ridge landscapes, Hub bundles (Phase 3, 2026-10-16, `6fb0d07`–`6b297de`)
+
+- **What this step did:** wrote the final results table and figures from existing results, fitted
+  the deployed ridge `seq_struct` (two fits per assay, matched to the position) on the 198
+  eligible assays with full 19 × L landscapes and intervals behind reproduction checks, and staged
+  the model and dataset repos for the Hub (ADR 0025). Also fixed the serial path of
+  `utils.parallel` to run single-threaded (`e6592db`), which had made CI fail on Linux.
+- **Files created or modified:**
+
+| Path | What it does | Why it exists |
+|---|---|---|
+| `src/mutascope/eval/final.py`, `src/mutascope/eval/schemas.py` | Final summary, paired comparisons against the best zero-shot model, per assay and per size bin | One table for every run |
+| `src/mutascope/eval/figures.py` | `final_ladder`, `final_by_size` | Figures from results files only |
+| `src/mutascope/models/final.py` | Eligibility, two final fits, out-of-fold values and intervals at measured variants, CV+ elsewhere, release checks, manifest | The deployed model, blocked unless it reproduces the CV results |
+| `src/mutascope/export/hub.py` | Stages the model repo and the landscapes as dataset configs; `--push` uploads | Publication on the Hub |
+| `src/mutascope/utils/hashing.py` | `config_sha256` | Every landscape row carries its config hash |
+| `src/mutascope/utils/parallel.py`, `tests/test_parallel.py` | `jobs = 1` under `threadpoolctl`'s one-thread limit | Serial and parallel results identical on Linux too |
+| `src/mutascope/features/sets.py` | Every substitution of a set, keys included | Landscapes need all 19 × L rows |
+| `src/mutascope/cli.py` | `train final-table`, `train final-figures`, `train final`, `train publish`; `data publish --landscapes` | Pipeline steps are CLI commands |
+| `conf/train/default.yaml` | `train.final_table`, `train.final`, `train.publish` | No hard-coded settings |
+| `tests/models/test_{final,cli_final}.py`, `tests/eval/test_final.py`, `tests/export/test_hub.py` | Brute-force leave-one-out intervals, failing checks write no bundle, Hub staging | Tests alongside the code |
+| `pyproject.toml`, `uv.lock` | `threadpoolctl` as a direct dependency | The package imports it |
+| `results/supervised/final_{summary,comparisons,assay_differences,size_comparisons,checks,manifest}.parquet`, `results/figures/final_{ladder,by_size}.{svg,png}` | Final table, checks, manifest, figures | Committed evidence |
+| `docs/adr/0025-final-models.md`, `docs/MODEL_CARD.md`, `docs/DATA_CARD.md`, `docs/ROADMAP.md`, `docs/BUILD_LOG.md` | Decisions and caveats; model card; landscapes in the data card; items ticked; entry 25 | Decision record and docs |
+
+- **CLI commands added:** `mutascope train final-table`, `mutascope train final-figures`,
+  `mutascope train final`, `mutascope train publish`; option `--landscapes` on
+  `mutascope data publish`.
+- **Outputs:** `data/processed/supervised_landscapes/ridge_seq_struct/` (1,379,989 rows),
+  `build/hf_model`, `build/hf_dataset` (not in git); the results and figures above.
+
+## Step 26 — Phase 3 close-out (Phase 3, 2026-10-17)
+
+- **What this step did:** reviewed the Phase 3 checklist against the repository, regenerated the
+  headline numbers from `results/supervised/`, recorded what is open or weak, stated the
+  deployment decision, and pointed the project at Phase 4 (ADR 0026). No code changed and no
+  number in `results/` changed.
+- **Files created or modified:**
+
+| Path | What it does | Why it exists |
+|---|---|---|
+| `docs/adr/0026-phase-3-close.md` | Headline table (4 rungs × 3 splits, own CIs and paired differences against zero-shot), per function type, rung comparisons, deployment decision, release checks, open and weak items, what Phase 4 inherits | One-page phase summary, as ADR 0017 was for Phase 2 |
+| `CLAUDE.md` | Current phase → Phase 4, with what Phase 3 delivered and what is open; uncertainty line says CV+ instead of MAPIE | The section is updated at the start of each phase; the MAPIE line was out of date since ADR 0024 |
+| `docs/ROADMAP.md` | Phase 3 close note; the publish item moved to Phase 4's export; export reads the supervised manifest; Phase 3 commands as Nextflow processes added to Phase 4 | The open items need an owner in the next phase |
+| `README.md` | Status line → Phase 4, links to ADR 0017 and 0026 | The line named Phase 3 |
+| `docs/BUILD_LOG.md`, `docs/PROJECT_MAP.md` | Entry 26; steps 19–26, the Phase 3 index and the Phase 3 retrospective | Journal and index; steps 19–25 were missing |
+
+- **CLI commands added:** none.
+- **Outputs:** none. The audit read `results/supervised/*.parquet`, the MLflow store and the CI
+  history, and reran `make lint test`.
+
+## Where Phase 3 left things
+
+A map of what exists after steps 19–26, by the question it answers.
+
+| Question | Where to look |
+|---|---|
+| Which features does a variant have? | `src/mutascope/features/` (`store.py`, `sets.py`, `matrix.py`, `embeddings.py`), `conf/features/default.yaml`; ADR 0020, 0021 (`site_onehot`) |
+| How is a supervised model cross-validated? | `src/mutascope/models/cv.py`, `utils/parallel.py`, `conf/train/default.yaml`; ADR 0019, 0022 |
+| Which models are there? | `src/mutascope/models/` (`ridge.py`, `lgbm.py`, `pca.py`, `mlp.py`, `baselines.py`, `registry.py`); ADR 0021–0023 |
+| How do we know nothing leaks? | Leakage tests in `tests/models/`, the permutation canary (`models/canary.py`, `results/supervised/canary_*.parquet`), the leaderboard sanity range (`leaderboard.parquet`); ADR 0019, 0021 |
+| Where are the numbers? | `results/supervised/final_{summary,comparisons,assay_differences,size_comparisons}.parquet`, `supervised_{summary,comparisons}.parquet`, `cv_*.parquet`; summary in ADR 0026 |
+| How are the intervals made and judged? | `src/mutascope/models/conformal.py`, `models/uncertainty.py`, `eval/uncertainty.py`, `results/supervised/uncertainty_*.parquet`; ADR 0024 |
+| What is deployed, and is it right? | `src/mutascope/models/final.py`, `eval/final.py`, `results/supervised/final_{checks,manifest}.parquet`, `docs/MODEL_CARD.md`; the bundle in `data/processed/supervised_landscapes/`; ADR 0025 |
+| What runs in the pipeline, and what by hand? | `pipeline/main.nf` stops at the zero-shot landscapes. `data folds`, `features embed|build` and every `train` command are run by hand |
+| What is not in git? | `data/processed/{features,calibration,supervised_landscapes}/`, the embedding cache, `build/hf_model`, `build/hf_dataset` (staged Hub repos), `mlruns/` |
+
+## Phase 3 retrospective
+
+What Phase 3 (steps 19–26) is worth remembering for, in three themes. Numbers are from the
+build-log entries and `results/supervised/`.
+
+**1. Two safeguards between the code and a wrong number.**
+
+- *The label-permutation canary* (`models/canary.py`, `train canary`; ADR 0019, 0021). It
+  retrains a model on shuffled training labels 20 times. Test Spearman must then be about 0, and
+  the command fails if the permuted mean is more than 4 standard errors from 0. A leak (test rows
+  in training, a scaler fitted on everything, a feature built from labels) shows up as signal that
+  survives the shuffle. It ran on every real model, 3 assays × 3 schemes: 72 of 72 cases passed,
+  66 of them informative (true-label Spearman ≥ 0.2), largest |z| 3.49. It raised one alarm, an
+  MLP test trained for 6 epochs (z = +7.9). The cause was untrained networks, not a leak, and it
+  was traced before anything was reported. It sits on top of the unit tests that change every
+  label of a test fold and require that fold's predictions to stay bit-identical.
+- *The release gate* (`train final`; ADR 0025). The deployed bundle is written only if a refit of
+  CV+ on all of an assay's data matches the saved calibration rows to 1e-9, and the out-of-fold
+  pooled Spearman matches `train cv` to 1e-6 in every scheme. It guards something different from
+  the canary: that the model shipped is the model the tables evaluated. The real run matched to
+  0 and to 0 / 3.5e-7 / 6.6e-8 (random / modulo / contiguous). A test feeds it calibration rows
+  from another penalty grid and requires failure with no bundle. Measured variants show
+  out-of-fold predictions, never the final model's fit to their own label.
+
+**2. Compute: memory, not cores, and pilots that lie.**
+
+- *Parallelism* (`utils/parallel.py`; ADR 0022): assays run in spawned workers with one
+  numerical thread each, largest first, under a budget of 160,000 variants in flight. The first
+  parallel run swapped: the 13 largest assays needed about 26 GB on a 24 GB machine. With the
+  budget, ridge `seq_struct` ran in 1,913 s instead of 4,256 s. That is only 2.2× faster,
+  because the serial run already used several cores through Accelerate. Torch and LightGBM never
+  share a process: their OpenMP runtimes segfault together on macOS.
+- *Single-process pilots underestimated parallel runs by about 3×.* With 10–13 workers busy,
+  per-assay times were 2.7–3.3× the single-process pilot's: `train uncertainty` took 3.0 h
+  against 1.4 h estimated, and `train final` took 30 min where smoke tests suggested minutes.
+  LightGBM ran at 0.63 s per variant per worker instead of 0.45. The likely cause is
+  memory-bandwidth contention on the M4 Pro (4 of its cores are efficiency cores). It was never
+  measured directly, and it is not shown to be specific to macOS. Estimates now scale from an
+  earlier parallel run of similar work.
+- *Cutting work without cutting accuracy.* The LightGBM pilot projected 35–85 h. Row-wise
+  histograms and a learning-rate floor made it about 3× faster at nearly the same test Spearman
+  (0.899 vs 0.901 on the profiled fold). The
+  full run still took 8.9 h, so `lgbm` on `seq` was dropped. The MLP's interval design (16.2× a
+  plain CV fit) was not run.
+- *The 300-variant minimum* (ADR 0023, 0025) skips 15 of the 213 structure assays for the MLP and
+  the deployed model. It saves time, but it was set for a statistical reason: below 300
+  variants, ridge and LightGBM lose to SaProt on unseen positions (−0.244 under contiguous below
+  200, ADR 0025). It also leaves about 60 variants for the MLP's early stopping. It was fixed
+  from the earlier rungs' results before the MLP ran.
+
+**3. The deployment split: supervised where it pays, zero-shot elsewhere.**
+
+| Assays | Shown on the website | Why |
+|---:|---|---|
+| 198 | Ridge `seq_struct`, supervised, 80% / 90% CV+ intervals | A structure and ≥ 300 measured variants; best or tied on unseen positions (contiguous 0.553, +0.092 over SaProt) |
+| 15 | SaProt 650M, zero-shot | Structure, but fewer than 300 variants |
+| 4 | ESM-2 650M, zero-shot | No usable structure |
+
+Ridge was chosen over LightGBM and the MLP because a landscape is mostly predictions at
+unmeasured positions. There, LightGBM is below ridge and the MLP ties or is below it. Both are
+better only under random (+0.024, +0.026). The 217-assay choice is stored per assay in
+`results/supervised/final_manifest.parquet` (`default_model`, with the reason). Details: ADR
+0025 and 0026.
