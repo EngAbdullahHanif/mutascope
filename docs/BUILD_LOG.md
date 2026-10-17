@@ -2474,3 +2474,95 @@ API serves is left to the author.
   150M fp32 logit difference is within 10% of the tolerance on the longest protein checked; the
   next `export bundle` will carry the two int8 pairs in `benchmarks.json` (content, not format);
   the export and checks are not Nextflow processes (one run per release).
+
+---
+
+## Entry 30 — The API core: pinned bundle, read-only routes, one error format (Phase 4 Task 3, 2026-10-17)
+
+**Plain-language summary.** The FastAPI service now serves what the website shows. At startup
+it downloads the published website bundle at its pinned commit, checks every file against the
+bundle's checksum list, and refuses to start if the bundle's format version is not one the code
+understands. It then loads the two exact (fp32) ONNX models chosen in Task 2. Routes list the
+217 proteins (filter by function type, search by name), describe one protein and why it has the
+default model it has, return a full mutation landscape (the supervised model with its 80% and
+90% intervals, or a zero-shot model) and return the benchmark tables. Every landscape says whether
+it is "Supervised (n = …)" or "Zero-shot" and which bundle, code and model revisions produced
+it. Every error, from an unknown protein to a crash, has the same standard JSON shape (RFC
+9457). Read-only responses carry an ETag, so a browser can ask "has this changed?" and get an
+empty 304 answer, and they are gzipped. The API never loads PyTorch, and a test checks that in a
+fresh Python process. Finally, `make types` turns the API's OpenAPI description into TypeScript
+types for the frontend, and CI fails if the committed types are out of date. Decisions in
+ADR 0030.
+
+**The 3 most important design choices.**
+
+1. **Refuse to start rather than serve something unverified.** Startup checks all 223 files
+   in the bundle's `SHA256SUMS`, that every protein in the manifest has its file, and that the
+   schema version is in `SUPPORTED_SCHEMA_VERSIONS` (read before parsing, so the error names the
+   version). It accepts only fp32 `esm2_onnx` model configs. Any failure stops uvicorn. A
+   protein file is checked again against the manifest's sha256 when it is first read.
+   *Evidence:* tests refuse a manifest rewritten to schema `2.0.0` (with a consistent checksum,
+   so only the version check can catch it), a one-byte change to `benchmarks.json`, a protein
+   file edited after startup, a snapshot missing protein files, the int8 and PyTorch configs,
+   and any revision that is not a 40-character hash (`main`, `bundle-v1.0.0`, `3ae7672`).
+2. **The settings copy the pins, and a test holds them to `conf/`.** The API is configured by
+   environment variables (pydantic-settings), as a container should be. Its defaults are the
+   bundle revision `3ae7672` and the ONNX revision `82e1528`, and a test compares them with
+   `export.publish.revision`, `onnx.publish.revision`, `publish.repo_id` and
+   `export.publish.path_in_repo`. A re-publish that updates `conf/` but not the API fails in
+   CI instead of quietly serving the old bundle.
+3. **Landscapes are decoded, labelled and stamped, with the out-of-fold pairing made
+   explicit.** The bundle's fixed-point integers become plain numbers, so API clients need no
+   decoding rule. A supervised landscape adds `oof_prediction`: the prediction only where a
+   variant was measured. In the bundle that value already comes from the fold model that
+   never saw the variant, and the separate grid stops a client from comparing an all-data
+   prediction with a measurement. *Evidence:* golden tests compare every grid of
+   `TCRG1_MOUSE_Tsuboyama_2023_1E0L` (supervised, n = 621) and both zero-shot landscapes of
+   `F7YBW8_MESOW_Aakre_2015` with values decoded straight from the published gzip JSON, plus
+   pinned cells (TCRG1 residue 0 → A: measured −0.1039, prediction −0.1262, 80% interval
+   [−0.4863, 0.2339]).
+
+**Problems encountered and how they were solved.**
+
+1. **The API tests could not run on their own.** *Found:* the first `pytest api/tests` run
+   stopped at collection: `ModuleNotFoundError: No module named 'tests'` from the conftest,
+   which reuses the ONNX stand-in graphs in `tests/scoring/test_onnx_esm2.py`. *Cause:* with
+   `--import-mode=importlib` pytest does not add the repo root to `sys.path`. `tests` could be
+   imported only when `tests/` had been collected first, as in `make test`. *Fix:*
+   `pythonpath = ["."]` in the pytest config. *Verified:* `pytest api/tests` alone collects
+   and passes all 37 tests, and the full suite is unchanged.
+2. **Refusing a PyTorch config crashed instead of refusing.** *Found:* `test_int8_is_refused`
+   failed with Hydra's `ConfigCompositionException: Could not override 'model.threads'`
+   instead of `ScorerLoadError`. *Cause:* the thread count was a Hydra override applied before
+   the precision check, and PyTorch model configs have no `threads` key. *Fix:* compose the
+   config, check `scorer` and `precision`, then set `threads` (and `local_dir`) on the
+   resolved dict. *Verified:* the int8 and PyTorch configs are both refused with the intended
+   message.
+3. **The OpenAPI schema still advertised FastAPI's own error format.** *Found:* reading the
+   generated schema, `HTTPValidationError` was still among the components after every route
+   declared problem responses. *Cause:* `GET /v1/proteins/{id}` has a path parameter and
+   declared only 404. FastAPI then adds its default 422 schema, which the generated TypeScript
+   types would have offered the frontend as a real response. *Fix:* declare 422 as a problem
+   response there too. *Verified:* a test asserts every documented error is
+   `application/problem+json` with the `Problem` schema and that `HTTPValidationError` is gone.
+
+**Supporting details.**
+- *Real startup* (`make test-slow`, fresh interpreter): the bundle snapshot plus both fp32 models
+  from the pinned Hub revisions load in 48.6 s (models already in the local Hugging Face cache
+  from Task 2). `/ready` returns 200, both scorers score ubiquitin, and neither torch nor
+  transformers is loaded.
+- *Cost:* largest landscape (A0A140D2T1_ZIKV, 3,423 residues) 0.69 s per request with its file
+  already parsed, 4,374,165 bytes of JSON, 935,669 gzipped. Smallest (TCRG1) 5 ms. Parsing all
+  217 protein files raised peak RSS by 462 MB, so they are parsed on demand into a 32-entry LRU.
+- *Types:* `web/package.json` + `pnpm-lock.yaml` pin openapi-typescript 7.13.0, TypeScript
+  5.9.3 and pnpm 12.10.1. `web/src/lib/api-types.ts` (973 lines) is identical across two
+  generations. CI job `types` uses `pnpm/action-setup@v6` and `actions/setup-node@v7` (both
+  tags checked upstream), Node 26.
+- *Dependencies:* no new Python packages (fastapi and pydantic-settings were already in the
+  `api` extra; the API also needs the `onnx` extra).
+- *Tests:* `make lint` clean. `make test` passes: 712 tests plus 15 LightGBM, 37 of them new
+  API tests (36 fast, 1 slow). `make test-slow`'s new API test passes. Run time 1 min 48 s.
+- *Loose ends:* `/v1/score`, `/v1/jobs` (SSE), `/metrics`, CORS, rate limiting, diskcache and
+  schemathesis are later Phase 4 tasks. The 0.69 s worst case is response building and could
+  be cached as bytes if the Space needs it. `bundle_dir` and `onnx_local_dir` are for tests
+  and development, and a local bundle reports `bundle_revision: null`.
