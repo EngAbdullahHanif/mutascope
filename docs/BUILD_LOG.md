@@ -2163,7 +2163,8 @@ project at Phase 4.
   CI trains nothing real; Binding has 13 assays; the deployed model is not the best under random;
   interval width does not track difficulty; the MLP has no intervals; measured-variant coverage
   holds by construction; two targets have mostly imputed structure features (108,452 rows); SHAP
-  is on 3 assays; by-size bins use a plain mean; the project map lacks steps 19–25.
+  is on 3 assays; by-size bins use a plain mean. The project map lacked steps 19–25; they were
+  filled in on the same branch, from the commit ranges and file lists of each task.
 - *Corrected in passing:* CLAUDE.md's summary said uncertainty used MAPIE. It now says CV+ is
   implemented directly (ADR 0024).
 - *Tests:* `make lint` clean (ruff, format, pyright 0 errors). `make test`: 601 passed, 1
@@ -2171,4 +2172,4 @@ project at Phase 4.
   `make test-slow` was not rerun.
 - *Docs changed:* ADR 0026, CLAUDE.md (current phase → Phase 4, MAPIE line), ROADMAP (close
   note, publish item and Nextflow item in Phase 4, export reads the manifest), README (status
-  line), PROJECT_MAP (step 26).
+  line), PROJECT_MAP (steps 19–26, a Phase 3 index and a Phase 3 retrospective).

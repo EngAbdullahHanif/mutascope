@@ -193,8 +193,8 @@ Weak points in what is ticked:
 15. **CLAUDE.md said "conformal prediction (MAPIE)".** ADR 0024 implemented CV+ directly because
     MAPIE cannot normalise cross-conformal scores or take per-row folds. Corrected with this
     record.
-16. **`docs/PROJECT_MAP.md` has no steps 19–25.** It jumps from step 18 to this close-out (step
-    26), so Phase 3's files are indexed only through the build log and ADRs.
+16. **`docs/PROJECT_MAP.md` had no steps 19–25.** It jumped from step 18 to this close-out.
+    Filled in before the close was merged, with a Phase 3 retrospective.
 17. **Two rounding slips in accepted ADRs**, left as written: ADR 0021 gives augmented ridge −
     zero-shot under contiguous as −0.006 (the file says −0.005483), ADR 0022 gives
     LightGBM-PCA `seq` contiguous as 0.465 (0.464473; found in build-log entry 25).
