@@ -7,13 +7,16 @@ hash, never by branch, so a later push cannot change what a running API serves.
 """
 
 import tempfile
+from ipaddress import IPv4Network, IPv6Network, ip_network
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from limits import parse_many
+from pydantic import Field, SecretStr, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 CommitHash = Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")]
+IPNetwork = IPv4Network | IPv6Network
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -22,6 +25,17 @@ class Settings(BaseSettings):
     """Everything the API reads at startup."""
 
     model_config = SettingsConfigDict(env_prefix="MUTASCOPE_API_", frozen=True)
+
+    host: str = "0.0.0.0"
+    """Address the start command (``python -m api.app.serve``) binds."""
+    port: int = Field(default=7860, ge=1, le=65535)
+    """Port of the start command (the Space's port)."""
+    max_connections: int = Field(default=200, ge=10)
+    """Concurrent connections uvicorn accepts (``limit_concurrency``); more get a 503. Bounds
+    sockets and tasks however many addresses a client has."""
+    lock_file: Path = Path(tempfile.gettempdir()) / "mutascope-api.lock"
+    """Held for the server's lifetime: a second process on this host refuses to start, because
+    the job queue and the rate limiter live in one process's memory (ADR 0032)."""
 
     bundle_repo: str = "engAbdullahHanif/mutascope-proteingym-v1.3"
     """Hub dataset repo holding the bundle (``publish.repo_id``)."""
@@ -69,3 +83,62 @@ class Settings(BaseSettings):
     cache_control: str = "public, max-age=3600"
     """``Cache-Control`` of the read-only ``/v1`` routes. Their content changes only with the
     pinned bundle, and the ETag lets a client revalidate cheaply after it expires."""
+
+    # -- hardening (ADR 0032) -------------------------------------------------------------------
+
+    rate_limit_read: str = "120/minute"
+    """Per client, every read route: ``/v1/proteins*``, ``/v1/benchmarks``, ``GET`` / ``DELETE
+    /v1/jobs/{id}`` and opening a stream. Syntax of the ``limits`` package (``;`` joins limits)."""
+    rate_limit_score: str = "20/minute"
+    """Per client, ``POST /v1/score`` (fast mode; cache hits count)."""
+    rate_limit_score_global: str = "120/minute"
+    """All clients together, ``POST /v1/score``: about what 2 vCPUs can score at 1,000 residues
+    with 150M (0.6 s a request on the M4 Pro), so many addresses cannot add up to more."""
+    rate_limit_jobs: str = "2/minute;10/hour"
+    """Per client, ``POST /v1/jobs`` (precise mode; a cached job counts too)."""
+    max_active_jobs_per_client: int = Field(default=1, ge=1)
+    """Queued or running jobs one client may have; another is a 429. Without it, one client
+    could fill the whole queue (``job_queue_size``) within the job rate limit."""
+    max_streams_per_client: int = Field(default=4, ge=1)
+    """Open SSE streams per client; another is a 429 until one closes."""
+    max_streams_total: int = Field(default=64, ge=1)
+    """Open SSE streams over all clients."""
+    trusted_proxies: Annotated[tuple[IPNetwork, ...], NoDecode] = ()
+    """Addresses or networks of reverse proxies (the Space's) whose ``X-Forwarded-For`` is
+    believed. Comma-separated in the environment. Empty: the socket address is the client."""
+    cors_origins: Annotated[tuple[str, ...], NoDecode] = ("http://localhost:3000",)
+    """Browser origins allowed to call the API: the production site (set at deploy) and the
+    Next.js dev server. Comma-separated in the environment."""
+    max_body_bytes: int = Field(default=16 * 1024, ge=1024)
+    """Largest request body; more is a 413. The largest valid body (1,022 residues and 50
+    mutations) is 1.8 kB."""
+
+    metrics_token: SecretStr | None = Field(default=None, min_length=32)
+    """Bearer token of ``GET /metrics``; without one the route answers 404."""
+    sentry_dsn: SecretStr | None = None
+    """Sentry is enabled only when this is set."""
+    sentry_environment: str = "development"
+    sentry_traces_sample_rate: float = Field(default=0.0, ge=0, le=1)
+
+    @field_validator("trusted_proxies", "cors_origins", mode="before")
+    @classmethod
+    def _split_commas(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return tuple(part.strip() for part in value.split(",") if part.strip())
+        return value
+
+    @field_validator("trusted_proxies", mode="before")
+    @classmethod
+    def _networks(cls, value: Any) -> Any:
+        if isinstance(value, list | tuple):
+            items: list[Any] = list(value)  # pyright: ignore[reportUnknownArgumentType]
+            return tuple(ip_network(v, strict=False) if isinstance(v, str) else v for v in items)
+        return value
+
+    @field_validator(
+        "rate_limit_read", "rate_limit_score", "rate_limit_score_global", "rate_limit_jobs"
+    )
+    @classmethod
+    def _limits(cls, value: str) -> str:
+        parse_many(value)  # a typo fails at startup, not at the first request
+        return value

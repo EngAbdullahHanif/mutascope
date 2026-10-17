@@ -10,6 +10,8 @@ from api.app import problems
 from api.app.bundle import Bundle
 from api.app.jobs import JobManager
 from api.app.live import LiveModel, LiveModelName
+from api.app.metrics import Metrics
+from api.app.ratelimit import rate_limit
 from api.app.schemas import (
     ZERO_SHOT_KEYS,
     ZERO_SHOT_LABEL,
@@ -47,6 +49,7 @@ class AppState:
     score_cache: ScoreCache
     jobs: JobManager
     settings: Settings
+    metrics: Metrics
 
 
 def get_state(request: Request) -> AppState:
@@ -104,7 +107,11 @@ def _available(protein: ProteinFile) -> list[AvailableModel]:
 
 
 router = APIRouter()
-v1 = APIRouter(prefix="/v1", responses=problems.responses(503))
+v1 = APIRouter(
+    prefix="/v1",
+    responses=problems.responses(429, 503),
+    dependencies=[Depends(rate_limit("read"))],
+)
 
 
 @router.get("/health", response_model=Health)

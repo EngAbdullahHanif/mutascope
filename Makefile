@@ -44,8 +44,11 @@ pipeline-test:
 mlflow:
 	uv run mlflow ui --backend-store-uri sqlite:///mlruns/mlflow.db --port 5001
 
+# Development server (one process; --reload restarts it). Production runs `python -m api.app.serve`
+# (ADR 0032). Like it, this leaves the client address to the API: uvicorn must not rewrite it
+# from X-Forwarded-For, and the API writes its own JSON access line.
 api:
-	uv run uvicorn api.app.main:app --reload --port 7860
+	uv run uvicorn api.app.main:app --reload --port 7860 --no-proxy-headers --no-access-log
 
 web: require-web
 	cd web && pnpm dev
