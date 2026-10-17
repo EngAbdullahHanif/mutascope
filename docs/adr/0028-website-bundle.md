@@ -107,6 +107,10 @@ per protein file (the browser downloads one at a time) and 40,000,000 for all of
 (`publish.repo_id`) as one commit whose deletions are confined to that folder, then tags it
 (`export.publish.tag`, `bundle-v1.0.0`). An existing tag is refused: a tag names one bundle. The
 commit is pinned as `export.publish.revision` for the API and the website, like the Task 0 pins.
+Published 2026-10-17: commit `3ae767217bb0a56b8f2e7c79c68b73119e308066` (the bundle built at
+`5c8d778`), tag `bundle-v1.0.0` resolving to it, repo public. Checked through the Hub API
+without a token: 224 files under `bundle/`, each equal to `build/bundle` (sha256 for the 217
+LFS files, size for the 7 small ones); the 14 files outside `bundle/` identical to `0b0fe65`.
 
 ### 8. Caveats come from the paired comparisons
 
