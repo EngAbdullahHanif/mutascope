@@ -1,0 +1,530 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:mutascope:bundle:1.0.0:benchmarks",
+  "$defs": {
+    "CalibrationRow": {
+      "additionalProperties": false,
+      "description": "Coverage of the deployed interval design (``train uncertainty``, ADR 0024).",
+      "properties": {
+        "scheme": {
+          "title": "Scheme",
+          "type": "string"
+        },
+        "mode": {
+          "description": "Calibration folds: ``scheme`` (split like the test split) or ``random``.",
+          "title": "Mode",
+          "type": "string"
+        },
+        "level": {
+          "title": "Level",
+          "type": "number"
+        },
+        "size_bin": {
+          "title": "Size Bin",
+          "type": "string"
+        },
+        "statistic": {
+          "title": "Statistic",
+          "type": "string"
+        },
+        "value": {
+          "title": "Value",
+          "type": "number"
+        }
+      },
+      "required": [
+        "scheme",
+        "mode",
+        "level",
+        "size_bin",
+        "statistic",
+        "value"
+      ],
+      "title": "CalibrationRow",
+      "type": "object"
+    },
+    "Caveat": {
+      "additionalProperties": false,
+      "description": "A function type whose supervised gain is not shown under some splits.",
+      "properties": {
+        "function_type": {
+          "title": "Function Type",
+          "type": "string"
+        },
+        "n_assays": {
+          "title": "N Assays",
+          "type": "integer"
+        },
+        "splits": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Splits",
+          "type": "array"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "function_type",
+        "n_assays",
+        "splits",
+        "text"
+      ],
+      "title": "Caveat",
+      "type": "object"
+    },
+    "ComparisonRow": {
+      "additionalProperties": false,
+      "description": "A paired bootstrap of ``model_a - model_b`` on the same assays (ADR 0014): the only way\ntwo score sets are compared.",
+      "properties": {
+        "model_a": {
+          "title": "Model A",
+          "type": "string"
+        },
+        "model_b": {
+          "title": "Model B",
+          "type": "string"
+        },
+        "split": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Split"
+        },
+        "metric": {
+          "title": "Metric",
+          "type": "string"
+        },
+        "level": {
+          "title": "Level",
+          "type": "string"
+        },
+        "group": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Group"
+        },
+        "size_bin": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Size Bin"
+        },
+        "value_a": {
+          "title": "Value A",
+          "type": "number"
+        },
+        "value_b": {
+          "title": "Value B",
+          "type": "number"
+        },
+        "diff": {
+          "title": "Diff",
+          "type": "number"
+        },
+        "ci_low": {
+          "title": "Ci Low",
+          "type": "number"
+        },
+        "ci_high": {
+          "title": "Ci High",
+          "type": "number"
+        },
+        "share_a_better": {
+          "title": "Share A Better",
+          "type": "number"
+        },
+        "n_assays": {
+          "title": "N Assays",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "model_a",
+        "model_b",
+        "split",
+        "metric",
+        "level",
+        "group",
+        "size_bin",
+        "value_a",
+        "value_b",
+        "diff",
+        "ci_low",
+        "ci_high",
+        "share_a_better",
+        "n_assays"
+      ],
+      "title": "ComparisonRow",
+      "type": "object"
+    },
+    "FinalCoverage": {
+      "additionalProperties": false,
+      "description": "Share of measured variants inside their out-of-fold interval in the deployed\nlandscapes (``final_checks``), summarised over assays.",
+      "properties": {
+        "level": {
+          "title": "Level",
+          "type": "number"
+        },
+        "n_assays": {
+          "title": "N Assays",
+          "type": "integer"
+        },
+        "mean": {
+          "title": "Mean",
+          "type": "number"
+        },
+        "median": {
+          "title": "Median",
+          "type": "number"
+        },
+        "min": {
+          "title": "Min",
+          "type": "number"
+        },
+        "max": {
+          "title": "Max",
+          "type": "number"
+        }
+      },
+      "required": [
+        "level",
+        "n_assays",
+        "mean",
+        "median",
+        "min",
+        "max"
+      ],
+      "title": "FinalCoverage",
+      "type": "object"
+    },
+    "FunctionTypeRow": {
+      "additionalProperties": false,
+      "description": "The deployed model against its zero-shot comparator in one function type and split.",
+      "properties": {
+        "function_type": {
+          "title": "Function Type",
+          "type": "string"
+        },
+        "split": {
+          "title": "Split",
+          "type": "string"
+        },
+        "n_assays": {
+          "title": "N Assays",
+          "type": "integer"
+        },
+        "supervised": {
+          "title": "Supervised",
+          "type": "number"
+        },
+        "zero_shot": {
+          "title": "Zero Shot",
+          "type": "number"
+        },
+        "diff": {
+          "title": "Diff",
+          "type": "number"
+        },
+        "ci_low": {
+          "title": "Ci Low",
+          "type": "number"
+        },
+        "ci_high": {
+          "title": "Ci High",
+          "type": "number"
+        },
+        "gain_shown": {
+          "description": "The paired 95% CI of the difference lies above 0.",
+          "title": "Gain Shown",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "function_type",
+        "split",
+        "n_assays",
+        "supervised",
+        "zero_shot",
+        "diff",
+        "ci_low",
+        "ci_high",
+        "gain_shown"
+      ],
+      "title": "FunctionTypeRow",
+      "type": "object"
+    },
+    "SummaryRow": {
+      "additionalProperties": false,
+      "description": "A ProteinGym-style aggregate (per UniProt -> per function type -> overall) with its\nbootstrap 95% CI over assays. ``group`` is the function type when ``level`` is\n``function``.",
+      "properties": {
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "split": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Split"
+        },
+        "metric": {
+          "title": "Metric",
+          "type": "string"
+        },
+        "level": {
+          "title": "Level",
+          "type": "string"
+        },
+        "group": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Group"
+        },
+        "value": {
+          "title": "Value",
+          "type": "number"
+        },
+        "ci_low": {
+          "title": "Ci Low",
+          "type": "number"
+        },
+        "ci_high": {
+          "title": "Ci High",
+          "type": "number"
+        },
+        "n_assays": {
+          "title": "N Assays",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "model",
+        "split",
+        "metric",
+        "level",
+        "group",
+        "value",
+        "ci_low",
+        "ci_high",
+        "n_assays"
+      ],
+      "title": "SummaryRow",
+      "type": "object"
+    },
+    "SupervisedStamp": {
+      "additionalProperties": false,
+      "description": "What produced the supervised landscapes (``train final``).",
+      "properties": {
+        "code_version": {
+          "title": "Code Version",
+          "type": "string"
+        },
+        "config_sha256": {
+          "title": "Config Sha256",
+          "type": "string"
+        },
+        "manifest_sha256": {
+          "title": "Manifest Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code_version",
+        "config_sha256",
+        "manifest_sha256"
+      ],
+      "title": "SupervisedStamp",
+      "type": "object"
+    },
+    "VersionStamp": {
+      "additionalProperties": false,
+      "description": "Where every number in the bundle came from.",
+      "properties": {
+        "schema_version": {
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "mutascope_version": {
+          "title": "Mutascope Version",
+          "type": "string"
+        },
+        "code_version": {
+          "description": "Git commit of the export (``-dirty`` if the code had uncommitted changes).",
+          "title": "Code Version",
+          "type": "string"
+        },
+        "proteingym_release": {
+          "title": "Proteingym Release",
+          "type": "string"
+        },
+        "dataset_repo": {
+          "title": "Dataset Repo",
+          "type": "string"
+        },
+        "dataset_revision": {
+          "title": "Dataset Revision",
+          "type": "string"
+        },
+        "model_repo": {
+          "title": "Model Repo",
+          "type": "string"
+        },
+        "model_revision": {
+          "title": "Model Revision",
+          "type": "string"
+        },
+        "supervised": {
+          "$ref": "#/$defs/SupervisedStamp"
+        }
+      },
+      "required": [
+        "schema_version",
+        "mutascope_version",
+        "code_version",
+        "proteingym_release",
+        "dataset_repo",
+        "dataset_revision",
+        "model_repo",
+        "model_revision",
+        "supervised"
+      ],
+      "title": "VersionStamp",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "The benchmark numbers the website shows; every value is copied from a results table.",
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0",
+      "default": "1.0.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "version": {
+      "$ref": "#/$defs/VersionStamp"
+    },
+    "deployed_model": {
+      "title": "Deployed Model",
+      "type": "string"
+    },
+    "zero_shot_comparator": {
+      "title": "Zero Shot Comparator",
+      "type": "string"
+    },
+    "zero_shot_summary": {
+      "description": "Every zero-shot score set on its own assays (Spearman, AUC, MCC, NDCG, top recall).",
+      "items": {
+        "$ref": "#/$defs/SummaryRow"
+      },
+      "title": "Zero Shot Summary",
+      "type": "array"
+    },
+    "zero_shot_shared": {
+      "description": "Zero-shot score sets on the assays they share, for side-by-side display.",
+      "items": {
+        "$ref": "#/$defs/SummaryRow"
+      },
+      "title": "Zero Shot Shared",
+      "type": "array"
+    },
+    "zero_shot_comparisons": {
+      "items": {
+        "$ref": "#/$defs/ComparisonRow"
+      },
+      "title": "Zero Shot Comparisons",
+      "type": "array"
+    },
+    "supervised_summary": {
+      "description": "The supervised ladder and zero-shot on the same test folds, per split (Spearman).",
+      "items": {
+        "$ref": "#/$defs/SummaryRow"
+      },
+      "title": "Supervised Summary",
+      "type": "array"
+    },
+    "supervised_comparisons": {
+      "description": "Each supervised run against zero-shot on the same folds, overall, per function type and\nper assay size bin.",
+      "items": {
+        "$ref": "#/$defs/ComparisonRow"
+      },
+      "title": "Supervised Comparisons",
+      "type": "array"
+    },
+    "function_types": {
+      "items": {
+        "$ref": "#/$defs/FunctionTypeRow"
+      },
+      "title": "Function Types",
+      "type": "array"
+    },
+    "caveats": {
+      "items": {
+        "$ref": "#/$defs/Caveat"
+      },
+      "title": "Caveats",
+      "type": "array"
+    },
+    "calibration": {
+      "items": {
+        "$ref": "#/$defs/CalibrationRow"
+      },
+      "title": "Calibration",
+      "type": "array"
+    },
+    "final_coverage": {
+      "items": {
+        "$ref": "#/$defs/FinalCoverage"
+      },
+      "title": "Final Coverage",
+      "type": "array"
+    }
+  },
+  "required": [
+    "version",
+    "deployed_model",
+    "zero_shot_comparator",
+    "zero_shot_summary",
+    "zero_shot_shared",
+    "zero_shot_comparisons",
+    "supervised_summary",
+    "supervised_comparisons",
+    "function_types",
+    "caveats",
+    "calibration",
+    "final_coverage"
+  ],
+  "title": "Benchmarks",
+  "type": "object"
+}

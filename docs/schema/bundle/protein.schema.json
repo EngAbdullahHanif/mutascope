@@ -1,0 +1,551 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:mutascope:bundle:1.0.0:protein",
+  "$defs": {
+    "AssayInfo": {
+      "additionalProperties": false,
+      "description": "What the protein page says about the assay (ProteinGym reference table).",
+      "properties": {
+        "assay_id": {
+          "title": "Assay Id",
+          "type": "string"
+        },
+        "uniprot_id": {
+          "title": "Uniprot Id",
+          "type": "string"
+        },
+        "molecule_name": {
+          "title": "Molecule Name",
+          "type": "string"
+        },
+        "source_organism": {
+          "title": "Source Organism",
+          "type": "string"
+        },
+        "function_type": {
+          "description": "ProteinGym's ``coarse_selection_type``: Activity, Binding, Expression,\nOrganismalFitness or Stability.",
+          "title": "Function Type",
+          "type": "string"
+        },
+        "selection_assay": {
+          "title": "Selection Assay",
+          "type": "string"
+        },
+        "target_seq": {
+          "title": "Target Seq",
+          "type": "string"
+        },
+        "length": {
+          "minimum": 1,
+          "title": "Length",
+          "type": "integer"
+        },
+        "has_structure": {
+          "title": "Has Structure",
+          "type": "boolean"
+        },
+        "pdb_file": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Pdb File"
+        },
+        "pdb_range": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "1-indexed inclusive residues of ``target_seq`` the structure models.",
+          "title": "Pdb Range"
+        },
+        "n_measured_variants": {
+          "description": "Single mutants with a ``DMS_score`` in this assay.",
+          "minimum": 0,
+          "title": "N Measured Variants",
+          "type": "integer"
+        },
+        "n_measured_positions": {
+          "minimum": 0,
+          "title": "N Measured Positions",
+          "type": "integer"
+        },
+        "n_assays_for_protein": {
+          "description": "Assays in the release with this UniProt ID, this one included.",
+          "minimum": 1,
+          "title": "N Assays For Protein",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "assay_id",
+        "uniprot_id",
+        "molecule_name",
+        "source_organism",
+        "function_type",
+        "selection_assay",
+        "target_seq",
+        "length",
+        "has_structure",
+        "pdb_file",
+        "pdb_range",
+        "n_measured_variants",
+        "n_measured_positions",
+        "n_assays_for_protein"
+      ],
+      "title": "AssayInfo",
+      "type": "object"
+    },
+    "Coded": {
+      "additionalProperties": false,
+      "description": "Categorical values as indices into ``codes``; ``null`` is no value.",
+      "properties": {
+        "codes": {
+          "items": {
+            "enum": [
+              "random",
+              "contiguous"
+            ],
+            "type": "string"
+          },
+          "title": "Codes",
+          "type": "array"
+        },
+        "values": {
+          "items": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Values",
+          "type": "array"
+        }
+      },
+      "required": [
+        "codes",
+        "values"
+      ],
+      "title": "Coded",
+      "type": "object"
+    },
+    "DefaultModel": {
+      "additionalProperties": false,
+      "description": "What the page shows first, and why (``final_manifest``, ADR 0025).",
+      "properties": {
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "supervised",
+            "zero_shot"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "label": {
+          "description": "``\"Supervised (n = 9,576)\"`` (measured variants it was trained on) or ``\"Zero-shot\"``.",
+          "title": "Label",
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why there is no supervised model; null when there is one.",
+          "title": "Reason"
+        }
+      },
+      "required": [
+        "model",
+        "kind",
+        "label",
+        "reason"
+      ],
+      "title": "DefaultModel",
+      "type": "object"
+    },
+    "MsaRegion": {
+      "additionalProperties": false,
+      "description": "The benchmark scored this assay on part of its target (ADR 0012).\n\nESM-2's benchmark numbers come from the target's MSA region; the landscape in this file is\nthe full target, as for every assay, so its scores inside the region differ from the\nbenchmark's (the model saw a longer sequence).",
+      "properties": {
+        "label": {
+          "description": "Cache region label, 1-indexed inclusive: ``\"msa:281-804\"``.",
+          "title": "Label",
+          "type": "string"
+        },
+        "start": {
+          "description": "0-indexed first residue.",
+          "minimum": 0,
+          "title": "Start",
+          "type": "integer"
+        },
+        "end": {
+          "description": "0-indexed, exclusive.",
+          "minimum": 1,
+          "title": "End",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "label",
+        "start",
+        "end"
+      ],
+      "title": "MsaRegion",
+      "type": "object"
+    },
+    "Quantized": {
+      "additionalProperties": false,
+      "description": "Fixed-point numbers: ``value = q / 10**decimals``; ``null`` is no value.",
+      "properties": {
+        "decimals": {
+          "maximum": 12,
+          "minimum": 0,
+          "title": "Decimals",
+          "type": "integer"
+        },
+        "values": {
+          "items": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Values",
+          "type": "array"
+        }
+      },
+      "required": [
+        "decimals",
+        "values"
+      ],
+      "title": "Quantized",
+      "type": "object"
+    },
+    "StructureFeatures": {
+      "additionalProperties": false,
+      "description": "Per-residue features of the assay's AF2 structure; ``null`` outside its range.",
+      "properties": {
+        "plddt": {
+          "$ref": "#/$defs/Quantized"
+        },
+        "rel_sasa": {
+          "$ref": "#/$defs/Quantized"
+        },
+        "contact_count": {
+          "items": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Contact Count",
+          "type": "array"
+        }
+      },
+      "required": [
+        "plddt",
+        "rel_sasa",
+        "contact_count"
+      ],
+      "title": "StructureFeatures",
+      "type": "object"
+    },
+    "SupervisedLandscape": {
+      "additionalProperties": false,
+      "description": "The deployed supervised model's 19 x L landscape (ADR 0025); grids are ``(L, 20)`` with\n``null`` at the wild type.\n\n``prediction`` is out-of-fold at measured variants (from the fold model that never saw the\nvariant) and the all-data model's elsewhere, never an in-sample fit; a variant is measured\nexactly where :attr:`ProteinFile.measured` has a value. Intervals are constant-width CV+\nin ``DMS_score`` units, calibrated on ``calibration_scheme``'s folds.",
+      "properties": {
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "n_measured": {
+          "minimum": 1,
+          "title": "N Measured",
+          "type": "integer"
+        },
+        "levels": {
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Levels",
+          "type": "array"
+        },
+        "prediction": {
+          "$ref": "#/$defs/Quantized"
+        },
+        "lower_80": {
+          "$ref": "#/$defs/Quantized"
+        },
+        "upper_80": {
+          "$ref": "#/$defs/Quantized"
+        },
+        "lower_90": {
+          "$ref": "#/$defs/Quantized"
+        },
+        "upper_90": {
+          "$ref": "#/$defs/Quantized"
+        },
+        "position_status": {
+          "description": "Per residue: all 19 substitutions measured, some, or none.",
+          "items": {
+            "enum": [
+              "measured",
+              "partially_measured",
+              "unmeasured"
+            ],
+            "type": "string"
+          },
+          "title": "Position Status",
+          "type": "array"
+        },
+        "calibration_scheme": {
+          "$ref": "#/$defs/Coded",
+          "description": "``(L, 20)`` grid: whose folds the prediction and interval come from. Chosen per variant\n(``train.final.scheme_by_position``): ``random`` where the residue has other measured\nvariants, ``contiguous`` where it has none, so a residue's only measured variant is\n``contiguous`` while its unmeasured ones are ``random``."
+        },
+        "structure_imputed": {
+          "description": "Per residue: a structure feature was missing (outside a partial structure) and replaced\nby its mean over measured variants.",
+          "items": {
+            "type": "boolean"
+          },
+          "title": "Structure Imputed",
+          "type": "array"
+        }
+      },
+      "required": [
+        "model",
+        "n_measured",
+        "levels",
+        "prediction",
+        "lower_80",
+        "upper_80",
+        "lower_90",
+        "upper_90",
+        "position_status",
+        "calibration_scheme",
+        "structure_imputed"
+      ],
+      "title": "SupervisedLandscape",
+      "type": "object"
+    },
+    "SupervisedStamp": {
+      "additionalProperties": false,
+      "description": "What produced the supervised landscapes (``train final``).",
+      "properties": {
+        "code_version": {
+          "title": "Code Version",
+          "type": "string"
+        },
+        "config_sha256": {
+          "title": "Config Sha256",
+          "type": "string"
+        },
+        "manifest_sha256": {
+          "title": "Manifest Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code_version",
+        "config_sha256",
+        "manifest_sha256"
+      ],
+      "title": "SupervisedStamp",
+      "type": "object"
+    },
+    "VersionStamp": {
+      "additionalProperties": false,
+      "description": "Where every number in the bundle came from.",
+      "properties": {
+        "schema_version": {
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "mutascope_version": {
+          "title": "Mutascope Version",
+          "type": "string"
+        },
+        "code_version": {
+          "description": "Git commit of the export (``-dirty`` if the code had uncommitted changes).",
+          "title": "Code Version",
+          "type": "string"
+        },
+        "proteingym_release": {
+          "title": "Proteingym Release",
+          "type": "string"
+        },
+        "dataset_repo": {
+          "title": "Dataset Repo",
+          "type": "string"
+        },
+        "dataset_revision": {
+          "title": "Dataset Revision",
+          "type": "string"
+        },
+        "model_repo": {
+          "title": "Model Repo",
+          "type": "string"
+        },
+        "model_revision": {
+          "title": "Model Revision",
+          "type": "string"
+        },
+        "supervised": {
+          "$ref": "#/$defs/SupervisedStamp"
+        }
+      },
+      "required": [
+        "schema_version",
+        "mutascope_version",
+        "code_version",
+        "proteingym_release",
+        "dataset_repo",
+        "dataset_revision",
+        "model_repo",
+        "model_revision",
+        "supervised"
+      ],
+      "title": "VersionStamp",
+      "type": "object"
+    },
+    "ZeroShotLandscape": {
+      "additionalProperties": false,
+      "description": "Masked-marginal scores ``log P(mt) - log P(wt)`` of the full target (ADR 0018).",
+      "properties": {
+        "hf_id": {
+          "title": "Hf Id",
+          "type": "string"
+        },
+        "revision": {
+          "title": "Revision",
+          "type": "string"
+        },
+        "region": {
+          "const": "full",
+          "title": "Region",
+          "type": "string"
+        },
+        "scores": {
+          "$ref": "#/$defs/Quantized",
+          "description": "``(L, 20)`` grid; the wild type is 0."
+        }
+      },
+      "required": [
+        "hf_id",
+        "revision",
+        "region",
+        "scores"
+      ],
+      "title": "ZeroShotLandscape",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Everything the website shows for one assay.",
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0",
+      "default": "1.0.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "assay": {
+      "$ref": "#/$defs/AssayInfo"
+    },
+    "default": {
+      "$ref": "#/$defs/DefaultModel"
+    },
+    "msa_region": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MsaRegion"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "measured": {
+      "$ref": "#/$defs/Quantized",
+      "description": "``(L, 20)`` grid of ``DMS_score`` (higher = fitter); ``null`` where not measured."
+    },
+    "structure": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StructureFeatures"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "zero_shot": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ZeroShotLandscape"
+      },
+      "description": "By model name: ``esm2_650m`` always, ``saprot_650m_af2`` where there is a structure.",
+      "title": "Zero Shot",
+      "type": "object"
+    },
+    "supervised": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SupervisedLandscape"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "version": {
+      "$ref": "#/$defs/VersionStamp"
+    }
+  },
+  "required": [
+    "assay",
+    "default",
+    "msa_region",
+    "measured",
+    "structure",
+    "zero_shot",
+    "supervised",
+    "version"
+  ],
+  "title": "ProteinFile",
+  "type": "object"
+}
