@@ -10,4 +10,5 @@ defaults:
   - features: default
   - tracking: default
   - export: default
+  - onnx: default
   - _self_

@@ -661,3 +661,71 @@ class AgreementSchema(pa.DataFrameModel):
     class Config:  # pyright: ignore[reportIncompatibleVariableOverride]
         strict = True
         ordered = True
+
+
+ONNX_PRECISIONS = ("fp32", "int8")
+
+
+class LogitParitySchema(pa.DataFrameModel):
+    """``onnx check-parity``, one model, precision, protein and input: ONNX against PyTorch.
+
+    ``input`` is ``wt`` (the unmasked sequence, one row) or ``masked`` (``rows`` copies, one
+    residue masked in each). ``max_abs_diff`` is over every token and vocabulary entry;
+    ``passed`` applies ``onnx.parity.logits_atol``, which gates fp32 only (int8 is reported).
+    """
+
+    model: Series[str]
+    precision: Series[str] = pa.Field(isin=list(ONNX_PRECISIONS))
+    assay_id: Series[str]
+    length: Series[int] = pa.Field(ge=1)
+    input: Series[str] = pa.Field(isin=["wt", "masked"])
+    rows: Series[int] = pa.Field(ge=1)
+    max_abs_diff: Series[float] = pa.Field(ge=0)
+    passed: Series[bool]
+
+    class Config:  # pyright: ignore[reportIncompatibleVariableOverride]
+        strict = True
+        ordered = True
+        unique = ["model", "precision", "assay_id", "input"]  # noqa: RUF012 — read by pandera
+
+
+class LandscapeParitySchema(pa.DataFrameModel):
+    """``onnx check-parity``, one protein: an ONNX landscape against the PyTorch one.
+
+    Over the 19 x L substitutions (the wild-type column is 0 in both): Spearman and the largest
+    absolute difference, in nats. ``method`` is ``wt`` (fast) or ``masked`` (precise).
+    """
+
+    model: Series[str]
+    precision: Series[str] = pa.Field(isin=list(ONNX_PRECISIONS))
+    assay_id: Series[str]
+    length: Series[int] = pa.Field(ge=1)
+    method: Series[str] = pa.Field(isin=["wt", "masked"])
+    spearman: Series[float]
+    max_abs_diff: Series[float] = pa.Field(ge=0)
+
+    class Config:  # pyright: ignore[reportIncompatibleVariableOverride]
+        strict = True
+        ordered = True
+        unique = ["model", "precision", "assay_id", "method"]  # noqa: RUF012 — read by pandera
+
+
+class LatencySchema(pa.DataFrameModel):
+    """``onnx latency``, one timed call: a ``landscape()`` of a random ``length``-residue
+    sequence, ``mode`` fast (wild-type marginal) or precise (masked marginal, every residue).
+
+    ``repeat`` counts timed calls after the warm-up ones, which are not recorded.
+    """
+
+    model: Series[str]
+    precision: Series[str] = pa.Field(isin=list(ONNX_PRECISIONS))
+    threads: Series[int] = pa.Field(ge=1)
+    length: Series[int] = pa.Field(ge=1)
+    mode: Series[str] = pa.Field(isin=["fast", "precise"])
+    repeat: Series[int] = pa.Field(ge=0)
+    seconds: Series[float] = pa.Field(gt=0)
+
+    class Config:  # pyright: ignore[reportIncompatibleVariableOverride]
+        strict = True
+        ordered = True
+        unique = ["model", "precision", "length", "mode", "repeat"]  # noqa: RUF012 — read by pandera
