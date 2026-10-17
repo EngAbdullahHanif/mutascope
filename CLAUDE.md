@@ -280,15 +280,27 @@ Run `make lint test` before declaring any task done.
 
 ## API (`api/`)
 
-- FastAPI + Pydantic v2 + pydantic-settings. Models loaded once in the `lifespan` hook.
-- Versioned routes under `/v1`: `proteins`, `proteins/{id}/landscape`, `score` (fast mode),
-  `jobs` + `jobs/{id}/stream` (precise mode via Server-Sent Events), `benchmarks`; plus `/health`, `/metrics`.
+- FastAPI + Pydantic v2 + pydantic-settings (`api.app.settings`, env `MUTASCOPE_API_*`). Its
+  defaults are the `conf/` pins (bundle `export.publish.revision`, ONNX `onnx.publish.revision`);
+  a test fails if they differ. Commit hashes only (ADR 0030).
+- `lifespan` loads, once: the bundle at the pinned revision (every `SHA256SUMS` file checked,
+  schema version in `SUPPORTED_SCHEMA_VERSIONS` or the API does not start) and the fp32 ONNX
+  scorers (any other precision is refused). The API reads only the bundle, never `data/`.
+- Versioned routes under `/v1`: `proteins`, `proteins/{id}`, `proteins/{id}/landscape`, `score`
+  (fast mode), `jobs` + `jobs/{id}/stream` (precise mode via Server-Sent Events), `benchmarks`;
+  plus `/health` (liveness), `/ready`, `/metrics`.
+- Every error is RFC 9457 `application/problem+json` (`api.app.problems`; `type`
+  `urn:mutascope:problem:<slug>`). Every landscape carries its label and the version stamp.
+- Read-only `/v1` GETs get a body-hash weak ETag (304 on `If-None-Match`) and `Cache-Control`;
+  gzip outside it.
+- The API never imports torch or transformers (`api/tests/test_no_torch.py`, fresh interpreter).
 - Input validation: only canonical 20 amino acids, length 1–1022, max 50 mutations per `score` request.
 - Live inference uses ONNX Runtime (fp32 ONNX ESM-2 35M/150M; int8 rejected, ADR 0029). SaProt is not served live.
 - Caching with `diskcache`; rate limiting with `slowapi`; CORS restricted to configured origins.
 - Logs: structlog JSON. Metrics: prometheus-fastapi-instrumentator.
 - Tests: pytest + httpx AsyncClient, golden-value tests against pipeline outputs, schemathesis against OpenAPI.
-- After changing any response schema, run `make types` and commit the regenerated TypeScript types.
+- After changing any response schema, run `make types` and commit the regenerated TypeScript types
+  (CI's `types` job fails when `web/src/lib/api-types.ts` is stale).
 
 ## Docker
 
