@@ -2,6 +2,7 @@
 
 import csv
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,7 @@ from typer.testing import CliRunner
 from mutascope.cli import app
 from mutascope.export import hub
 from mutascope.export.hub import CHECKSUMS_FILE, PublishError, checksums, push_dataset
+from mutascope.utils.config import load_config
 
 CONF = Path(__file__).parents[2] / "conf"
 CARD_BODY = "# Toy card\n\nBody.\n"
@@ -289,3 +291,10 @@ def test_stage_model_copies_the_bundle_and_pushes_a_model_repo(
     calls = dict(FakeHfApi.calls)
     assert calls["create_repo"]["repo_type"] == "model"
     assert calls["upload_folder"]["delete_patterns"] == ["model/*"]
+
+
+def test_published_revisions_are_pinned_commits() -> None:
+    """Later steps read the published repos by commit (ADR 0026 addendum), never by branch."""
+    cfg = load_config(Path("conf"))
+    for revision in (cfg.publish.revision, cfg.train.publish.revision):
+        assert re.fullmatch(r"[0-9a-f]{40}", str(revision)), revision
