@@ -45,6 +45,8 @@ web/openapi.json
 # Secrets
 .env
 .env.*
+# The template lists every API variable with its default, no values (ADR 0033).
+!.env.example
 
 # Per-assay checkpoints of a running `train cv` (removed when the run finishes)
 results/supervised/.cv_*_checkpoint/
