@@ -3,8 +3,12 @@
 Predicts the functional effect of every single amino-acid substitution in a protein and presents it as an
 interactive mutation landscape, with an honest benchmark on ProteinGym DMS assays.
 
-Status: early development (Phase 4, API, Docker and CI/CD; the zero-shot benchmark is summarised in
-[ADR 0017](docs/adr/0017-phase-2-close.md), the supervised models in [ADR 0026](docs/adr/0026-phase-3-close.md)). See [docs/ROADMAP.md](docs/ROADMAP.md).
+Status: early development (Phase 5, frontend and launch; the zero-shot benchmark is summarised in
+[ADR 0017](docs/adr/0017-phase-2-close.md), the supervised models in [ADR 0026](docs/adr/0026-phase-3-close.md),
+the API and its deployment in [ADR 0035](docs/adr/0035-phase-4-close.md)). See [docs/ROADMAP.md](docs/ROADMAP.md).
+
+Live API (zero-shot scoring, precomputed landscapes; it sleeps when idle, so the first request
+can take ~20 s): https://mutascope-api-2lvmztrsha-ew.a.run.app/docs
 
 ## Quick start
 
@@ -230,9 +234,9 @@ Two images ([ADR 0033](docs/adr/0033-docker-images.md)), built from the reposito
 
 ```bash
 make api-image                          # mutascope-api:dev, this machine's architecture
-make api-image PLATFORM=linux/amd64     # the Space's
+make api-image PLATFORM=linux/amd64     # the deployed architecture (Cloud Run)
 docker compose up                       # http://localhost:7860/docs; settings from .env
-make test-container                     # the image under the Space's limits (2 CPUs, 16 GB)
+make test-container                     # the image with 2 CPUs and 16 GB (Cloud Run has 4 GiB)
 make pipeline-image                     # mutascope-pipeline:dev, for -profile docker
 ```
 
