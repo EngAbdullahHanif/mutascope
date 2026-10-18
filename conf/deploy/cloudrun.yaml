@@ -16,7 +16,7 @@ image_name: mutascope-api
 ghcr_image: ghcr.io/engabdullahhanif/mutascope-api
 
 # Service accounts (names; @<project_id>.iam.gserviceaccount.com is added). The runtime account
-# has no roles: the API reads nothing from Google Cloud. The deployer is what CI acts as, through
+# has no project roles: it may read only the secrets below (setup-gcp.sh grants that per secret). The deployer is what CI acts as, through
 # Workload Identity Federation (no key file anywhere).
 runtime_service_account: mutascope-api-runtime
 deployer_service_account: mutascope-deployer
@@ -46,11 +46,16 @@ env:
   MUTASCOPE_API_PRECISE_MAX_LENGTH: "400"
   # Cloud Run's front end: every request of the first deploy came from this address (413 of 413).
   MUTASCOPE_API_TRUSTED_PROXIES: 169.254.169.126/32
+  # Sentry events from this service (the DSN is a secret, below) are tagged production.
+  MUTASCOPE_API_SENTRY_ENVIRONMENT: production
 
 # Secret Manager secrets as environment variables: variable -> secret name (latest version).
-# The runtime service account needs roles/secretmanager.secretAccessor on each.
-# Example: MUTASCOPE_API_METRICS_TOKEN: mutascope-metrics-token
-secrets: {}
+# The runtime service account needs roles/secretmanager.secretAccessor on each (setup-gcp.sh);
+# without it the deploy fails. The token makes /metrics answer (401 without it, ADR 0032); the
+# DSN turns Sentry on.
+secrets:
+  MUTASCOPE_API_METRICS_TOKEN: MUTASCOPE_API_METRICS_TOKEN
+  MUTASCOPE_API_SENTRY_DSN: MUTASCOPE_API_SENTRY_DSN
 
 # After `replace`: /health must report the tag's version and /ready answer 200 within this time,
 # or the workflow fails.
