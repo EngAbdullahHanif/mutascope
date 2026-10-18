@@ -3495,9 +3495,17 @@ ADR 0037.
   origin blocked, protein files served as gzip bytes). Mutation check: with the digest
   comparison disabled in the script or in the loader, exactly the two tamper tests fail.
 - `make web-check` and `make web-e2e` were added. `make lint test` passes.
-- Loose ends:
-  - add the new CI job to the `main` ruleset's required checks;
-  - previews are behind Vercel's deployment protection, so the served headers of
-    `/data/proteins/*.json.gz` were not checked from the CLI; the Explorer's "Sample protein"
-    line in a signed-in browser exercises that path (the loader refuses decoded files);
-  - the Explorer itself is next.
+- Gzip serving checked on production (2026-10-19), after PR #53 merged; previews are behind
+  Vercel's deployment protection, so this waited for the public site:
+  - `curl` of `https://mutascope.abdullahhanif.me/data/proteins/A0A140D2T1_ZIKV_Sourisseau_2019.json.gz`:
+    HTTP 200, `content-type: application/gzip`, no `Content-Encoding`,
+    `cache-control: public, max-age=86400, must-revalidate`; 1,153,890 bytes and a sha256
+    equal to the manifest's;
+  - in the browser, the Explorer reported manifest.json valid (217 assays), benchmarks.json valid
+    (240 rows) and the sample protein valid (F7YBW8_MESOW_Aakre_2015, 93 residues).
+- Redeploying a deployment rebuilds its own commit: a redeploy of `b40c42a` (before PR #53)
+  fails with `NEXT_NO_VERSION` because that commit has no website. Production runs a later
+  commit and is unaffected.
+- The `main` ruleset ("protect main") requires `web (lint, typecheck, unit tests, build)`
+  alongside the other five checks (read through the GitHub API, 2026-10-19).
+- Loose end: the Explorer itself is next.

@@ -314,7 +314,8 @@ measured at 20 users on 4 GiB.
 - [x] Foundation (Task 1, ADR 0037): Next.js (App Router) + TypeScript + Tailwind + shadcn/ui,
       bundle downloaded at build and checksum-verified, generated Zod validators, design tokens
       (`web/DESIGN.md`), layout and placeholder pages, CI `web` job
-- [ ] Add `web (lint, typecheck, unit tests, build)` to the `main` ruleset's required checks
+- [x] Add `web (lint, typecheck, unit tests, build)` to the `main` ruleset's required checks;
+      gzip serving of protein files checked on production (build log 39)
 - [ ] Explorer page
 - [ ] Heatmap (D3/visx, colourblind-safe diverging) linked to 3D structure (3Dmol.js); label the
       5 proteins whose benchmark scores use the MSA region (ADR 0012)
