@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.5.0](https://github.com/EngAbdullahHanif/mutascope/compare/v0.4.3...v0.5.0) (2026-10-18)
+
+
+### Features
+
+* **web:** design tokens, effect scale and legend, layout and placeholder pages ([8cabc37](https://github.com/EngAbdullahHanif/mutascope/commit/8cabc37611e7f046309c35744c160197e900a043))
+* **web:** download the pinned bundle, verified, and validate it with generated Zod ([79053bd](https://github.com/EngAbdullahHanif/mutascope/commit/79053bd1fcd0520524faabe1a1fa048247832012))
+* **web:** website foundation — scaffold, verified bundle, generated validators, design system ([28c89e1](https://github.com/EngAbdullahHanif/mutascope/commit/28c89e15fff5e034cccfd1ae10428462330a12b3))
+
+
+### Bug Fixes
+
+* **web:** install pnpm 12 via Corepack on Vercel; build CI's web job on Node 24 ([c875c54](https://github.com/EngAbdullahHanif/mutascope/commit/c875c5424b65c1722b686003a759cbbb5d42d6d8))
+* **web:** let in-flight downloads settle before cleaning up a failed bundle fetch ([a2d1439](https://github.com/EngAbdullahHanif/mutascope/commit/a2d143988e31113eea629f899391d4e3cd494cf5))
+* **web:** vercel.json sets only the framework; correct the build-failure diagnosis ([d7078af](https://github.com/EngAbdullahHanif/mutascope/commit/d7078af4d4ff7a090ab82bfef876b7001b108eb6))
+
+
+### Documentation
+
+* ADR 0037 web foundation, build log 39, roadmap, CLAUDE.md ([660d0fc](https://github.com/EngAbdullahHanif/mutascope/commit/660d0fc035def8f949b176672e3825b5acb54dd0))
+
 ## [0.4.3](https://github.com/EngAbdullahHanif/mutascope/compare/v0.4.2...v0.4.3) (2026-10-18)
 
 
