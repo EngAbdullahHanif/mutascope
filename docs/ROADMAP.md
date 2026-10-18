@@ -253,15 +253,16 @@ Goal: a tested, observable service deployed automatically.
       `-profile docker,test` runs all 20 tasks; `.env.example`, `docker-compose.yml`
 - [x] Build linux/amd64 (buildx or CI): both images built with buildx for linux/amd64 and
       linux/arm64 (API 1,124 / 1,138 MiB unpacked, 600 / 597 MB compressed); CI builds and pushes in the CI task
-- [x] CI: lint → typecheck → tests + coverage → Nextflow `docker,test` smoke → push to GHCR → deploy to HF Space on tags
+- [x] CI: lint → typecheck → tests + coverage → Nextflow `docker,test` smoke → push to GHCR + Artifact Registry → deploy to Cloud Run on tags
       (ADR 0034): five required checks on every PR (both images built for linux/amd64, API
-      container tests), actions pinned by exact tag; on a tag, image to GHCR, Space Dockerfile
-      = one `FROM <image>:<tag>@<digest>` line, deploy fails unless the live `/ready` passes
+      container tests), actions pinned by exact tag; on a tag, image to Artifact Registry + GHCR,
+      deployed to Google Cloud Run by digest (Docker Spaces need a paid plan), keyless
+      (Workload Identity Federation); deploy fails unless the live `/ready` passes
 - [x] Dependabot (`uv`, Actions, Docker), release-please (version in `pyproject.toml` + `uv.lock`, `CHANGELOG.md`)
 - [ ] Branch protection: the `main` ruleset requires the five checks and up-to-date branches (set by the author)
-- [ ] First release deployed; live Space measured (`tools/loadtest/space.py`: fast mode at 300 /
-      1,000 residues, a 600-residue precise job, 5 users); ADR 0031's 2-second rule, the precise
-      limit and `trusted_proxies` set in `conf/deploy/space.yaml`
+- [ ] First release deployed to Cloud Run; live service measured (`tools/loadtest/live.py`: cold
+      start, fast mode at 300 / 1,000 residues, a 600-residue precise job, 5 users); ADR 0031's
+      2-second rule, the precise limit and `trusted_proxies` set in `conf/deploy/cloudrun.yaml`
 - [x] Phase 3 in Nextflow (ADR 0027): `FOLDS → EMBED → FEATURES_BUILD → TRAIN_CV (ridge seq_struct)
       → TRAIN_CALIBRATE → TRAIN_FINAL → CHECK_RELEASE`; `train check-release` publishes only a
       bit-identical rerun (provenance stamps aside); LightGBM / MLP behind `params.extra_models`

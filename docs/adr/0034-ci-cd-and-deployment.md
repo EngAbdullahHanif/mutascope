@@ -1,6 +1,6 @@
-# 0034 — CI/CD: required checks, release-please, GHCR, and a Space that only pulls
+# 0034 — CI/CD: required checks, release-please, and deployment to Google Cloud Run
 
-- Status: accepted (deploy and Space measurement pending the first release; section 6)
+- Status: accepted (first deploy and live measurement pending; section 6)
 - Date: 2026-10-18
 - Builds on: ADR 0007 (Nextflow profiles), ADR 0029 and 0031 (the 2-second rule, the provisional
   precise limit), ADR 0032 (trusted proxies, limits), ADR 0033 (the images)
@@ -14,8 +14,12 @@ actions by moving major tags (`actions/checkout@v7`), which CLAUDE.md forbids. N
 pushed an image, and nothing deployed.
 
 The API image is ADR 0033's: linux/amd64, ~600 MB compressed, the bundle and fp32 ONNX files
-baked in, a self-check as its last build step. The target is a free Hugging Face Docker Space
-(2 vCPUs, 16 GB).
+baked in, a self-check as its last build step. Every ADR so far assumed a free Hugging Face
+Docker Space (2 vCPUs, 16 GB). **Docker Spaces now need a paid Hugging Face plan** (the
+create-Space form offers only Static Spaces for free), so the API needs another host. What it
+needs, measured (`docs/load-test-container-summary.json`): about 1.2 GB of memory once the
+models are loaded, 2.0–2.5 GB with 5 users, 3.2 GB at the 20-user peak, and 2 vCPUs for ADR
+0031's latency rule to be met.
 
 ## Decision
 
@@ -72,43 +76,64 @@ it bumps `pyproject.toml`, `uv.lock` and `.release-please-manifest.json` and wri
   limited to this repository.
 - `bump-minor-pre-major`: until 1.0.0, a breaking change bumps the minor version.
 
-### 4. Release: one image, pushed once, pulled by the Space (`release.yml`)
+### 4. Release: one image, pushed once, deployed by digest to Cloud Run (`release.yml`)
+
+**Host: Google Cloud Run**, one service in `europe-west1`: 2 vCPUs, 4 GiB, at most one
+instance, scaled to zero when idle. The free tier (180,000 vCPU-seconds and 360,000
+GiB-seconds a month, request-based billing) covers a portfolio's traffic; the account needs a
+billing account, and a budget alert guards it. Render's free instance (512 MB, 0.1 CPU) was
+considered and rejected: the API needs 1.2 GB before its first request.
 
 On a tag `v*.*.*`:
 
 1. **Check:** the tag equals `v` + the package version (`uv version --short`). `/health`
    reports the package version and the deploy waits for it, so a mismatched tag fails here,
-   before the build, not after a 20-minute wait.
-2. **Image:** build `api/Dockerfile` for linux/amd64 and push
-   `ghcr.io/engabdullahhanif/mutascope-api:<tag>` and `:sha-<commit>` with `GITHUB_TOKEN`
-   (`packages: write`); the digest is a job output.
-3. **Deploy** (`python -m api.deploy.space deploy`), in the `huggingface-space` environment:
-   - the Space's **variables** become exactly those in `conf/deploy/space.yaml` (others are
-     deleted), and the Space **secrets** that CI holds are set (`SPACE_METRICS_TOKEN` →
-     `MUTASCOPE_API_METRICS_TOKEN`; never deleted, never logged);
-   - one commit writes the Space's README (Docker SDK, port 7860) and its whole Dockerfile:
-     `FROM ghcr.io/engabdullahhanif/mutascope-api:<tag>@sha256:<digest>`. The tag says which
-     release runs; the digest makes the line immutable, so retagging in GHCR cannot change
-     what the Space pulls. A rerun with identical files restarts the Space instead of
-     committing nothing.
-4. **Wait** (`python -m api.deploy.space wait`): passes only when, at the same time, the Space
-   runs its latest commit (the previous container keeps answering `/ready` while the new one
-   builds, so `/ready` alone would pass on the old release), `/health` reports the tag's
-   version, and `/ready` is 200. `BUILD_ERROR`, `RUNTIME_ERROR` or `CONFIG_ERROR` fails at
-   once and prints the end of the Space's build or run log. Otherwise it fails after 25
-   minutes.
+   before the build, not after the wait.
+2. **Image:** build `api/Dockerfile` for linux/amd64 once and push it to Artifact Registry
+   (`europe-west1-docker.pkg.dev/<project>/mutascope/mutascope-api:<tag>`, which Cloud Run
+   pulls; it cannot pull from GHCR) and to GHCR (`ghcr.io/engabdullahhanif/mutascope-api`, the
+   public copy). The digest is a job output.
+3. **Deploy:** `python -m api.deploy.cloudrun render` writes the whole service from
+   `conf/deploy/cloudrun.yaml`, and `gcloud run services replace` makes Cloud Run's service
+   exactly that. Nothing is set in the console, and a hand-made change is undone by the next
+   deploy. The service:
+   - runs the image **by digest**, with the tag as a revision label, so the revision is the
+     bytes CI built and tested even if a tag moves;
+   - has a **startup probe on `/ready`**: a revision gets no traffic until the bundle and both
+     models are loaded, and one that never gets ready never takes traffic, so a broken release
+     leaves the previous one serving (`replace` then fails, and so does the workflow);
+   - has a liveness probe on `/health` (Cloud Run ignores the image's Docker `HEALTHCHECK`);
+   - has **at most one instance**: the queue, rate-limit counters and stream slots are in one
+     process's memory (ADR 0032);
+   - is **gen2** (full Linux, for the lock file), with startup CPU boost and request timeout
+     900 s (a precise job's stream);
+   - runs as a service account with **no roles**: the API reads nothing from Google Cloud;
+   - takes its environment only from the config's `env` (and Secret Manager via `secrets`).
+   Then `allUsers` gets `roles/run.invoker`: the API is public, as the Space would have been.
+4. **Wait** (`python -m api.deploy.cloudrun wait`): `/health` at the public URL must report
+   the tag's version and `/ready` must answer 200, or the workflow fails after 15 minutes.
 
-`workflow_dispatch` with a tag redeploys an image that is already in GHCR (its digest is looked
-up, nothing is rebuilt): the way to apply a change to `conf/deploy/space.yaml` without a release.
+**Keyless access.** CI never holds a Google key. Workload Identity Federation trusts GitHub's
+OIDC tokens only when the repository is `EngAbdullahHanif/mutascope`, the workflow is
+`release.yml`, and the ref is a `v` tag or main; then it may act as the deployer service
+account (Cloud Run admin, write to the one Artifact Registry repository, run services as the
+runtime account). `tools/deploy/setup-gcp.sh` creates all of it once; its output (project id
+and number) goes into `conf/deploy/cloudrun.yaml`. A PR, a fork or another workflow cannot get
+a token.
 
-**Why the Space only pulls.** The Space could build `api/Dockerfile` itself, but then it would
-run an image nobody tested: the CI build, its self-check and its container tests would be of
-different bytes, and the Space would download the 760 MB of weights on every build. The
-one-line Dockerfile makes the Space a pull of the exact image the release built.
+`workflow_dispatch` (from main) with a tag redeploys an image already in Artifact Registry
+(its digest is looked up, nothing is rebuilt): the way to apply a change to
+`conf/deploy/cloudrun.yaml` without a release.
 
-**Config as code.** `conf/deploy/space.yaml` is the Space's whole non-secret configuration
-(`MUTASCOPE_API_*` variables). ADR 0031's 2-second rule, a measured `trusted_proxies` or a new
-precise limit is therefore a reviewed one-line change, applied by the next deploy.
+**Billing shape and precise mode.** With request-based billing an instance has CPU only while
+a request is in flight. Fast mode is a request, so it is unaffected. A precise job runs in the
+background (ADR 0031), so it advances while a client holds its SSE stream open, which is how
+the website follows a job; a client that only polls `GET /v1/jobs/{id}` gets a job that mostly
+waits. Instance-based billing would remove this, but it bills idle instances until they scale
+down, and the free tier is meant for request-based billing. Scale-to-zero also means a first
+visitor after an idle period waits for a cold start (image pull and model loading), and the
+score cache and finished jobs do not survive it. The website must work with the API asleep
+anyway (CLAUDE.md), so this is accepted.
 
 ### 5. Branch protection
 
@@ -118,47 +143,72 @@ Release-please's and Dependabot's PRs go through the same rule.
 
 ### 6. After the first deploy (pending)
 
-`tools/loadtest/space.py` measures the live Space in about 10 minutes and ~250 requests:
-`/health` round trips (network baseline), fast mode at 300 and 1,000 residues for both models
-(20 cache misses per cell, one request at a time, under the per-client limit), one precise job
-of 600 residues, and Locust's `Visitor` mix at 5 users for 2 minutes. Through the Space's proxy
-the five users are one client, so their 429s are counted as the limiter working. The script
-applies ADR 0031's rule and prints the default model. The results, the decision and the
-measured proxy range (`trusted_proxies`, read from the Space's run log) are added to this ADR
-and to `docs/load-test.md`, and any change goes into `conf/deploy/space.yaml`.
+`tools/loadtest/live.py` measures the live service in about 10 minutes and ~250 requests: the
+cold start (first `/ready`), `/health` round trips (network baseline), fast mode at 300 and
+1,000 residues for both models (20 cache misses per cell, one request at a time, under the
+per-client limit), one precise job of 600 residues followed on its stream, and Locust's
+`Visitor` mix at 5 users for 2 minutes. Through Google's front end the five users are one
+client, so their 429s are counted as the limiter working. The script applies ADR 0031's rule
+(the rule was written for "the Space"; it applies to the service that serves the API, now
+Cloud Run with the same 2 vCPUs) and prints the default model. The results, the decision and
+the address the proxy connects from (for `trusted_proxies`, read from the API's access lines
+in Cloud Logging) are added to this ADR and to `docs/load-test.md`, and any change goes into
+`conf/deploy/cloudrun.yaml`.
 
-Until then `variables` is empty: the Space runs the image's defaults, including an empty
-`trusted_proxies`: every visitor is the proxy's address, so all users share one client's quota
-and one heavy user can make everyone wait (`docs/threat-model.md`). The limits still hold, and
-the measurement sets the range before the site links to the API.
+Until then `env` is empty: the service runs the image's defaults, including an empty
+`trusted_proxies`. Every visitor is then the front end's address, so all users share one
+client's quota and one heavy user can make everyone wait (`docs/threat-model.md`). The limits
+still hold, and the measurement sets the range before the site links to the API. Where earlier
+ADRs and the threat model say "the Space", read "the deployed service".
 
-## Secrets
+## Setup and secrets
 
-| where | name | what |
-|---|---|---|
-| GitHub, repository secret | `HF_TOKEN` | Hugging Face fine-grained token, write access to the Space repo only |
-| GitHub, repository secret | `RELEASE_PLEASE_TOKEN` | GitHub fine-grained PAT, this repository only: Contents, Pull requests, Issues read and write |
-| GitHub, repository secret (optional) | `SPACE_METRICS_TOKEN` | ≥ 32 characters; set on the Space as `MUTASCOPE_API_METRICS_TOKEN` |
+Done once by the author (exact steps in the PR):
 
-GHCR needs no secret: `GITHUB_TOKEN` pushes. The package must be public, because a Space
-cannot pull from a private registry.
+| where | what |
+|---|---|
+| Google Cloud | a project with billing linked, a budget alert; `tools/deploy/setup-gcp.sh <project-id>` in Cloud Shell; its two output lines into `conf/deploy/cloudrun.yaml` |
+| GitHub, repository secret | `RELEASE_PLEASE_TOKEN`: fine-grained PAT, this repository only, Contents, Pull requests and Issues read and write |
+
+No Google secret is stored in GitHub (Workload Identity Federation), and GHCR needs none
+(`GITHUB_TOKEN` pushes). Project id and number are identifiers, not secrets, and live in the
+config.
 
 ## Consequences
 
 - New: `ci.yml` (rewritten), `release.yml`, `release-please.yml`, `.github/dependabot.yml`,
-  `release-please-config.json`, `.release-please-manifest.json`, `conf/deploy/space.yaml`,
-  `api/deploy/space.py` (+ `api/tests/test_deploy.py`), `tools/loadtest/space.py`.
-- Both Dockerfiles have literal `FROM` lines; the images are unchanged.
+  `release-please-config.json`, `.release-please-manifest.json`, `conf/deploy/cloudrun.yaml`,
+  `api/deploy/cloudrun.py` (+ `api/tests/test_deploy.py`), `tools/deploy/setup-gcp.sh`,
+  `tools/loadtest/live.py`.
+- Both Dockerfiles have literal `FROM` lines; the images are unchanged. The image needed no
+  change for Cloud Run: it already listens on `0.0.0.0:7860`, runs as UID 1000 and needs no
+  network.
 - A release is a merge of the release PR; there is no manual deploy step and no deploy from a
   laptop.
+- Costs: inside the free tier for expected traffic; Artifact Registry keeps the 3 newest
+  images (~0.6 GB each, layers shared), a few cents a month above its 0.5 GB free storage.
+  With one instance at most, the worst case (the instance busy all month) is bounded; the
+  budget alert says when spending starts.
 - CI takes longer (two image builds), but the jobs run in parallel and the layer cache makes
   most rebuilds partial.
 
 ## Alternatives considered
 
+- **Hugging Face Docker Space** (the plan of ADR 0029–0033): needs a paid plan now. It would
+  have been a one-line `FROM` Dockerfile pulling the GHCR image. The frontend can still use a
+  free Static Space (Phase 5).
+- **Render, free instance:** 512 MB and 0.1 CPU; the API needs 1.2 GB idle. A 2 GB Render plan
+  fits but is paid.
+- **Oracle Cloud Always Free VM** (4 ARM cores, 24 GB): the most hardware for free, but a
+  server to run (OS updates, TLS, a proxy) and an arm64 image to release.
+- **Cut the API to fit 512 MB** (35M only, no precise mode): reverses ADR 0029 and 0031, and
+  0.1 CPU would still miss the 2-second rule.
+- **Instance-based billing (`cpu-throttling: false`):** precise jobs would run without a client
+  connected, but idle instances are billed (section 4).
+- **A JSON key for a service account in a GitHub secret:** a long-lived credential to leak and
+  rotate; Workload Identity Federation needs none.
 - **Pin actions by commit SHA:** stronger against a moved tag, but CLAUDE.md asks for exact
-  versions, and Dependabot updates either form. Not taken for now.
-- **Build on the Space from the repository:** an untested image, 760 MB per build (above).
-- **A tag-triggered deploy inside the release-please workflow (`release_created`):** works with
+  versions, and Dependabot updates either form.
+- **A deploy inside the release-please workflow (`release_created`):** works with
   `GITHUB_TOKEN`, but a hand-made tag would not deploy, and release PRs would still get no CI.
 - **`pip` ecosystem for Dependabot:** leaves `uv.lock` stale (section 2).
