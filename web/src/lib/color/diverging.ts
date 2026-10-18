@@ -102,3 +102,51 @@ export function symmetricMax(values: Iterable<number | null | undefined>): numbe
   }
   return max > 0 ? max : 1;
 }
+
+/**
+ * Half-width of a symmetric domain around `center` that covers the share `q` of `values`
+ * (by |value − center|). Larger deviations are drawn at the end colours, and the legend marks
+ * its ends as "≤" / "≥". A few extreme variants would otherwise wash every other cell out to
+ * near-white (ADR 0038).
+ */
+export function robustHalfWidth(values: ArrayLike<number>, center: number, q = 0.99): number {
+  const dev: number[] = [];
+  for (let i = 0; i < values.length; i++) {
+    const v = values[i]!;
+    if (!Number.isNaN(v)) dev.push(Math.abs(v - center));
+  }
+  if (dev.length === 0) return 1;
+  dev.sort((a, b) => a - b);
+  const w = dev[Math.min(dev.length - 1, Math.floor(q * (dev.length - 1)))]!;
+  return w > 0 ? w : dev[dev.length - 1]! || 1;
+}
+
+/** Number of colours in {@link effectLut}: fine enough that neighbours are indistinguishable. */
+export const LUT_STEPS = 257;
+
+/**
+ * The scale as an RGBA lookup table of `steps` colours from −1 to +1 (index `(steps − 1) / 2`
+ * is white), so a canvas can colour tens of thousands of cells without one interpolation each.
+ */
+export function effectLut(steps = LUT_STEPS): Uint8ClampedArray {
+  const lut = new Uint8ClampedArray(steps * 4);
+  for (let i = 0; i < steps; i++) {
+    const [r, g, b] = hexToRgb(effectColorAt((2 * i) / (steps - 1) - 1));
+    lut.set([r, g, b, 255], i * 4);
+  }
+  return lut;
+}
+
+/** Index into {@link effectLut} of `value` on the domain `center ± halfWidth` (clamped). */
+export function lutIndex(
+  value: number,
+  center: number,
+  halfWidth: number,
+  steps = LUT_STEPS,
+): number {
+  const t = Math.min(1, Math.max(-1, (value - center) / halfWidth));
+  return Math.round(((t + 1) / 2) * (steps - 1));
+}
+
+/** {@link EFFECT_MISSING} as RGB bytes. */
+export const EFFECT_MISSING_RGB = hexToRgb(EFFECT_MISSING);
