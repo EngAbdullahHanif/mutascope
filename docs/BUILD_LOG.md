@@ -2916,46 +2916,47 @@ ADR 0033; results in `docs/load-test.md`, section 5.
 
 ---
 
-## Entry 34 — CI/CD: required checks, release-please, GHCR and the Space deploy (Phase 4 Task 7, 2026-10-18)
+## Entry 34 — CI/CD: required checks, release-please and deployment to Cloud Run (Phase 4 Task 7, 2026-10-18)
 
 **Plain-language summary.** Every pull request now runs five checks: lint and type-check, the
 tests with coverage, the generated API types, the Nextflow smoke test inside the pipeline image,
 and a build of the API image followed by its container tests. Merging into main will require all
 five to pass and the branch to be up to date (the rule is set in GitHub by the author). Versions
 are managed by release-please: it keeps a release PR open with the next version and the
-changelog, and merging it creates a tag. A tag builds the API image for linux/amd64, pushes it to
-GitHub's registry (GHCR), and points the Hugging Face Space at it with a one-line Dockerfile,
-`FROM ghcr.io/engabdullahhanif/mutascope-api:<tag>@<digest>`. The workflow then watches the live
-Space and fails unless it runs the new version and `/ready` passes. Dependabot opens weekly
-update PRs for Python packages, GitHub Actions and the Docker base images. Decisions in ADR
-0034. The deploy and the live latency measurement wait for the first release (secrets first).
+changelog, and merging it creates a tag. A tag builds the API image for linux/amd64 once, pushes
+it to Google's Artifact Registry and to GitHub's registry (GHCR), and deploys it to Google Cloud
+Run. The workflow then calls the public URL and fails unless it reports the new version and
+`/ready` passes. GitHub holds no Google key: Google trusts GitHub's identity token for this one
+workflow. Dependabot opens weekly update PRs for Python packages, GitHub Actions and the Docker
+base images. The plan was a Hugging Face Docker Space, but those now need a paid plan (problem
+4). Decisions in ADR 0034. The first deploy and the live latency measurement wait for the
+author's one-time Google Cloud setup.
 
 **The 3 most important design choices.**
 
-1. **The Space pulls the tested image; it never builds the API.** The Space's Dockerfile is a
-   single `FROM` line naming the tag and the digest of the image CI built. The image the Space
-   runs is therefore byte for byte the one that passed the self-check and, on the PR, the
-   container tests, and a retag in GHCR cannot change it. Letting the Space build `api/Dockerfile`
-   would run an untested build and download the 760 MB of weights on every build. *Evidence:*
-   `api/tests/test_deploy.py` checks that the Dockerfile is exactly one line with tag and digest
-   and that a tag without a digest or a non-release tag is refused.
-2. **"Deployed" means the new version is serving, not that the push worked.** While the Space
-   builds, the previous container keeps answering `/ready`, so polling `/ready` alone would pass
-   on the old release. `wait` passes only when the Space runs its latest commit, `/health`
-   reports the tag's version and `/ready` is 200 together. A build or runtime error fails at once
-   with the end of the Space's log. The release also checks first that the tag equals the package
-   version, which `/health` reports, so a mismatched tag fails before the build rather than after
-   a 25-minute wait. *Evidence:* the tests script a Space that answers with the old commit, then
-   building, then the old version, then not ready, and `wait` passes only on the last poll. They
-   also cover a build error, a runtime error and the timeout.
-3. **The Space's configuration is a file in the repository.** `conf/deploy/space.yaml` lists the
-   Space's variables, and each deploy makes the Space's variables exactly those, deleting any
-   others. ADR 0031's 2-second fallback (`MUTASCOPE_API_SCORE_DEFAULT_MODEL`), the measured
-   `trusted_proxies` and the precise-mode limit then become reviewed one-line changes, applied by
-   a redeploy (`workflow_dispatch`, no rebuild). Secrets are set from GitHub secrets, never
-   logged, never deleted. *Evidence:* the tests check that a stale variable is deleted, a changed
-   one is reset, a missing secret is left alone and an identical redeploy restarts the Space
-   instead of committing.
+1. **The service is a file in the repository, applied whole.** `conf/deploy/cloudrun.yaml` is
+   rendered into the complete Cloud Run service (2 vCPUs, 4 GiB, one instance, probes,
+   environment, image) and applied with `gcloud run services replace`. Nothing is set in the
+   console, and a hand-made change is undone by the next deploy. ADR 0031's 2-second fallback,
+   the measured `trusted_proxies` and the precise-mode limit therefore become reviewed one-line
+   changes, applied by a redeploy without a rebuild. *Evidence:* `api/tests/test_deploy.py`
+   checks the rendered service: image by digest from Artifact Registry, `maxScale` 1, 2 CPUs and
+   4 GiB, the startup probe on `/ready`, the runtime account, and an environment that is exactly
+   the config's.
+2. **Deployed means the tagged version is serving and ready, by digest.** Cloud Run runs the
+   image by digest, so the revision is the bytes CI built and tested. Its startup probe on
+   `/ready` keeps traffic on the previous revision until the new one has loaded the models. Then
+   `wait` checks from outside that `/health` reports the tag's version and `/ready` is 200. The
+   release first checks that the tag equals the package version, so a mismatched tag fails
+   before the build. *Evidence:* the tests script a cold start (no answer), the old version, then
+   not ready, and `wait` passes only on the last poll. The timeout case fails.
+3. **Keyless deployment, scoped to one workflow.** Workload Identity Federation lets GitHub's
+   OIDC token act as the deployer service account only when the repository is this one, the
+   workflow is `release.yml` and the ref is a `v` tag or main. No service-account key exists to
+   leak or rotate. A PR or a fork cannot deploy. The deployer can manage Cloud Run, write to one
+   Artifact Registry repository and run services as the runtime account, which has no roles.
+   *Evidence:* `tools/deploy/setup-gcp.sh` (shellcheck clean) creates exactly these bindings and
+   the provider's attribute condition.
 
 **Problems encountered and how they were solved.**
 
@@ -2986,25 +2987,40 @@ update PRs for Python packages, GitHub Actions and the Docker base images. Decis
    with release-please 17.11.2's own updaters on this repository's files: exactly one line of
    `uv.lock` changes (line 1476, mutascope's `0.1.0` → `0.2.0`), `pyproject.toml` changes one
    line, and `uv lock --check` passes on the bumped pair.
+4. **The planned host became paid.** *Found:* creating the Hugging Face Space. The form allows
+   only Static Spaces on a free account ("Gradio and Docker Spaces require a paid plan"). Every
+   ADR since 0029 assumed a free Docker Space with 2 vCPUs. *Alternatives checked against the
+   measured memory:* the API container uses 1,227 MB right after startup, 2,080 MB at the
+   end of the 5-user run, and peaks at 3,208 MB at 20 users
+   (`docs/load-test-container-summary.json`). Render's free instance (512 MB, 0.1 CPU) cannot
+   load the models. *Fix:* Google Cloud Run with 2 vCPUs and 4 GiB, at most one instance, scaled
+   to zero, inside the free tier. Only the deploy changed: the image, CI, release-please and
+   Dependabot are as they were, and the image needed no change. *Verified:* the rendered
+   service is checked by unit tests and the workflow by actionlint. The first real deploy is
+   pending (it needs the author's Google Cloud project).
 
 **Supporting details.**
 
 - **CI jobs** (ADR 0034, section 1). The smoke test moved from the native environment to
   `-profile docker,test` in an image built in the job. CI no longer installs Foldseek; the
   image's checksum-verified build is the one tested. Coverage now includes `api/`.
-- **Secrets** (GitHub repository secrets): `HF_TOKEN` (fine-grained, write to the Space only),
-  `RELEASE_PLEASE_TOKEN` (fine-grained PAT, this repository, Contents, Pull requests and Issues
-  read and write), optional `SPACE_METRICS_TOKEN`. release-please needs its own token because
+- **Author's setup:** a Google Cloud project with billing and a budget alert,
+  `tools/deploy/setup-gcp.sh` once, its project id and number in `conf/deploy/cloudrun.yaml`,
+  and one GitHub secret, `RELEASE_PLEASE_TOKEN` (fine-grained PAT for this repository:
+  Contents, Pull requests and Issues read and write). release-please needs its own token because
   GitHub starts no workflow for events made with `GITHUB_TOKEN`: its PR would get no checks and
   its tag would start no release.
+- **Cloud Run trade-offs** (ADR 0034, section 4). Request-based billing gives an instance CPU
+  only during a request, so a precise job advances while its SSE stream is open (the website's
+  way). Scale-to-zero means a cold start for the first visitor and no score cache across it.
 - **Dependabot** uses the `uv` ecosystem, not `pip`, so `uv.lock` is updated too. The
   Dockerfiles' `FROM` lines are now literal (tag and digest) instead of `ARG`s, so that
   Dependabot can read them. The images are unchanged. Python is held to 3.11 patches.
-- **Space measurement tool:** `tools/loadtest/space.py` (ADR 0034, section 6). It was
-  dry-run against a local server (the numbers there are M4 Pro numbers and are not reported),
-  and every step completed: baseline, four latency cells of cache misses, a precise job, the
-  5-user Locust run, the decision.
+- **Live measurement tool:** `tools/loadtest/live.py` (ADR 0034, section 6). It was dry-run
+  against a local server (the numbers there are M4 Pro numbers and are not reported), and every
+  step completed: cold start, baseline, four latency cells of cache misses, a precise job
+  followed on its stream, the 5-user Locust run, the decision.
 - **Loose ends:** the first release, the deploy, the live numbers and ADR 0031's decision;
-  `trusted_proxies` from the Space's run log; making the GHCR package public after its first
-  push; ADR 0033's 20-user CPU saturation is still open (bounding concurrent forward passes),
-  to be judged on the Space's own numbers.
+  `trusted_proxies` from the API's access lines in Cloud Logging; ADR 0033's 20-user CPU
+  saturation is still open (bounding concurrent forward passes), to be judged on the live
+  numbers.
