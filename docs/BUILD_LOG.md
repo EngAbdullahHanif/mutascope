@@ -3024,3 +3024,72 @@ author's one-time Google Cloud setup.
   `trusted_proxies` from the API's access lines in Cloud Logging; ADR 0033's 20-user CPU
   saturation is still open (bounding concurrent forward passes), to be judged on the live
   numbers.
+
+---
+
+## Entry 35 — First deploy to Cloud Run, measured live (Phase 4 Task 7, 2026-10-18)
+
+**Plain-language summary.** Merging the release PR tagged `v0.2.0`, and the release workflow
+built the API image, pushed it, deployed it to Google Cloud Run and confirmed the public URL
+served version 0.2.0 with `/ready` passing. The live service was then measured from a laptop in
+Germany. At 1,000 residues the larger model (150M) takes 5.72 s at the 95th percentile, well over
+the 2-second rule, so the default became the smaller model (35M, 2.09 s). A 600-residue precise
+job took almost 7 minutes, so the length limit dropped to 400 residues (163 s, measured). The
+service needs 20.5 s to wake from zero. Cloud Run's front end turned out to be one fixed address,
+which now becomes the trusted proxy, so each visitor gets their own rate limits. All three
+settings are in `conf/deploy/cloudrun.yaml` and reach the service by a redeploy. Numbers in
+`docs/load-test.md`, section 6; decisions in ADR 0034, section 6.
+
+**The 3 most important design choices.**
+
+1. **Change behaviour by configuration, from measurements.** ADR 0031 made the default model a
+   setting so that the Space measurement could switch it without a code change. That is what
+   happened, on a different host: one line in `conf/deploy/cloudrun.yaml`, with the measurement
+   beside it. *Evidence:* 150M p95 5.72 s at 1,000 residues (20 cache misses), against the 2 s
+   rule.
+2. **Measure the limit, do not extrapolate it.** The 600-residue job (406 s) showed the limit was
+   wrong, but not what it should be. Rather than divide by the slowdown, a second job at 400
+   residues was timed: 163 s. Fitted through both, time grows as length^2.24, so 450 would be
+   about 210 s, over the target. *Evidence:* both jobs followed on their SSE stream, as the
+   website does, because on Cloud Run an instance has CPU only while a request is open.
+3. **Find the proxy from the logs before trusting it.** `trusted_proxies` was left empty for the
+   first deploy, so every request was logged with the address it really came from. The logs
+   showed one address, `169.254.169.126`, on all 413 requests. Only that /32 is trusted: anyone
+   could otherwise fake their address in `X-Forwarded-For`. *Evidence:* Cloud Logging query on
+   `jsonPayload.client`. The settings accept the value, and a spoofed address left of the real
+   one is ignored (`client_address`).
+
+**Problems encountered and how they were solved.**
+
+1. **A container test passed or failed depending on test order.** *Found:* CI on main after
+   merging #35, and on Dependabot's #38: `test_no_sequence_in_the_container_logs` failed with
+   `'sequence_sha256'` missing from the logs. *Cause:* it checked the logs for a hashed sequence
+   but relied on another test having scored one in the shared container; pytest-randomly
+   shuffles the order. *Fix:* the test sends its own score request first (#39). *Verified:* run
+   alone it failed every time before the fix and passed after; it also passed under three
+   random orders (seeds 11, 22, 33).
+2. **Two load-test failures were not the API's.** *Found:* Locust reported 2 failures, "429
+   without a problem body", among job submissions. The API's 429s always carry one. *Cause:*
+   Cloud Logging showed both at 14:10:36 UTC with the text "The request was aborted because there
+   was no available instance": Cloud Run itself, with its one instance busy. *Fix:* none to the
+   API. The count is reported as the platform's (2 of 226), and bounding concurrent forward
+   passes is listed as the next step. *Verified:* the other 29 429s match the API's limits
+   (17 jobs + 12 scores), and 191 + 4 + 31 = 226 requests.
+3. **A redeploy would have used the release's old configuration.** *Found:* before the first
+   redeploy, reading `release.yml`. The deploy job checked out the tag, so a manual redeploy of
+   `v0.2.0` would have read `v0.2.0`'s `cloudrun.yaml`, without the new settings, and passed,
+   because `/health` and `/ready` do not show them. *Fix:* the deploy job checks out the commit
+   of the run (the tag's on a tag, main's on a manual run); the image still comes from the tag by
+   digest. *Verified:* actionlint. The redeploy itself, and `/ready` reporting `esm2_35m` and 400,
+   is the check after this merges.
+
+**Supporting details.**
+
+- **Live numbers** (p50 / p95, network included; round trip 0.20 / 0.28 s): 35M 0.59 / 0.92 s at
+  300 residues, 1.83 / 2.09 s at 1,000; 150M 1.56 / 1.85 s and 4.80 / 5.72 s. The M4 Pro did
+  150M at 1,000 residues in 0.53 s; the deployed vCPUs are much slower.
+- **5 users, 2 minutes:** 226 requests, no 5xx. Scores p50 1.4 s, p95 10 s; protein detail p99
+  9.9 s: reads wait behind scoring.
+- **Where earlier documents say "the Space"**, they mean the deployed service (ADR 0034).
+- **Loose ends:** bounding concurrent forward passes; checking, after the redeploy, that the
+  access lines show visitors' addresses instead of the front end's.

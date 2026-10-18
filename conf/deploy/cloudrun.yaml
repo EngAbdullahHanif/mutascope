@@ -38,8 +38,14 @@ concurrency: 80
 timeout_seconds: 900
 
 # Environment of the container: exactly these on every deploy. Unset = the image's default
-# (.env.example). Measured values go here, with the measurement in docs/load-test.md.
-env: {}
+# (.env.example). Measured values go here, with the measurement in docs/load-test.md, section 6.
+env:
+  # ADR 0031's rule: 150M's fast-mode p95 at 1,000 residues was 5.72 s on this service (> 2 s).
+  MUTASCOPE_API_SCORE_DEFAULT_MODEL: esm2_35m
+  # A precise job stays under ~3 min (ADR 0029): 400 residues took 163 s, 600 took 406 s.
+  MUTASCOPE_API_PRECISE_MAX_LENGTH: "400"
+  # Cloud Run's front end: every request of the first deploy came from this address (413 of 413).
+  MUTASCOPE_API_TRUSTED_PROXIES: 169.254.169.126/32
 
 # Secret Manager secrets as environment variables: variable -> secret name (latest version).
 # The runtime service account needs roles/secretmanager.secretAccessor on each.

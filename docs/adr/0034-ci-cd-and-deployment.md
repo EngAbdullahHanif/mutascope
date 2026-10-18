@@ -1,6 +1,6 @@
 # 0034 — CI/CD: required checks, release-please, and deployment to Google Cloud Run
 
-- Status: accepted (first deploy and live measurement pending; section 6)
+- Status: accepted; first deploy `v0.2.0` 2026-10-18, measured (section 6)
 - Date: 2026-10-18
 - Builds on: ADR 0007 (Nextflow profiles), ADR 0029 and 0031 (the 2-second rule, the provisional
   precise limit), ADR 0032 (trusted proxies, limits), ADR 0033 (the images)
@@ -141,25 +141,44 @@ The existing ruleset is kept and completed (instructions in the PR): the five ch
 are required, from GitHub Actions, and branches must be up to date with main before merging.
 Release-please's and Dependabot's PRs go through the same rule.
 
-### 6. After the first deploy (pending)
+### 6. The first deploy, measured
 
-`tools/loadtest/live.py` measures the live service in about 10 minutes and ~250 requests: the
-cold start (first `/ready`), `/health` round trips (network baseline), fast mode at 300 and
-1,000 residues for both models (20 cache misses per cell, one request at a time, under the
-per-client limit), one precise job of 600 residues followed on its stream, and Locust's
-`Visitor` mix at 5 users for 2 minutes. Through Google's front end the five users are one
-client, so their 429s are counted as the limiter working. The script applies ADR 0031's rule
-(the rule was written for "the Space"; it applies to the service that serves the API, now
-Cloud Run with the same 2 vCPUs) and prints the default model. The results, the decision and
-the address the proxy connects from (for `trusted_proxies`, read from the API's access lines
-in Cloud Logging) are added to this ADR and to `docs/load-test.md`, and any change goes into
-`conf/deploy/cloudrun.yaml`.
+`v0.2.0` was deployed by the release workflow on 2026-10-18. `tools/loadtest/live.py` then
+measured it from a laptop in Germany (`docs/load-test.md`, section 6;
+`docs/live-measure-summary.json`):
 
-Until then `env` is empty: the service runs the image's defaults, including an empty
-`trusted_proxies`. Every visitor is then the front end's address, so all users share one
-client's quota and one heavy user can make everyone wait (`docs/threat-model.md`). The limits
-still hold, and the measurement sets the range before the site links to the API. Where earlier
-ADRs and the threat model say "the Space", read "the deployed service".
+| measurement | result |
+|---|---|
+| fast mode, 35M, 300 / 1,000 residues (p95, network included) | 0.92 s / 2.09 s |
+| fast mode, 150M, 300 / 1,000 residues (p95) | 1.85 s / 5.72 s |
+| precise job, 600 / 400 residues | 406 s / 163 s |
+| cold start (first `/ready` after 21 idle minutes) | 20.5 s |
+| 5 users, 2 minutes | 226 requests, no 5xx; 29 API 429s (limits), 2 Cloud Run 429s |
+
+Decisions, all in `conf/deploy/cloudrun.yaml` (`env`), applied by a redeploy:
+
+- **Default model 35M** (ADR 0031's rule: 150M's p95 at 1,000 residues is 5.72 s > 2 s). 35M's
+  own p95 at 1,000 residues is 2.09 s: the rule picks the faster model; it does not make every
+  length meet 2 s.
+- **Precise limit 400 residues** (ADR 0029: a job under about 3 minutes). 600 took 406 s;
+  400 took 163 s, measured.
+- **`trusted_proxies` = `169.254.169.126/32`**: every one of the first deploy's 413 requests
+  came from this address, Cloud Run's front end. With it, a client is read from
+  `X-Forwarded-For` from the right (ADR 0032).
+
+Two findings stay open. At 5 users, reads wait behind CPU-bound scoring (`GET
+/v1/proteins/{id}` p99 9.9 s), the saturation ADR 0033 saw at 20 users locally. And with one
+instance, Cloud Run itself refused 2 of 226 requests ("no available instance"). Bounding
+concurrent forward passes is the next lever (ADR 0033); raising `max_instances` is not
+(ADR 0032).
+
+The rule of ADR 0029 and 0031 was written for "the Space"; it applies to the service that serves
+the API. Where earlier ADRs and the threat model say "the Space", read "the deployed service".
+
+**Redeploys read main's config.** The deploy job checks out the commit of the run (the tag's
+commit on a tag, main's on a manual run) and takes only the image from the tag. It first checked
+out the tag, which would have redeployed `v0.2.0` with its own, older `env` (found before the
+first redeploy).
 
 ## Setup and secrets
 
