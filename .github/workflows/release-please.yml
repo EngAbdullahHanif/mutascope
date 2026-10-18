@@ -1,0 +1,29 @@
+# release-please (ADR 0034): reads the Conventional Commits on main and keeps one release PR
+# open that bumps the version (pyproject.toml, uv.lock) and writes CHANGELOG.md. Merging that PR
+# creates the tag vX.Y.Z and the GitHub release; the tag starts release.yml (image, deploy).
+#
+# It runs with a fine-grained token (secret RELEASE_PLEASE_TOKEN), not GITHUB_TOKEN: GitHub
+# starts no workflow for events made with GITHUB_TOKEN, so with it the release PR would never
+# get its required CI checks and the tag would never start the release workflow.
+name: release-please
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v5.0.0
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
