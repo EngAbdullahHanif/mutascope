@@ -12,13 +12,12 @@
 #            offline, one process; its last build step starts the API and scores with it
 #            (python -m api.app.selfcheck), so an image that cannot serve is never produced.
 
-ARG PYTHON_IMAGE=python:3.11.17-slim-trixie@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce
-ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.12.24@sha256:3af4716e991d6956a41e573eab705d0ee08500cd829ed30293eb8472f372c65a
+# Base images are literal FROM lines (tag and digest), so Dependabot can read and bump them.
 
-FROM ${UV_IMAGE} AS uv
+FROM ghcr.io/astral-sh/uv:0.12.24@sha256:3af4716e991d6956a41e573eab705d0ee08500cd829ed30293eb8472f372c65a AS uv
 
 # --- builder: /opt/venv ------------------------------------------------------------------------
-FROM ${PYTHON_IMAGE} AS builder
+FROM python:3.11.17-slim-trixie@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce AS builder
 COPY --from=uv /uv /usr/local/bin/uv
 ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
     UV_PYTHON_DOWNLOADS=never \
@@ -38,7 +37,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # --- weights: /opt/mutascope/hf ----------------------------------------------------------------
 # Only the modules the fetch imports, so a change elsewhere in the API does not download
 # the 760 MB again.
-FROM ${PYTHON_IMAGE} AS weights
+FROM python:3.11.17-slim-trixie@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce AS weights
 COPY --from=builder /opt/venv /opt/venv
 WORKDIR /app
 COPY conf ./conf
@@ -52,7 +51,7 @@ RUN python -m api.app.fetch \
     && rm -rf /opt/mutascope/hf/xet /opt/mutascope/hf/hub/.locks
 
 # --- runtime -----------------------------------------------------------------------------------
-FROM ${PYTHON_IMAGE} AS runtime
+FROM python:3.11.17-slim-trixie@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce AS runtime
 ARG VCS_REF=unknown
 LABEL org.opencontainers.image.title="mutascope-api" \
       org.opencontainers.image.description="MutaScope API: precomputed landscapes and live zero-shot ESM-2 scoring (ONNX, CPU)" \
