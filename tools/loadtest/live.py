@@ -1,28 +1,33 @@
-"""Measure the live Space: fast-mode latency, one precise job, a short 5-user run (ADR 0034).
+"""Measure the deployed API on Cloud Run: latency, one precise job, 5 users (ADR 0034).
 
 Usage (from the repository root, after a deploy)::
 
-    uv run --project tools/loadtest python tools/loadtest/space.py \
-        --url https://engabdullahhanif-mutascope-api.hf.space --out build/space-measure
+    uv run --project tools/loadtest python tools/loadtest/live.py \
+        --url https://<service>.run.app --out build/live-measure
 
-The free Space is shared and small, so this is deliberately short (about 10 minutes, ~250
+0. **Cold start:** the first ``GET /ready``, timed. The service scales to zero, so after 15+
+   idle minutes this is the wait of a first visitor (``cold_start_s``; the instance may also
+   have been warm, which ``/ready``'s timing shows).
+
+It runs on Cloud Run's free tier, so this is deliberately short (about 10 minutes, ~250
 requests) and stays inside one client's rate limits where it can:
 
 1. **Network baseline:** ``GET /health`` ``--rtt`` times, so the latencies below can be read
-   against the round trip to the Space.
+   against the round trip to the service.
 2. **Fast mode:** ``POST /v1/score`` for 300 and 1,000 residues with ``esm2_35m`` and
    ``esm2_150m``, ``--n`` requests each, one at a time, ``--spacing`` seconds apart (the
    per-client limit is 20 a minute). Every sequence is new, so every request scores
-   (``X-MutaScope-Cache: miss`` is checked); one warm-up request per model is not counted.
+   (``X-MutaScope-Cache: miss`` is checked); one warm-up request per model is not counted, so
+   a cold start (the service scales to zero) is not in the percentiles.
    Latency is the client's wall time for the whole request, network included.
 3. **Precise mode:** one job of ``--precise-length`` residues (the provisional limit, ADR 0031
    section 6), timed from submission to ``succeeded``.
 4. **Load:** Locust's ``Visitor`` mix (locustfile.py) at 5 users for ``--load-seconds``. Through
-   the Space's proxy every user is this machine's address, so the five share one client's
+   Google's front end every user is this machine's address, so the five share one client's
    limits: 429s here are the limiter doing its job, and are counted, not failures.
 
 Then ADR 0031's rule: if 150M's fast-mode p95 at 1,000 residues exceeds 2 s, the default
-model becomes 35M (``MUTASCOPE_API_SCORE_DEFAULT_MODEL`` in ``conf/deploy/space.yaml``).
+model becomes 35M (``MUTASCOPE_API_SCORE_DEFAULT_MODEL`` in ``conf/deploy/cloudrun.yaml``, ``env``).
 """
 
 import argparse
@@ -46,7 +51,7 @@ MODELS = ("esm2_35m", "esm2_150m")
 LENGTHS = (300, 1000)
 FALLBACK_P95_S = 2.0
 """ADR 0029 / 0031: 150M stays the default only if its p95 at 1,000 residues is at most 2 s."""
-log = logging.getLogger("space")
+log = logging.getLogger("live")
 
 
 def request(
@@ -124,23 +129,29 @@ def fast_latency(base: str, n: int, spacing: float, rng: random.Random) -> dict[
 
 
 def precise_job(base: str, length: int, rng: random.Random, timeout: float = 600) -> dict[str, Any]:
+    """Submit one job and follow it on its SSE stream, as the website does.
+
+    On Cloud Run the instance has CPU only while a request is in flight (request-based
+    billing), so a job advances while its stream is open; polling ``GET /v1/jobs/{id}`` every
+    few seconds would leave it without CPU in between and measure that instead.
+    """
     sequence = "".join(rng.choice(AA) for _ in range(length))
     started = time.perf_counter()
     status, _, payload, _ = request(f"{base}/v1/jobs", {"sequence": sequence})
     if status != 202:
         raise RuntimeError(f"precise job: unexpected {status}: {payload[:200]!r}")
     job = json.loads(payload)["id"]
-    while time.perf_counter() - started < timeout:
-        _, _, payload, _ = request(f"{base}/v1/jobs/{job}")
-        state = json.loads(payload)["status"]
-        if state in {"succeeded", "failed", "cancelled"}:
-            return {
-                "length": length,
-                "status": state,
-                "seconds": round(time.perf_counter() - started, 1),
-            }
-        time.sleep(2)
-    return {"length": length, "status": "timeout", "seconds": timeout}
+    events = 0
+    with urllib.request.urlopen(f"{base}/v1/jobs/{job}/stream", timeout=timeout) as stream:
+        for line in stream:  # the server ends the stream when the job has finished
+            events += line.startswith(b"event:")
+    _, _, payload, _ = request(f"{base}/v1/jobs/{job}")
+    return {
+        "length": length,
+        "status": json.loads(payload)["status"],
+        "seconds": round(time.perf_counter() - started, 1),
+        "events": events,
+    }
 
 
 def load_run(base: str, out: Path, users: int, seconds: int) -> dict[str, Any]:
@@ -196,13 +207,14 @@ def main() -> None:
     args.out.mkdir(parents=True, exist_ok=True)
     rng = random.Random(args.seed)
 
-    status, _, payload, _ = request(f"{base}/ready")
+    status, _, payload, cold = request(f"{base}/ready", timeout=300)
     if status != 200:
         raise RuntimeError(f"/ready answered {status}")
     _, _, health, _ = request(f"{base}/health")
     summary: dict[str, Any] = {
         "url": base,
         "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "cold_start_s": round(cold, 2),
         "ready": json.loads(payload),
         "version": json.loads(health)["version"],
     }
