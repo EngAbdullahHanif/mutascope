@@ -1,0 +1,53 @@
+# The Cloud Run service that serves the API (ADR 0034; `python -m api.deploy.cloudrun`).
+#
+# The whole service is rendered from this file on every deploy and applied with
+# `gcloud run services replace`, so nothing about it is set by hand in the console.
+# One-time setup: tools/deploy/setup-gcp.sh prints the values for `project_id` and
+# `project_number`.
+project_id: ""
+project_number: ""
+region: europe-west1
+service: mutascope-api
+
+# Images: CI pushes the same build to both. Cloud Run pulls from Artifact Registry (it cannot
+# pull from GHCR); GHCR is the public copy. Registry names are lowercase.
+artifact_repository: mutascope
+image_name: mutascope-api
+ghcr_image: ghcr.io/engabdullahhanif/mutascope-api
+
+# Service accounts (names; @<project_id>.iam.gserviceaccount.com is added). The runtime account
+# has no roles: the API reads nothing from Google Cloud. The deployer is what CI acts as, through
+# Workload Identity Federation (no key file anywhere).
+runtime_service_account: mutascope-api-runtime
+deployer_service_account: mutascope-deployer
+workload_identity_pool: github
+workload_identity_provider: github
+
+# 2 vCPUs: the shape every measurement so far assumed (ADR 0029-0033). 4 GiB: the container
+# peaked at 3.2 GB at 20 users (ADR 0033), and Cloud Run's disk is in memory, so the score cache
+# (up to 256 MB) counts against it too.
+cpu: "2"
+memory: 4Gi
+# One instance, never more: the queue, the counters and the rate limits are in one process's
+# memory (ADR 0032). 0 when idle: free when nobody uses it; the website works with the API
+# asleep (CLAUDE.md).
+min_instances: 0
+max_instances: 1
+concurrency: 80
+# A precise-mode SSE stream stays open for the whole job (about 3 minutes at most, ADR 0031).
+timeout_seconds: 900
+
+# Environment of the container: exactly these on every deploy. Unset = the image's default
+# (.env.example). Measured values go here, with the measurement in docs/load-test.md.
+env: {}
+
+# Secret Manager secrets as environment variables: variable -> secret name (latest version).
+# The runtime service account needs roles/secretmanager.secretAccessor on each.
+# Example: MUTASCOPE_API_METRICS_TOKEN: mutascope-metrics-token
+secrets: {}
+
+# After `replace`: /health must report the tag's version and /ready answer 200 within this time,
+# or the workflow fails.
+wait:
+  timeout_seconds: 900
+  interval_seconds: 10
