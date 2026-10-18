@@ -73,3 +73,13 @@ def test_secrets_lose_a_trailing_newline(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setenv("MUTASCOPE_API_METRICS_TOKEN", "t" * 31 + "\n")  # 31 characters
     with pytest.raises(ValidationError):
         Settings()
+
+
+def test_a_rejected_setting_is_not_echoed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A startup error goes to the platform's logs: it must not carry a secret's value
+    (a too-short token was printed in full by pydantic's default message)."""
+    monkeypatch.setenv("MUTASCOPE_API_METRICS_TOKEN", "short-secret-value")
+    with pytest.raises(ValidationError) as caught:
+        Settings()
+    assert "short-secret-value" not in str(caught.value)
+    assert "metrics_token" in str(caught.value)
