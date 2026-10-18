@@ -1,4 +1,4 @@
-# Local load test of the API (Phase 4 Task 5)
+# Local load test of the API (Phase 4 Tasks 5 and 6)
 
 > **The latencies here are M4 Pro numbers, not representative of the Space.** The Space has
 > 2 shared vCPUs. The M4 Pro has 12 fast cores, so requests that ran in parallel here will queue
@@ -106,8 +106,113 @@ on this machine (0.6 s at 1,000 residues, ADR 0029) plus queueing behind paralle
 A refusal costs about a millisecond, which is the point: an abuser at the limit costs almost
 nothing.
 
+## 5. The same tests against the container (Task 6, ADR 0033)
+
+> **All latencies in this section are from a local container, not the Space.** The CPU limit
+> is the Space's (2 CPUs), but the cores are the M4 Pro's, and the memory limit was not the
+> Space's (below).
+
+- **Date:** 2026-10-18, branch `feat/docker`
+- **Server:** the API image `mutascope-api:dev` (linux/arm64, native), one fresh container per
+  scenario, `docker run --cpus=2 --memory=16g`, its own start command (`python -m
+  api.app.serve`, ONNX threads 2, BLAS at 1, offline, baked-in fp32 models and bundle). Requests
+  reach the container from the Docker bridge's gateway (172.17.0.1), which is the trusted
+  proxy, so each Locust user's `X-Forwarded-For` is its own client, as behind the Space's proxy.
+- **Memory limit:** Docker Desktop's VM had 7.75 GiB. `--memory=16g` was set, but the
+  effective ceiling was the VM's 7.75 GiB, not 16 GB. Nothing came close to either: the
+  highest reading in any scenario was 3.2 GB.
+- **Memory measure:** the container's cgroup, once a second. `anon` is heap and other
+  anonymous memory, which a leak would grow. `usage` is what `docker stats` shows (it also
+  counts active page cache) and was 10–50 MB above `anon` throughout. This is not the
+  process-tree RSS of sections 3 and 4, so the two are not directly comparable.
+- **Raw results:** `docs/load-test-container-summary.json`.
+- **Reproduce:** `make api-image`, then
+  `uv run --project tools/loadtest python tools/loadtest/run.py --image mutascope-api:dev --out <dir> read score score_global jobs streams load5 load20 soak5`
+  (about 40 minutes).
+
+### 5.1 Limits: identical to the local process
+
+| Scenario | Limit | Accepted | Refused (429) | Expected |
+|---|---|---|---|---|
+| `read` | 120/min | **120** | 78,778 | 120 |
+| `score` | 20/min | **20** | 65,743 | 20 |
+| `score_global`, 10 addresses | 120/min | **120** in total (11–13 each) | 150,059 | 120, none over 20 |
+| `jobs` | 2/min | **2** | 48 | 2 |
+| `streams`, 6 users, one address | 4 open | at most **4** open (gauge max 4) | 46 | 4 |
+
+In `streams`, the 400-residue precise job ran longer on 2 CPUs than the 45 s window (21 s in
+the local run), so the four held streams were still open when Locust stopped. No stream
+therefore completed inside the window, and the cap is shown by the gauge and the refusals.
+
+### 5.2 No 5xx at 5 and 20 users
+
+| Run | Duration | Requests | 2xx | 429 | 5xx | Failures | Server error lines / tracebacks |
+|---|---|---|---|---|---|---|---|
+| 5 users | 180 s | 418 | 408 | 10 | **0** | **0** | 0 / 0 |
+| 20 users | 600 s | 1,921 | 1,803 | 118 | **0** | **0** | 0 / 0 |
+| 5 users, soak | 1,200 s | 3,141 | 2,942 | 199 | **0** | **0** | 0 / 0 |
+
+### 5.3 Memory: levels off (soak, 5 users, 20 minutes)
+
+Container `anon` memory in MB, at each minute (the sample nearest it):
+
+| minute | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| MB | 1,222 | 2,132 | 2,285 | 2,295 | 2,375 | 2,375 | 2,473 | 2,503 | 2,477 | 2,485 | 2,485 |
+
+| minute | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| MB | 2,472 | 2,481 | 2,490 | 2,496 | 2,477 | 2,484 | 2,484 | 2,484 | 2,484 | 2,484 |
+
+Means by quarter: 2,248 → 2,473 → 2,488 → 2,485 MB. Memory rises in steps for about 7 minutes
+and then stays between 2,472 and 2,503 MB for the remaining 13, while traffic continued at the
+same rate (3,141 requests over the 20 minutes). Memory does not keep rising, so there was
+nothing to fix. The job store, counters and slots are bounded (ADR 0032). Finished jobs expire
+after an hour, longer than the soak, so the 50 jobs it ran were all still held at the end
+without a visible effect on the curve.
+
+The steps fit ONNX Runtime's arena keeping the buffers of the largest passes run so far: each
+step is a new, larger set of concurrent forward passes. That is the same inference as in
+section 3, from the shape of the curve, not a measurement of the arena. At 20 users memory
+levelled off higher, as the local run did: by minute 6 it was 3,197 MB, then 3,193, 3,191 and
+3,186 MB at minutes 7–9 (quarter means 2,634 → 2,989 → 3,140 → 3,194). The Space has 16 GB.
+
+### 5.4 Latency (local container, not the Space): 2 CPUs saturate at 20 users
+
+Milliseconds, whole request, as Locust measured them.
+
+| Route | 5 users (180 s): median / p95 / max | soak, 5 users (20 min): median / p95 / max | 20 users (600 s): median / p95 / max |
+|---|---|---|---|
+| `POST /v1/score` (accepted) | 560 / 5,200 / 5,846 | 150 / 2,900 / 7,664 | 5,600 / 46,000 / 58,458 |
+| `GET /v1/proteins/{id}` | 11 / 45 / 288 | 9 / 28 / 103 | 94 / 580 / 2,018 |
+| `GET /v1/proteins/{id}/landscape` | 74 / 480 / 2,033 | 41 / 260 / 1,600 | 420 / 3,400 / 11,120 |
+| `GET /v1/benchmarks` | 12 / 23 / 24 | 18 / 27 / 71 | 150 / 470 / 918 |
+| `GET /v1/jobs/{id}/stream` (whole job) | 3,200 / 12,000 / 12,847 | 3,400 / 9,900 / 11,209 | 210,000 / 325,000 / 325,409 |
+
+**This is the main finding of the container run.** With 2 CPUs, 20 users overload fast mode:
+
+- a median of 5.6 s and a p95 of 46 s, against 72 ms and 520 ms for the unconstrained process
+  in section 4;
+- precise jobs that wait minutes, because they share the 2 CPUs with fast mode;
+- 459 fast scores accepted in 600 s (46 a minute). The global limit of 120 a minute was never
+  reached, so the server's own speed, not the limit, held the rate down. The 20 users made 1,921
+  requests here against 6,922 locally, because each waits for its answer before the next.
+
+The likely cause is that every fast request is its own ONNX Runtime run with 2 intra-op
+threads, and nothing bounds how many run at once. With many concurrent requests, more threads
+compete for the 2-CPU quota than it has, and each request takes longer than it would in turn.
+That is an inference: thread counts and CPU throttling were not measured. The free Space has the
+same 2-CPU limit, so this probably holds there.
+
+Not changed in this task: ADR 0032 leaves the limits to Task 7, which measures the Space. The
+options are to bound concurrent forward passes (a semaphore before the scorer), to lower
+`rate_limit_score_global`, or to default to 35M (ADR 0029's rule). At 5 users the median score
+is 150–560 ms, and the p95 (2.9–5.2 s) is already above ADR 0029's 2 s rule. That rule is for
+a single 1,000-residue request, but under load the Space will likely miss it.
+
 ## What this does not show
 
 - Throughput or latency on 2 vCPUs (Task 7).
 - Many-address abuse beyond the global limits (see `docs/threat-model.md`).
-- Memory over hours, and on Linux.
+- Memory over hours (the soak was 20 minutes, on Linux in a container), and a 16 GB limit
+  (the Docker VM had 7.75 GiB).
