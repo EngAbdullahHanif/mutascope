@@ -44,9 +44,8 @@ env:
   MUTASCOPE_API_SCORE_DEFAULT_MODEL: esm2_35m
   # A precise job stays under ~3 min (ADR 0029): 400 residues took 163 s, 600 took 406 s.
   MUTASCOPE_API_PRECISE_MAX_LENGTH: "400"
-  # Experiment (ADR 0036, section 6): one ONNX thread, leaving one vCPU to the event loop and
-  # the reads. With 2 threads, read p99 at 5 users was 8.5 s and 429s took up to 28 s at 20 users.
-  # Passes will be slower; kept only if the live measurement says reads gained more than that.
+  # One ONNX thread leaves one vCPU to the event loop (ADR 0036, section 7). Read p99 at 5 users
+  # fell from 8.5 s to 140 ms; the cost: a 400-residue precise job takes 293 s, not 203 s.
   MUTASCOPE_API_ONNX_THREADS: "1"
   # Cloud Run's front end: every request of the first deploy came from this address (413 of 413).
   MUTASCOPE_API_TRUSTED_PROXIES: 169.254.169.126/32

@@ -312,7 +312,8 @@ Run `make lint test` before declaring any task done.
   `api.app.inference.Inference`, `inference_concurrency` (1) at a time, never `asyncio.to_thread`.
   Fast mode waits `inference_wait_seconds` for a slot, then 503 `scoring-busy` with
   `Retry-After`; precise batches wait their turn. Cache hits take no slot. A slot is freed when
-  its thread finishes, not when the request goes away.
+  its thread finishes, not when the request goes away. On Cloud Run ONNX runs with one thread
+  (`MUTASCOPE_API_ONNX_THREADS=1`): the other vCPU is the event loop's (ADR 0036, section 7).
 - The live-score cache (`api.app.score_cache`, diskcache) is keyed by sha256 of
   `[hf_id/file, revision, method, sha256(sequence)]`; files from `onnx_local_dir` are keyed
   `local:<dir>`, never by a Hub commit. A partial (cancelled, failed) landscape is never cached.
@@ -437,10 +438,13 @@ pipeline` runs `data folds` through `train final` and publishes only after `trai
 (ADR 0027). Phase 4 delivered the website bundle (`bundle-v1.0.0`, 217 files, 29.2 MB), fp32
 ONNX ESM-2 35M / 150M (int8 rejected), the FastAPI service with live scoring and hardening, a
 torch-free API image (600 MB compressed) and a pipeline image, five required CI checks,
-release-please and keyless deployment to Cloud Run: `v0.2.0` serves at
-https://mutascope-api-2lvmztrsha-ew.a.run.app (ADR 0035). Carried into Phase 5 (ROADMAP): bound
-concurrent forward passes, live metrics token / Sentry, GHCR visibility, the trusted-proxy log
-check, and the frontend's CORS origin. The frontend reads the bundle from the Hub at
+release-please and keyless deployment to Cloud Run (ADR 0035); `v0.4.0` serves at
+https://mutascope-api-2lvmztrsha-ew.a.run.app. Done in Phase 5 Task 0 (ADR 0036): one forward
+pass at a time, one ONNX thread on Cloud Run (read p99 at 5 users 140 ms), the metrics token from
+Secret Manager, and the website's CORS origins (Vercel: mutascope.abdullahhanif.me,
+mutascope-web.vercel.app). Still open (ROADMAP): the precise limit (293 s at 400 residues with
+one ONNX thread), GHCR visibility, the trusted-proxy log check, Sentry (no project yet). The
+frontend reads the bundle from the Hub at
 `export.publish.revision` and must work with the API asleep (cold start ~20 s).
 Update this section at the start of each phase.
 The per-phase task checklist lives in `docs/ROADMAP.md`; mark items `[x]` there as they land.

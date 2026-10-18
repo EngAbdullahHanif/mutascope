@@ -1,8 +1,8 @@
 # 0036 — Bounded live inference, and the deployed service's secrets
 
-- Status: accepted. The pool works live (never more than one pass), but it **did not make reads
-  fast on Cloud Run**: read p99 at 5 users is 8.5 s, not under 1 s (section 6). The cause of slow
-  reads is open (ADR 0035 item 1 stays open, reworded)
+- Status: accepted. The pool alone did not make reads fast on Cloud Run (section 6: read p99
+  8.5 s at 5 users). With **one ONNX thread** (section 7, deployed 2026-10-18) read p99 at 5 users
+  is 140 ms; precise jobs and scoring capacity under load pay for it
 - Date: 2026-10-18
 - Builds on: ADR 0031 (live scoring, jobs), ADR 0032 (limits, `/metrics`, Sentry), ADR 0033
   (the image, the 20-user container run), ADR 0034 (Cloud Run, `secrets`), ADR 0035 (items 1
@@ -254,6 +254,60 @@ What would show the cause, as a follow-up (not done here):
 
 Each is a setting or a small change, and each should be measured live before it is adopted.
 
+## 7. One ONNX thread on Cloud Run (experiment 1, kept)
+
+Section 6 found requests waiting for the event loop, not for a slot. With `onnx_threads = 2`, one
+pass keeps both vCPUs busy, and every Python step of every other request competes with it. PR #50
+set `MUTASCOPE_API_ONNX_THREADS: "1"` in `env`, leaving one vCPU to the event loop and the reads.
+Nothing else changed: same image (v0.4.0, redeployed from main), same pool (one pass at a time,
+10 s wait), same method (`live.py --load-users 5 20 --load-seconds 120 --seed 50`). Results are in
+`docs/live-measure-0036-t1-summary.json`. That redeploy also made the CORS origins live: both
+website origins get `Access-Control-Allow-Origin`, and another origin gets none.
+
+**Reads under load** (ms, p50 / p95 / p99):
+
+| | 5 users, 2 threads | 5 users, 1 thread | 20 users, 2 threads | 20 users, 1 thread |
+|---|---|---|---|---|
+| `GET /v1/proteins/{id}` | 120 / 4,200 / 8,500 | **69 / 120 / 140** | 3,200 / 24,000 / 29,000 | **72 / 510 / 560** |
+| `GET /v1/proteins/{id}/landscape` | 190 / 1,300 / 3,200 | **160 / 560 / 770** | 4,700 / 16,000 / 21,000 | 140 / 1,300 / 2,000 |
+| `GET /v1/benchmarks` | 110 / 4,900 / 4,900 | **97 / 130 / 150** | 2,100 / 24,000 / 29,000 | **100 / 410 / 520** |
+| `POST /v1/jobs` refused (429) | 120 / 5,200 / 5,200 | 65 / 79 / 100 | 400 / 27,000 / 28,000 | 54 / 71 / 330 |
+
+**Scoring:**
+
+| | 2 threads | 1 thread |
+|---|---|---|
+| 35M, 1,000 aa, one user, p95 | 2.48 s | 2.35 s |
+| 150M, 300 aa, one user, p95 | 1.91 s | 1.75 s |
+| 150M, 1,000 aa, one user, p95 | 7.22 s | 8.10 s |
+| precise job, 400 aa | 203 s | **293 s** |
+| `POST /v1/score`, 5 users, p50 / p95 / p99 | 2.6 / 6.7 / 8.6 s | 3.4 / 10 / 11 s |
+| `POST /v1/score`, 20 users: answered / 503 | 39 / 1 | 19 / 21 |
+| `POST /v1/score`, 20 users, slowest answer | 34 s | 14 s |
+| memory max, 20 users | 2,592 MiB (63%) | 2,614 MiB (64%) |
+
+**Decision: keep one thread** (the author's call on these numbers, 2026-10-18).
+- **Reads now meet the goal.** Read p99 at 5 users is 140 ms for a protein, 770 ms for a
+  landscape and 150 ms for benchmarks, all under 1 s.
+- **Every answer is prompt again.** A refused job now takes 330 ms at 20 users, not 28 s, and
+  the same holds for status polls, SSE events and errors.
+- **Single-sequence fast mode barely changed.** 35M at 1,000 aa is as fast as with two threads,
+  and 150M is up to 12% slower. A single-request pass gains little from the second thread here.
+  Batched passes do gain from it: a precise job takes 44% longer.
+- **The cost is capacity under heavy load.** At 20 users, half as many scores were answered,
+  and 21 got a 503 `scoring-busy` after 10 s. That is the pool's designed answer: quick to
+  read, with `Retry-After`.
+
+Not changed by this, and still open:
+- **The precise limit.** 400 residues now take 293 s, over ADR 0029's three-minute target. On
+  these numbers about 250–300 residues would fit. The limit changes only after a measurement at
+  the new value, as ADR 0031's rule asks.
+- **Profiling the loop and moving gzip / ETag off it** (experiments 2 and 3 of section 6). They
+  are no longer needed for the read goal, but they would still help under heavier load.
+
+One request in this run, during the 35M 300-residue cell, failed its TLS handshake and was
+counted as `no_answer`. It is a network event; it does not affect the percentiles.
+
 ## Consequences
 
 - Under load, a fast-mode request waits its turn for a slot, behind at most a precise batch
@@ -262,7 +316,11 @@ Each is a setting or a small change, and each should be measured live before it 
   handle that like a 429.
 - `inference_concurrency` and `inference_wait_seconds` are settings (`.env.example`), so a
   different instance shape is a config change, measured first.
-- Reads on Cloud Run are still slow under load (section 6). ADR 0035's item 1 stays open,
-  reworded: find and fix what makes the loop wait.
+- On Cloud Run, ONNX Runtime runs with one intra-op thread (`MUTASCOPE_API_ONNX_THREADS=1`,
+  section 7), and the other vCPU is the event loop's. Read p99 at 5 users is under 1 s. ADR
+  0035's item 1 is closed.
+- Precise jobs are slower (400 residues: 293 s), so the precise limit must be measured again and
+  probably lowered. Scoring capacity under heavy load is about half, and the excess gets a 503
+  within 10 s.
 - The API's secrets live only in Secret Manager. The repository names them but never holds them,
   and the one GitHub secret is still `RELEASE_PLEASE_TOKEN`.

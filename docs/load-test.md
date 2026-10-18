@@ -303,6 +303,12 @@ One forward pass at a time (`inference_concurrency = 1`). Details and every numb
   users reads, scores and even 429 answers took up to 28–34 s. The waiting is on the event loop
   (or the GIL), not on inference slots. Every long computation was also 19–26% slower than on
   v0.2.0 with one user (precise, 400 aa: 203 s against 163 s).
+- **Cloud Run, one ONNX thread** (`MUTASCOPE_API_ONNX_THREADS=1`, ADR 0036 section 7; summary
+  in `docs/live-measure-0036-t1-summary.json`): read p99 at 5 users is 140 ms (protein), 770 ms
+  (landscape) and 150 ms (benchmarks); at 20 users 560 / 2,000 / 520 ms, and refused requests
+  answer within 330 ms. Costs: the 400-residue precise job takes 293 s (203 s with two threads),
+  and at 20 users 19 scores were answered and 21 got a 503 after 10 s (two threads: 39 and 1).
+  Kept.
 - **Running `live.py` twice on a warm instance needs a new `--seed`.** The second run otherwise
   sends the same sequences, which are cache hits, and the script stops rather than time them.
   A connection closed without an answer is now counted (`no_answer`) instead of ending the run:

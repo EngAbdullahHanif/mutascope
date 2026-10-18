@@ -3303,3 +3303,75 @@ PR #46 (`5b254ea`), measurement and docs in this entry's PR. Decision record: AD
   - the precise limit (roadmap);
   - Sentry (no project; roadmap);
   - GHCR visibility and the trusted-proxy log check, still open from ADR 0035.
+
+---
+
+## Entry 38 — One ONNX thread on Cloud Run: reads fixed (Phase 5 Task 0, 2026-10-18)
+
+**Plain-language summary.** Entry 37 ended with a miss. Model runs now queue up one at a time,
+but simple page reads on the live API were still slow under load (the slowest 1% at 5 users took
+8.5 s). The numbers pointed at the server's main loop being starved of CPU: one model run with
+two threads kept both of Cloud Run's CPUs busy, so even a one-line "too many requests" answer
+could take 28 s. This task gave the model one thread instead of two, leaving the other CPU to
+the loop. It was a single line of deploy config (PR #50), measured live with the same script.
+Reads at 5 users now take 140 ms at the slowest 1%, about 60 times faster, and every other answer
+is prompt again. The price: a long precise job takes 44% longer, and under heavy load the server
+finishes about half as many scores, telling the rest "busy, retry in 10 s". The author chose to
+keep it. Decision record: ADR 0036, section 7.
+
+**The 3 most important design choices.**
+
+1. **Change one thing, measure with the same method.** Only `MUTASCOPE_API_ONNX_THREADS`
+   changed. The image (v0.4.0), the pool settings, the Locust mix, the user counts and the
+   durations stayed the same, and only the seed differed (a warm instance caches earlier
+   sequences). So the 2-thread and 1-thread tables in ADR 0036 compare like with like.
+2. **A config change, not code.** The thread count was already a setting, so the experiment was
+   a reviewed one-line PR and a redeploy of the same image. Reverting would be the same in
+   reverse.
+3. **Weigh both sides, and let the author decide.** The write-up gave the gain (read p99 at 5
+   users 8,500 → 140 ms; 429s at 20 users 28 s → 330 ms) next to the costs (precise job 203 →
+   293 s; at 20 users 19 scores answered and 21 refused, against 39 and 1). It recommended
+   keeping one thread and measuring a lower precise limit; the author agreed.
+
+**Problems encountered and how they were solved.**
+
+1. **The PR watcher reported a merge that had not happened.** *Found:* the watcher stopped while
+   PR #50 was still open. Its loop waited for the state to differ from `OPEN`, and a failed `gh`
+   call returns an empty string, which also differs. *Fix:* the loop now stops only on `MERGED`
+   or `CLOSED`. *Verified:* it then waited until the real merge (`e4e69ed`).
+2. **One request failed its TLS handshake** during the 35M 300-residue cell (`URLError
+   (TimeoutError('_ssl.c:999: The handshake operation timed out'))`). *Handled:* entry 37's
+   change counted it as `no_answer` (1) and the run went on. The script waited 120 s for it, so
+   the cell took about 2 minutes longer. It is a network event, not the service.
+3. **One thread barely slowed single passes, but slowed batched ones.** *Found:* comparing the
+   cells:
+
+   | | 2 threads | 1 thread |
+   |---|---|---|
+   | 35M, 1,000 aa, p95 | 2.48 s | 2.35 s |
+   | 150M, 300 aa, p95 | 1.91 s | 1.75 s |
+   | 150M, 1,000 aa, p95 | 7.22 s | 8.10 s |
+   | precise job, 400 aa | 203 s | 293 s |
+
+   *Not solved here:* 293 s exceeds the ~3 min precise target. The precise limit stays at 400
+   until a lower value is measured (roadmap), as ADR 0031's rule asks.
+
+**Supporting details.**
+
+- Live, one ONNX thread, v0.4.0 (`docs/live-measure-0036-t1-summary.json`; ms, p99):
+
+  | | Protein | Landscape | Benchmarks | Slowest score |
+  |---|---|---|---|---|
+  | 5 users | 140 | 770 | 150 | — |
+  | 20 users | 560 | 2,000 | 520 | 14,000 (was 34,000) |
+
+  - Memory: at most 2,614 MiB (64% of 4 GiB).
+  - Inference running at most 1, waiting at most 14 (10 s scrapes).
+- `/metrics`: 401 without the token, 200 with it. CORS: both website origins allowed, another
+  origin gets no header. `/health`: 0.4.0.
+- Settings deployed: `MUTASCOPE_API_ONNX_THREADS=1` (`conf/deploy/cloudrun.yaml`). The image's
+  default stays 2.
+- Loose ends:
+  - the precise limit (roadmap);
+  - profiling the loop and moving gzip / ETag off it, now optional;
+  - GHCR visibility, the trusted-proxy log check and Sentry, still open.
