@@ -57,6 +57,11 @@ class ScoreCache:
     def put(self, key: str, landscape: FloatArray) -> None:
         self._cache.set(key, np.ascontiguousarray(landscape, dtype=np.float32).tobytes())
 
+    def volume(self) -> int:
+        """Bytes the cache takes on disk. On Cloud Run the disk is memory, so this counts
+        against the instance's memory limit."""
+        return int(self._cache.volume())
+
     def __len__(self) -> int:
         return len(self._cache)
 

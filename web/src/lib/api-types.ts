@@ -142,7 +142,9 @@ export interface paths {
          * @description Fast mode: the wild-type marginal of ESM-2 35M or 150M (one forward pass).
          *
          *     Without ``mutations`` the full 19 x L landscape; with them, just their scores. An identical
-         *     request (model, revision, sequence) is answered from the cache.
+         *     request (model, revision, sequence) is answered from the cache. A new one waits for a
+         *     scoring slot (one forward pass at a time, precise-mode batches included); 503 with
+         *     ``Retry-After`` when none frees up in time.
          */
         post: operations["score_v1_score_post"];
         delete?: never;

@@ -10,6 +10,11 @@ adds its own:
   ``result`` = ``hit`` | ``miss``; the hit rate is ``hit / (hit + miss)``.
 - ``mutascope_job_queue_length`` (waiting jobs), ``mutascope_jobs_running`` and
   ``mutascope_sse_streams_open``, read when scraped.
+- ``mutascope_inference_running`` and ``mutascope_inference_waiting``: forward passes in the
+  inference pool's slots and calls waiting for one (:mod:`api.app.inference`).
+- ``mutascope_score_cache_bytes``: the live-score cache on disk, which on Cloud Run is memory.
+- ``process_resident_memory_bytes`` and the other ``process_*`` series (Linux only): with the
+  cache, what counts against the instance's memory limit.
 
 Each app has its own registry, so the tests can build many apps in one process.
 """
@@ -25,6 +30,7 @@ from prometheus_client import (
     Counter,
     Gauge,
     Histogram,
+    ProcessCollector,
     generate_latest,
 )
 from prometheus_fastapi_instrumentator import Instrumentator
@@ -69,6 +75,20 @@ class Metrics:
         self.streams_open = Gauge(
             "mutascope_sse_streams_open", "Open job event streams.", registry=self.registry
         )
+        self.inference_running = Gauge(
+            "mutascope_inference_running", "Live forward passes running.", registry=self.registry
+        )
+        self.inference_waiting = Gauge(
+            "mutascope_inference_waiting",
+            "Live forward passes waiting for a slot.",
+            registry=self.registry,
+        )
+        self.score_cache_bytes = Gauge(
+            "mutascope_score_cache_bytes",
+            "Size of the live-score cache on disk.",
+            registry=self.registry,
+        )
+        ProcessCollector(registry=self.registry)
 
     def cache_lookup(self, method: Method, hit: bool) -> None:
         self.cache.labels(method=method, result="hit" if hit else "miss").inc()
@@ -82,11 +102,17 @@ class Metrics:
         queue_length: Callable[[], float],
         running: Callable[[], float],
         streams: Callable[[], float],
+        inference_running: Callable[[], float],
+        inference_waiting: Callable[[], float],
+        score_cache_bytes: Callable[[], float],
     ) -> None:
         """Read the gauges from these callables when scraped (set once the state exists)."""
         self.queue_length.set_function(queue_length)
         self.jobs_running.set_function(running)
         self.streams_open.set_function(streams)
+        self.inference_running.set_function(inference_running)
+        self.inference_waiting.set_function(inference_waiting)
+        self.score_cache_bytes.set_function(score_cache_bytes)
 
     def instrument(self, app: FastAPI) -> None:
         """Add the request-latency middleware to ``app`` (before it starts)."""

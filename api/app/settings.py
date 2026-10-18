@@ -54,6 +54,12 @@ class Settings(BaseSettings):
     """Commit of the ONNX model repo (``onnx.publish.revision``)."""
     onnx_threads: int = Field(default=2, ge=1)
     """ONNX Runtime intra-op threads per model (the free Space has 2 vCPUs)."""
+    inference_concurrency: int = Field(default=1, ge=1)
+    """Forward passes (fast and precise) that run at once (:mod:`api.app.inference`). One run
+    already uses ``onnx_threads`` cores; more only share the same CPU and make reads wait."""
+    inference_wait_seconds: float = Field(default=10, gt=0)
+    """How long a fast-mode request waits for a free slot before it is a 503 with
+    ``Retry-After`` (this, rounded up). Precise-mode batches wait without a limit."""
     onnx_local_dir: Path | None = None
     """Read the ONNX files from an export directory instead of the Hub (tests)."""
 
@@ -119,6 +125,13 @@ class Settings(BaseSettings):
     """Sentry is enabled only when this is set."""
     sentry_environment: str = "development"
     sentry_traces_sample_rate: float = Field(default=0.0, ge=0, le=1)
+
+    @field_validator("metrics_token", "sentry_dsn", mode="before")
+    @classmethod
+    def _strip_secret(cls, value: Any) -> Any:
+        # A secret written with `echo` (Secret Manager, a .env file) ends in a newline; kept, it
+        # would make every bearer token a mismatch.
+        return value.strip() if isinstance(value, str) else value
 
     @field_validator("trusted_proxies", "cors_origins", mode="before")
     @classmethod
