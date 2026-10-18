@@ -3,7 +3,7 @@
 export PYTORCH_ENABLE_MPS_FALLBACK := 1
 
 .PHONY: setup lint fmt test test-slow pipeline pipeline-test pipeline-test-docker mlflow api web types
-.PHONY: api-image pipeline-image images test-container
+.PHONY: api-image pipeline-image images test-container web-check web-e2e
 
 setup:
 	uv sync --all-extras
@@ -78,6 +78,17 @@ api:
 web: require-web
 	cd web && pnpm dev
 
+# What CI's web job runs: generated validators up to date, lint (ESLint + Prettier), typecheck,
+# unit tests, then the build, which downloads the pinned bundle and verifies it (ADR 0037).
+web-check: require-web
+	cd web && pnpm schemas && git diff --exit-code src/lib/bundle/schemas.generated.ts
+	cd web && pnpm lint && pnpm typecheck && pnpm test && pnpm build
+
+# Playwright against the production build (`make web-check` first; `pnpm exec playwright install
+# chromium` once).
+web-e2e: require-web
+	cd web && pnpm test:e2e
+
 # API types for the frontend, from the OpenAPI schema; committed, and CI fails when they are stale.
 # Needs `pnpm install` in web/ once (pinned openapi-typescript).
 types: require-web
@@ -86,4 +97,4 @@ types: require-web
 
 .PHONY: require-web
 require-web:
-	@test -d web || { echo "web/ is not scaffolded yet (Phase 5)." >&2; exit 1; }
+	@test -d web || { echo "web/ is missing." >&2; exit 1; }
