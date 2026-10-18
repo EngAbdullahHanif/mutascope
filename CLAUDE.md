@@ -160,10 +160,10 @@ Run `make lint test` before declaring any task done.
   and `onnx check-scores` (the model gate's checks against our PyTorch score set). The
   quantization recipe (`onnx.quantization`) was fixed before any result. Never change it, or
   the thresholds, to make a check pass. The int8 files fail `check-scores` on 3 + 1 assays and
-  are rejected. The API serves fp32 ONNX (`esm2_*_onnx_fp32`, Hub `82e1528`). If 150M's
-  fast-mode p95 on the deployed service for 1,000 residues exceeds 2 s, the live default becomes 35M fp32.
-  Precise mode is a background job with 35M only, with a length limit of about 3 min on the
-  deployed service (ADR 0029, section 6).
+  are rejected. The API serves fp32 ONNX (`esm2_*_onnx_fp32`, Hub `82e1528`). 150M's
+  fast-mode p95 at 1,000 residues on the deployed service was 5.72 s (> 2 s), so the live default
+  is 35M fp32 (ADR 0034, section 6). Precise mode is a background job with 35M only, limited to
+  about 3 min: 400 residues (163 s measured; 600 took 406 s).
 
 ## Evaluation rules (non-negotiable)
 
@@ -301,8 +301,8 @@ Run `make lint test` before declaring any task done.
 - Input validation: only canonical 20 amino acids, length 1–1022, max 50 mutations per `score` request.
 - Live scoring (ADR 0031): `POST /v1/score` is fast mode (wild-type marginal, `esm2_35m` |
   `esm2_150m`, default `score_default_model`); `POST /v1/jobs` is precise mode (masked marginal,
-  35M only, at most `precise_max_length` residues: 600, provisional until the deployed service
-  is measured). One job runs at a time (`api.app.jobs`, in-process worker); `job_queue_size` wait,
+  35M only, at most `precise_max_length` residues: 400 on the deployed service, measured, ADR 0034;
+  the image's default is still 600). One job runs at a time (`api.app.jobs`, in-process worker); `job_queue_size` wait,
   then 429; finished jobs expire after `job_ttl_seconds`. SSE events are a replayable log per
   job: `queued`, `running`, one `progress` per forward batch (its rows), then `succeeded` |
   `failed` | `cancelled`; `id` = index, `Last-Event-ID` resumes. Every live response is
