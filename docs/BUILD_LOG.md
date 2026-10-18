@@ -2784,3 +2784,132 @@ each limit, no server errors at 5 and 20 users, and memory levelling off. Decisi
   limits are provisional until the Space is measured (Task 7).
 - Loose end: IPv6 clients are keyed by full address, so one /64 is many clients (threat note,
   "What is left").
+
+---
+
+## Entry 33 — Docker images: a torch-free API image and a pipeline image (Phase 4 Task 6, 2026-10-18)
+
+**Plain-language summary.** The project now ships as two container images.
+
+- **The API image** is what the Hugging Face Space will run. It contains the API, the two exact
+  (fp32) ONNX models and the website bundle, but not PyTorch. The models and the bundle are
+  downloaded while the image is built, at the pinned commits, and every file is checked against
+  the published checksum list. The running container then never needs the internet. It runs as
+  user 1000, as the Space requires, can write only to its cache and lock file, and runs as one
+  process. Its last build step starts the API inside the image and scores a protein with both
+  models, so an image that cannot serve is never produced.
+- **The pipeline image** has CPU-only PyTorch and the pinned Foldseek. It runs the whole
+  Nextflow smoke test, through the Phase 3 ridge model, with the data and outputs staying on
+  the host.
+
+Both were built for linux/amd64 (the Space) and linux/arm64 (the Mac). Tests ran the API image
+under the Space's CPU limit: health, readiness, a fast score and a precise job, the Task 5 load
+test, and a 20-minute memory soak. Memory levels off, and the rate limits hold exactly. But at
+20 users the 2 CPUs saturate and fast mode becomes slow, which Task 7 must address. Decisions in
+ADR 0033; results in `docs/load-test.md`, section 5.
+
+**The 3 most important design choices.**
+
+1. **Split the package's dependencies instead of filtering the install.** torch and
+   transformers were core dependencies, so any install of `mutascope` pulled them in. The base
+   now holds only what the API imports (measured from `sys.modules`: httpx, huggingface-hub,
+   hydra-core, numpy, pydantic, structlog). The pipeline's stack is the `pipeline` extra. The
+   image installs from the lock with `--extra api --extra onnx`, and there is no list of
+   packages to skip that could go stale. *Evidence:* `uv lock` changed metadata only (no
+   version moved). The serving set is 54 packages with no torch, transformers or pandas. The
+   builder step fails if `import torch` works. `make setup` and `make test` are unchanged.
+2. **Bake the pinned files into the image, verified, and run offline.** `api.app.fetch`
+   downloads the bundle and the fp32 graphs and tokenizers at the pinned commits and checks
+   each file against that commit's `SHA256SUMS`. A file the list does not name fails like a
+   wrong digest. The runtime sets `HF_HUB_OFFLINE=1`. A cold start on the Space then neither
+   downloads 760 MB nor depends on the Hub, and every check happens once, before anything
+   ships. *Evidence:* 223 bundle files and 4 ONNX files verified on both architectures. Unit
+   tests reject a changed and an unlisted file and confirm int8 is never fetched. The container
+   tests show the image starting offline.
+3. **One self-check, run by the test suite and by the image build.** `python -m
+   api.app.selfcheck` starts the app in-process, requests `/ready` and a landscape, scores with
+   both models, and fails if torch or transformers was loaded. `test_no_torch.py` runs it in a
+   fresh interpreter. The image runs it as its last build step, as UID 1000, offline, on the
+   real write paths. *Evidence:* it passes in both places. Problem 1 shows why it must run on
+   the real write paths.
+
+**Problems encountered and how they were solved.**
+
+1. **The image's user could not create its lock file.** *Found:* the first container test run.
+   The container exited at startup with `PermissionError: [Errno 13] Permission denied:
+   '/home/user/.cache/mutascope/api.lock'`. The build had passed, because its self-check used
+   a scratch directory. *Cause:* `install -d -o user` gives only the last directory of the path
+   to the user. `/home/user/.cache` and `/home/user/.cache/mutascope` stayed root-owned.
+   *Fix:* create each directory on the path owned by the user, and run the self-check on the
+   real write paths, then empty them in the same layer. *Verified:* all 10 container checks
+   pass, including that UID 1000 can write its cache and lock and cannot write code, venv or
+   weights. A regression of this kind now fails the build itself.
+2. **biotraj would not install on linux/arm64.** *Found:* the first arm64 pipeline-image
+   build: `error: [Errno 2] No such file or directory: 'gcc'` while building `biotraj` 1.2.2
+   (biotite's dependency). *Cause:* biotraj publishes Linux wheels for x86_64 only, so uv builds
+   it from source on arm64. *Fix:* `build-essential` in the builder stage only; the runtime
+   stage has no compiler. *Verified:* the arm64 image builds, and its last step checks CPU
+   torch, the Foldseek version and the CLI.
+3. **`-profile docker` broke on this repository's path.** *Found:* the first `docker,test`
+   run. `SCORE_ZERO_SHOT` failed with `PermissionError at /Users/abdullahhanif/Documents/Developmet
+   when downloading facebook/esm2_t6_8M_UR50D`. *Cause:* `HF_HOME` was set in the profile's
+   `env` scope. Nextflow hands that scope to the container through an unquoted `eval
+   $(nxf_container_env)` in `.command.run`, which split the value at the space in
+   "Developmet Projects", so the cache path was cut short. Earlier, `file()` had also failed
+   inside the config closure ("Unknown method invocation `file`"). *Fix:* pass `HF_HOME` with
+   a quoted `-e` in `process.containerOptions`, next to the mounts, and use the params' absolute
+   paths as they are. *Verified:* all 20 tasks pass in 62 s.
+4. **Trivy flagged two Python packages in the images.** *Found:* the first scan: HIGH
+   CVE-2026-23949 (`jaraco.context` 5.3.0) and CVE-2026-24049 (`wheel` 0.45.1) in both images.
+   *Cause:* they are copies vendored inside the base image's own setuptools, which the
+   servers never use (they run from `/opt/venv`, which does not see the system site-packages).
+   *Fix:* uninstall the base image's pip, setuptools and wheel in both runtime stages.
+   *Verified:* the rescan finds no Python package. 8 HIGH CVEs remain, all in Debian 13
+   packages with no fixed version, and there is no critical.
+5. **The amd64 pipeline build failed once.** *Found:* under emulation on the Mac, `uv sync`
+   ended after 7,326 s with `Failed to download duckdb==1.5.6 … error reading a body from
+   connection`. *Cause:* a stalled download, not the Dockerfile. *Fix:* none needed; the
+   identical retry passed. *Verified:* the amd64 image runs on x86_64 with the pinned Foldseek
+   and torch `2.14.1+cpu`.
+
+**Supporting details.**
+- *Sizes* (unpacked / compressed): API arm64 1,138 MiB / 597 MB, amd64 1,124 MiB / 600 MB
+  (target about 1.5 GB; 762 MB is the baked-in Hub cache, 276 MB the venv). Pipeline arm64
+  2,165 MiB / 642 MB, amd64 2,256 MiB / 687 MB.
+- *Docker against native pipeline,* same 2 assays:
+  - variants, folds, structure features and 3Di are value-identical, so Linux Foldseek gives
+    the macOS build's tokens;
+  - zero-shot scores differ by at most 2.2e-5, CPU against MPS;
+  - B2L11's ridge fit differs by 40 in an intercept of 1.16 × 10⁷ (DMS scores on a 2 × 10⁷
+    scale), a relative 3.4e-6, which is not a bug.
+
+  `train check-release` stays a same-machine check.
+- *Container run* (local container, not the Space; `--cpus=2 --memory=16g`; the Docker VM had
+  7.75 GiB, so that was the real ceiling):
+  - every limit accepted exactly its value;
+  - 0 5xx and 0 failures at 5 users (418 requests), at 20 users (1,921) and in the soak
+    (3,141);
+  - soak memory flat at 2,472–2,503 MB from minute 7 to minute 20; 20 users levelled off at
+    about 3.19 GB;
+  - at 20 users fast mode's median was 5.6 s and its p95 46 s, against 72 / 520 ms for the
+    unconstrained process in Task 5.
+- *Trivy 0.76.0:* remaining HIGH CVEs CVE-2026-76642, -78408, -78409, -78410 (util-linux),
+  CVE-2025-69720 (ncurses), CVE-2026-16742 (systemd libraries), CVE-2026-54369 (libacl1),
+  CVE-2026-9538 (perl-base, fix deferred). No critical.
+- *New:*
+  - files: `api/Dockerfile`, `pipeline/Dockerfile`, `.dockerignore`, `.env.example`,
+    `docker-compose.yml`, `api/app/{fetch,selfcheck,healthcheck}.py`, `api/tests/test_fetch.py`
+    (5) and `api/tests/test_container.py` (10, marker `container`), plus tests for
+    `.env.example` and the health probe;
+  - Make targets `api-image`, `pipeline-image`, `images`, `test-container`,
+    `pipeline-test-docker`;
+  - `tools/loadtest/run.py --image` and a `soak5` scenario.
+- *Dependencies:* no new package. numpy is now a direct dependency (it was transitive at the
+  same version). The `pipeline` extra holds what was core.
+- *Tests:* `make lint` clean; `make test` 770 + 15 LightGBM passed, 1 skipped (Foldseek);
+  `make test-container` 10 passed.
+- *Loose ends:*
+  - Fast-mode concurrency on 2 CPUs and the limits: Task 7, measured on the Space.
+  - CI still runs the smoke test natively. Building the images in CI, `docker,test` there and
+    the GHCR push are the CI task.
+  - The memory soak did not run under a real 16 GB limit.
