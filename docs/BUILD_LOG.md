@@ -2913,3 +2913,114 @@ ADR 0033; results in `docs/load-test.md`, section 5.
   - CI still runs the smoke test natively. Building the images in CI, `docker,test` there and
     the GHCR push are the CI task.
   - The memory soak did not run under a real 16 GB limit.
+
+---
+
+## Entry 34 — CI/CD: required checks, release-please and deployment to Cloud Run (Phase 4 Task 7, 2026-10-18)
+
+**Plain-language summary.** Every pull request now runs five checks: lint and type-check, the
+tests with coverage, the generated API types, the Nextflow smoke test inside the pipeline image,
+and a build of the API image followed by its container tests. Merging into main will require all
+five to pass and the branch to be up to date (the rule is set in GitHub by the author). Versions
+are managed by release-please: it keeps a release PR open with the next version and the
+changelog, and merging it creates a tag. A tag builds the API image for linux/amd64 once, pushes
+it to Google's Artifact Registry and to GitHub's registry (GHCR), and deploys it to Google Cloud
+Run. The workflow then calls the public URL and fails unless it reports the new version and
+`/ready` passes. GitHub holds no Google key: Google trusts GitHub's identity token for this one
+workflow. Dependabot opens weekly update PRs for Python packages, GitHub Actions and the Docker
+base images. The plan was a Hugging Face Docker Space, but those now need a paid plan (problem
+4). Decisions in ADR 0034. The first deploy and the live latency measurement wait for the
+author's one-time Google Cloud setup.
+
+**The 3 most important design choices.**
+
+1. **The service is a file in the repository, applied whole.** `conf/deploy/cloudrun.yaml` is
+   rendered into the complete Cloud Run service (2 vCPUs, 4 GiB, one instance, probes,
+   environment, image) and applied with `gcloud run services replace`. Nothing is set in the
+   console, and a hand-made change is undone by the next deploy. ADR 0031's 2-second fallback,
+   the measured `trusted_proxies` and the precise-mode limit therefore become reviewed one-line
+   changes, applied by a redeploy without a rebuild. *Evidence:* `api/tests/test_deploy.py`
+   checks the rendered service: image by digest from Artifact Registry, `maxScale` 1, 2 CPUs and
+   4 GiB, the startup probe on `/ready`, the runtime account, and an environment that is exactly
+   the config's.
+2. **Deployed means the tagged version is serving and ready, by digest.** Cloud Run runs the
+   image by digest, so the revision is the bytes CI built and tested. Its startup probe on
+   `/ready` keeps traffic on the previous revision until the new one has loaded the models. Then
+   `wait` checks from outside that `/health` reports the tag's version and `/ready` is 200. The
+   release first checks that the tag equals the package version, so a mismatched tag fails
+   before the build. *Evidence:* the tests script a cold start (no answer), the old version, then
+   not ready, and `wait` passes only on the last poll. The timeout case fails.
+3. **Keyless deployment, scoped to one workflow.** Workload Identity Federation lets GitHub's
+   OIDC token act as the deployer service account only when the repository is this one, the
+   workflow is `release.yml` and the ref is a `v` tag or main. No service-account key exists to
+   leak or rotate. A PR or a fork cannot deploy. The deployer can manage Cloud Run, write to one
+   Artifact Registry repository and run services as the runtime account, which has no roles.
+   *Evidence:* `tools/deploy/setup-gcp.sh` (shellcheck clean) creates exactly these bindings and
+   the provider's attribute condition.
+
+**Problems encountered and how they were solved.**
+
+1. **main had a protection rule that required nothing.** *Found:* reading the repository's
+   rules through the API for this task. The active ruleset "protect main" has a
+   required-status-checks rule whose list is empty (`"required_status_checks": []`), and
+   `strict_required_status_checks_policy` is `false`. A PR could therefore merge with red checks
+   or with checks that ran against an old main, which is how main went red twice in Phase 3.
+   *Fix:* CI's job names are now stable check names, and the PR gives the exact steps to add the
+   five checks and turn on "up to date" in that ruleset. *Verified:* not yet. The rule has to be
+   set by the author, and the check names appear in GitHub's picker only after this PR's CI has
+   run once.
+2. **12 of the 16 action references in CI were moving major tags.** *Found:* reviewing
+   `ci.yml` against CLAUDE.md's pinning rule: `actions/checkout@v7`, `actions/cache@v6`,
+   `actions/upload-artifact@v7`, `pnpm/action-setup@v6`, `actions/setup-node@v7` and
+   `nf-core/setup-nextflow@v3`. *Fix:* each is pinned to its latest exact release, looked up on
+   the action's releases (`checkout@v7.0.1`, `cache@v6.1.0`, `upload-artifact@v7.0.2`,
+   `action-setup@v6.1.0`, `setup-node@v7.1.0`, `setup-nextflow@v3.0.1`), as are the new Docker
+   and release-please actions. Dependabot moves them from now on. *Verified:* no `uses:` line in
+   the three workflows ends in a bare major version.
+3. **release-please cannot bump `uv.lock`, and a stale lock fails every CI job.** *Found:*
+   uv records the project's own version in `uv.lock`, and CI installs with
+   `uv sync --locked`, which refuses a lock that does not match `pyproject.toml`. release-please
+   has no uv support (googleapis/release-please#2561). A release PR that bumped only
+   `pyproject.toml` would therefore be red and could never merge. *Fix:* release-please's
+   generic TOML updater with `$.package[?(@.name.value=='mutascope')].version`. The `.value` is
+   needed because its TOML parser wraps each string in an object (#2455). *Verified:* locally,
+   with release-please 17.11.2's own updaters on this repository's files: exactly one line of
+   `uv.lock` changes (line 1476, mutascope's `0.1.0` → `0.2.0`), `pyproject.toml` changes one
+   line, and `uv lock --check` passes on the bumped pair.
+4. **The planned host became paid.** *Found:* creating the Hugging Face Space. The form allows
+   only Static Spaces on a free account ("Gradio and Docker Spaces require a paid plan"). Every
+   ADR since 0029 assumed a free Docker Space with 2 vCPUs. *Alternatives checked against the
+   measured memory:* the API container uses 1,227 MB right after startup, 2,080 MB at the
+   end of the 5-user run, and peaks at 3,208 MB at 20 users
+   (`docs/load-test-container-summary.json`). Render's free instance (512 MB, 0.1 CPU) cannot
+   load the models. *Fix:* Google Cloud Run with 2 vCPUs and 4 GiB, at most one instance, scaled
+   to zero, inside the free tier. Only the deploy changed: the image, CI, release-please and
+   Dependabot are as they were, and the image needed no change. *Verified:* the rendered
+   service is checked by unit tests and the workflow by actionlint. The first real deploy is
+   pending (it needs the author's Google Cloud project).
+
+**Supporting details.**
+
+- **CI jobs** (ADR 0034, section 1). The smoke test moved from the native environment to
+  `-profile docker,test` in an image built in the job. CI no longer installs Foldseek; the
+  image's checksum-verified build is the one tested. Coverage now includes `api/`.
+- **Author's setup:** a Google Cloud project with billing and a budget alert,
+  `tools/deploy/setup-gcp.sh` once, its project id and number in `conf/deploy/cloudrun.yaml`,
+  and one GitHub secret, `RELEASE_PLEASE_TOKEN` (fine-grained PAT for this repository:
+  Contents, Pull requests and Issues read and write). release-please needs its own token because
+  GitHub starts no workflow for events made with `GITHUB_TOKEN`: its PR would get no checks and
+  its tag would start no release.
+- **Cloud Run trade-offs** (ADR 0034, section 4). Request-based billing gives an instance CPU
+  only during a request, so a precise job advances while its SSE stream is open (the website's
+  way). Scale-to-zero means a cold start for the first visitor and no score cache across it.
+- **Dependabot** uses the `uv` ecosystem, not `pip`, so `uv.lock` is updated too. The
+  Dockerfiles' `FROM` lines are now literal (tag and digest) instead of `ARG`s, so that
+  Dependabot can read them. The images are unchanged. Python is held to 3.11 patches.
+- **Live measurement tool:** `tools/loadtest/live.py` (ADR 0034, section 6). It was dry-run
+  against a local server (the numbers there are M4 Pro numbers and are not reported), and every
+  step completed: cold start, baseline, four latency cells of cache misses, a precise job
+  followed on its stream, the 5-user Locust run, the decision.
+- **Loose ends:** the first release, the deploy, the live numbers and ADR 0031's decision;
+  `trusted_proxies` from the API's access lines in Cloud Logging; ADR 0033's 20-user CPU
+  saturation is still open (bounding concurrent forward passes), to be judged on the live
+  numbers.
