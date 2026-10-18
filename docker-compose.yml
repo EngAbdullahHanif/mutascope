@@ -1,0 +1,29 @@
+# Local run of the API image (ADR 0033): `docker compose up --build`, then http://localhost:7860/docs.
+#
+# Settings come from .env (copy .env.example; every MUTASCOPE_API_* variable is listed there),
+# never from this file, so no secret is committed. The limits are the free Space's: 2 CPUs and
+# 16 GB. The score cache is a named volume, so it survives a restart, as on a Space with
+# persistent storage; the bundle and the models are in the image, fetched at build time.
+name: mutascope
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    image: mutascope-api:dev
+    ports:
+      - "127.0.0.1:7860:7860"
+    env_file:
+      - path: .env
+        required: false
+    cpus: 2
+    mem_limit: 16g
+    volumes:
+      - score-cache:/home/user/.cache/mutascope/scores
+    # The image's HEALTHCHECK probes /health; the one process stops cleanly on SIGTERM.
+    stop_signal: SIGTERM
+    stop_grace_period: 30s
+
+volumes:
+  score-cache:

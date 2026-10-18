@@ -246,8 +246,13 @@ Goal: a tested, observable service deployed automatically.
       over all 11 operations)
 
 ### Docker and CI/CD
-- [ ] Multi-stage `python:3.11-slim`, uv, CPU-only wheels, non-root, HEALTHCHECK, port 7860, pinned HF revisions
-- [ ] Build linux/amd64 (buildx or CI)
+- [x] Multi-stage `python:3.11-slim`, uv, CPU-only wheels, non-root, HEALTHCHECK, port 7860, pinned HF revisions
+      (ADR 0033): API image without torch (`pipeline` extra split out), bundle and fp32 ONNX
+      baked in at the pinned commits and checksum-verified, offline, UID 1000, one process,
+      self-check as the last build step; pipeline image with CPU torch and Foldseek;
+      `-profile docker,test` runs all 20 tasks; `.env.example`, `docker-compose.yml`
+- [x] Build linux/amd64 (buildx or CI): both images built with buildx for linux/amd64 and
+      linux/arm64 (API 1,124 / 1,138 MiB unpacked, 600 / 597 MB compressed); CI builds and pushes in the CI task
 - [ ] CI: lint → typecheck → tests + coverage → Nextflow `docker,test` smoke → push to GHCR → deploy to HF Space on tags
 - [ ] Dependabot, release-please
 - [x] Phase 3 in Nextflow (ADR 0027): `FOLDS → EMBED → FEATURES_BUILD → TRAIN_CV (ridge seq_struct)
