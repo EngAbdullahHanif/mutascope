@@ -83,8 +83,15 @@ Playwright 1.64, all pinned exactly (`.npmrc` `save-exact`). Two packages are he
 latest major on purpose. TypeScript stays at 5.9.3 because openapi-typescript 7.13 (`make types`)
 requires `^5`. ESLint stays at 9.39.5 because eslint-config-next 16.4's plugins (`react`,
 `import`, `jsx-a11y`) do not support ESLint 10. Dependabot covers `/web` and does not propose those
-two majors. Scripts run as TypeScript directly on Node 26 (type stripping; erasable syntax only),
+two majors. Scripts run as TypeScript directly on Node 24 (type stripping; erasable syntax only),
 with no tsx or ts-node.
+
+Node 24 and pnpm 12 on Vercel. Vercel offers Node 24 as its newest major, so `engines` is `24.x`
+and CI's `web` job uses Node 24 too. Vercel picks a pnpm version from the lockfile's
+`lockfileVersion`, and pnpm 12 still writes `9.0` there (in a two-document file older pnpm does
+not read). `web/vercel.json` therefore installs with `corepack enable pnpm && pnpm install
+--frozen-lockfile`, so Corepack (bundled with Node 24) runs the `packageManager` pin, pnpm
+12.10.1, checked against its registry signature.
 
 CI gets a sixth job, `web (lint, typecheck, unit tests, build)`. To make it a required check, it
 must be added to the `main` ruleset (ADR 0034).
