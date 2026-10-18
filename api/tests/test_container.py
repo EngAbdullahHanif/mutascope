@@ -183,6 +183,12 @@ def test_metrics_need_the_token(container: Container) -> None:
 
 
 def test_no_sequence_in_the_container_logs(container: Container) -> None:
+    # Its own request: tests run in random order (pytest-randomly), so another test's score
+    # may not have happened yet.
+    reply = httpx.post(
+        f"{container.base}/v1/score", json={"sequence": UBIQUITIN, "model": "esm2_35m"}, timeout=30
+    )
+    assert reply.status_code == 200
     logs = docker("logs", container.name)
     output = logs.stdout + logs.stderr
     assert UBIQUITIN[:30] not in output

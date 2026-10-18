@@ -7,7 +7,8 @@
 # version tag or on main, act as the deployer service account (tools/deploy/setup-gcp.sh).
 #
 # Run by hand (workflow_dispatch, from main) to redeploy an image that is already in Artifact
-# Registry, e.g. after a change to conf/deploy/cloudrun.yaml: nothing is rebuilt.
+# Registry with main's conf/deploy/cloudrun.yaml, e.g. after a change to its `env`: nothing is
+# rebuilt.
 name: Release
 
 on:
@@ -107,9 +108,11 @@ jobs:
       name: cloud-run
       url: ${{ steps.url.outputs.url }}
     steps:
+      # The commit the run is for: the tag's on a tag, main's on a manual redeploy. The service
+      # config comes from it, the image from the tag (by digest), so a redeploy applies the
+      # config on main to an existing release. Checking out the tag here would deploy the
+      # release's old config.
       - uses: actions/checkout@v7.0.1
-        with:
-          ref: ${{ env.TAG }}
       - uses: astral-sh/setup-uv@v10.3.0
         with:
           version: ${{ env.UV_VERSION }}

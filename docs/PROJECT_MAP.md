@@ -794,3 +794,248 @@ unmeasured positions. There, LightGBM is below ridge and the MLP ties or is belo
 better only under random (+0.024, +0.026). The 217-assay choice is stored per assay in
 `results/supervised/final_manifest.parquet` (`default_model`, with the reason). Details: ADR
 0025 and 0026.
+
+## Step 28 — The website bundle (Phase 4 Task 1, 2026-10-17, `4ab2b1d`–`2dc59c1`)
+
+- **What this step did:** wrote one gzip JSON file per assay (217) with everything a page shows,
+  a manifest and `benchmarks.json`, in a fixed-point encoding proven to move no reported number
+  past the fidelity thresholds; published it as `bundle-v1.0.0` (ADR 0028).
+- **Files created or modified:**
+
+| Path | What it does | Why it exists |
+|---|---|---|
+| `src/mutascope/export/format.py`, `export/schemas.py` | Pydantic models of the bundle (`SCHEMA_VERSION`), fixed-point grids; JSON Schema export | One definition of the format for the writer, the API and the frontend |
+| `src/mutascope/export/assemble.py`, `export/benchmarks.py`, `export/bundle.py` | Builds one assay's file from the pinned Hub inputs and the cache; the benchmark tables; writes the bundle, manifest and `SHA256SUMS` | The website works from static files with the API asleep |
+| `src/mutascope/export/fidelity.py` | Decodes the written bytes and recomputes Spearman and coverage per assay and aggregated | Proof that rounding changed nothing reported |
+| `src/mutascope/export/hub.py`, `src/mutascope/cli.py` | Pinned-revision reads with checksums; `export bundle`, `push`, `schema` | Pipeline steps are CLI commands |
+| `conf/export/default.yaml`, `conf/config.yaml` | Decimals, fidelity thresholds, `budget.protein_bytes`, `publish.revision` | No hard-coded settings; readers use the bundle by commit |
+| `docs/schema/bundle/*.schema.json`, `docs/BUNDLE_CARD.md` | Versioned JSON Schemas; the bundle's card | The frontend's contract |
+| `results/export/bundle_{sizes,fidelity}.parquet` | Size per file; fidelity table | Committed evidence |
+| `tests/export/test_bundle*.py`, `tests/export/test_hub.py` | Synthetic bundles, encoding, fidelity failures, pinned inputs | Tests alongside the code |
+| `pyproject.toml`, `uv.lock` | pydantic as a direct dependency | It is imported directly |
+| `docs/adr/0028-website-bundle.md`, `CLAUDE.md`, `docs/ROADMAP.md`, `docs/BUILD_LOG.md` | Decisions; export rules; item ticked; entry 28 | Decision record and docs |
+
+- **CLI commands added:** `mutascope export bundle`, `export push`, `export schema`.
+- **Outputs:** `build/bundle/` (224 files, 29.7 MB; not in git), published to the dataset repo's
+  `bundle/` at `3ae76721…`.
+
+## Step 29 — ESM-2 on ONNX Runtime (Phase 4 Task 2, 2026-10-17, `519fc89`–`9a5a3c0`)
+
+- **What this step did:** exported ESM-2 35M and 150M to ONNX (fp32 and int8), added a scorer that
+  runs them without torch on a core shared with the PyTorch scorer, checked both precisions
+  against PyTorch, rejected int8 and published the files (ADR 0029).
+- **Files created or modified:**
+
+| Path | What it does | Why it exists |
+|---|---|---|
+| `src/mutascope/scoring/marginals.py`, `scoring/masked_lm.py`, `scoring/base.py` | Cache, windows and batching in one torch-free core used by both runtimes | One copy of the scoring logic |
+| `src/mutascope/scoring/onnx_esm2.py` | `OnnxEsm2Scorer` (`scorer: esm2_onnx`), `tokenizer.json` tokenizer | Live scoring on CPU without torch |
+| `src/mutascope/export/onnx.py`, `tools/onnx-export/` | Export through optimum in its own env (transformers < 4.58), quantization, publish | optimum cannot share the main env |
+| `src/mutascope/eval/onnx.py`, `eval/schemas.py`, `src/mutascope/cli.py` | `onnx check-parity`, `check-scores`, `latency`; their tables | The checks that decide what is served |
+| `conf/onnx/default.yaml`, `conf/model/esm2_{35m,150m}_{onnx_fp32,int8}.yaml`, `conf/eval/proteingym.yaml` | Recipe, thresholds, Hub pin; model configs; int8 comparisons | Fixed before any result |
+| `results/onnx/*.parquet`, `results/zero_shot_esm2_*_{onnx_fp32,int8}_wt_single*.parquet`, `results/data/zero_shot_run_*`, `results/zero_shot/comparisons.parquet` | Logit, landscape and score parity, latency, benchmarks, paired comparisons | Committed evidence |
+| `tests/scoring/test_onnx_esm2.py`, `tests/eval/test_onnx.py`, `tests/export/test_onnx.py` | Scorer on tiny graphs, fresh-interpreter no-torch test, checks, export | Tests alongside the code |
+| `docs/adr/0029-onnx-esm2.md`, `docs/ONNX_MODEL_CARD.md`, `CLAUDE.md`, `docs/ROADMAP.md`, `docs/BUILD_LOG.md` | Decision (fp32 served, int8 rejected); card; rules; entry 29 | Decision record and docs |
+
+- **CLI commands added:** `mutascope onnx export`, `check-parity`, `check-scores`, `latency`,
+  `publish`.
+- **Outputs:** `build/onnx/` (not in git); Hub model repo `engAbdullahHanif/mutascope-esm2-onnx`
+  at `82e1528` (`onnx.publish.revision`).
+
+## Step 30 — The API core (Phase 4 Task 3, 2026-10-17, `0d0108b`–`c2d8dff`)
+
+- **What this step did:** FastAPI app that loads the pinned bundle (checksums, schema version)
+  and the fp32 scorers at startup, serves the read-only `/v1` routes with problem-details errors,
+  ETags and gzip, and generates the frontend's types (ADR 0030).
+- **Files created or modified:**
+
+| Path | What it does | Why it exists |
+|---|---|---|
+| `api/app/main.py`, `api/app/settings.py` | App and `lifespan`; settings whose defaults are the `conf/` pins | Load once, refuse to start on bad inputs |
+| `api/app/bundle.py`, `api/app/scorers.py` | Bundle loading and checks; fp32-only ONNX scorers | The API reads only the bundle, never `data/` |
+| `api/app/routes.py`, `api/app/schemas.py` | `/v1/proteins`, `/{id}`, `/{id}/landscape`, `/benchmarks`, `/health`, `/ready` | What the website reads |
+| `api/app/problems.py`, `api/app/caching.py` | RFC 9457 errors; weak ETags, `Cache-Control` | One error shape; cheap revalidation |
+| `api/tests/` (`conftest.py`, `test_{bundle,errors,golden,no_torch,routes,settings}.py`) | Golden landscapes vs `bundle-v1.0.0`, errors, no torch, pins equal `conf/` | Tests alongside the code |
+| `web/package.json`, `web/pnpm-lock.yaml`, `web/src/lib/api-types.ts`, `Makefile`, `.github/workflows/ci.yml`, `.pre-commit-config.yaml` | Pinned openapi-typescript, `make types`, CI fails on stale types | Types only from the schema |
+| `docs/adr/0030-api-core.md`, `CLAUDE.md`, `docs/ROADMAP.md`, `docs/BUILD_LOG.md` | Decisions; API rules; items ticked; entry 30 | Decision record and docs |
+
+- **CLI commands added:** none (`make types` runs the generator).
+- **Outputs:** `web/src/lib/api-types.ts`.
+
+## Step 31 — Live scoring (Phase 4 Task 4, 2026-10-17, `915ce08`–`6d8b23f`)
+
+- **What this step did:** `POST /v1/score` (fast mode), precise-mode jobs with an SSE event log,
+  cancellation and expiry, the live-score cache, and agreement with our PyTorch landscapes
+  (ADR 0031).
+- **Files created or modified:**
+
+| Path | What it does | Why it exists |
+|---|---|---|
+| `api/app/live.py`, `api/app/live_routes.py` | Validation through `parse_mutation`, fast-mode scoring, the job routes and stream | Score any sequence, not only the 217 |
+| `api/app/jobs.py` | One in-process worker, queue, replayable events, cancel, TTL | Precise mode on 2 CPUs |
+| `api/app/score_cache.py` | diskcache keyed by model file, revision, method, sequence hash | Identical requests are free |
+| `api/app/{main,problems,routes,schemas,scorers,settings}.py` | Wiring, new problem types and settings | |
+| `api/tests/test_live.py`, `test_live_golden.py`, `make_live_golden.py`, `golden/live_TCRG1_*.json`, `test_schemathesis.py` | Validation, cache, queue, SSE order; agreement ≥ 0.99; fuzzing on a real server | Tests alongside the code |
+| `pyproject.toml`, `uv.lock`, `web/src/lib/api-types.ts` | diskcache, schemathesis; regenerated types | |
+| `docs/adr/0031-live-scoring.md`, `CLAUDE.md`, `docs/ROADMAP.md`, `docs/BUILD_LOG.md` | Decisions (2-second rule, provisional limit); rules; entry 31 | Decision record and docs |
+
+- **CLI commands added:** none (`python -m api.tests.make_live_golden` writes the golden file).
+- **Outputs:** `api/tests/golden/`.
+
+## Step 32 — API hardening and observability (Phase 4 Task 5, 2026-10-17, `48cabef`–`a113653`)
+
+- **What this step did:** per-client and global rate limits by a trusted-proxy client address,
+  body and connection limits, request ids, JSON logs that never hold a sequence, Prometheus
+  metrics behind a token, optional Sentry, one process enforced, a Locust load test and a threat
+  note (ADR 0032).
+- **Files created or modified:**
+
+| Path | What it does | Why it exists |
+|---|---|---|
+| `api/app/clients.py`, `api/app/ratelimit.py` | Client address (the only place); slowapi limits as a dependency | Limits a client cannot dodge |
+| `api/app/middleware.py`, `api/app/logs.py`, `src/mutascope/utils/logging.py` | Request ids, access line, body limit; redaction | One line per event, no sequences |
+| `api/app/metrics.py`, `api/app/sentry.py` | Collectors and `/metrics` with a token; scrubbed Sentry | Observability without leaking |
+| `api/app/process.py`, `api/app/serve.py` | Lock file; `python -m api.app.serve` with `workers=1` | State is in one process |
+| `api/app/{jobs,live,live_routes,main,problems,routes,settings}.py` | Wiring | |
+| `api/tests/test_hardening.py` and changed fixtures | Limits, proxies, 413, metrics token, log leak test | Tests alongside the code |
+| `tools/loadtest/` (`locustfile.py`, `run.py`), `docs/load-test.md`, `docs/load-test-summary.json` | Load test and its report | Evidence for the limits |
+| `docs/threat-model.md`, `docs/adr/0032-api-hardening.md`, `CLAUDE.md`, `docs/ROADMAP.md`, `docs/BUILD_LOG.md` | Threats; decisions; rules; entry 32 | Decision record and docs |
+
+- **CLI commands added:** none.
+- **Outputs:** the load-test report.
+
+## Step 33 — Docker images (Phase 4 Task 6, 2026-10-18, `9c7df8b`–`ed12ae6`)
+
+- **What this step did:** a torch-free API image with the bundle and fp32 models baked in and
+  verified, offline, UID 1000, self-checked at build; a pipeline image with CPU torch and
+  Foldseek; `-profile docker`; container tests and a container load test (ADR 0033).
+- **Files created or modified:**
+
+| Path | What it does | Why it exists |
+|---|---|---|
+| `pyproject.toml`, `uv.lock` | Pipeline-only packages moved to a `pipeline` extra | The API image installs no torch |
+| `api/Dockerfile`, `.dockerignore`, `docker-compose.yml`, `.env.example` | Multi-stage API image; local run; every setting listed | The deployable unit |
+| `api/app/fetch.py`, `api/app/selfcheck.py`, `api/app/healthcheck.py` | Build-time fetch with checksums; shared self-check; Docker health probe | An image that cannot serve is never produced |
+| `pipeline/Dockerfile`, `pipeline/main.nf`, `pipeline/nextflow.config` | Pipeline image, Foldseek per architecture; `-profile docker` | Phase 1's open profile |
+| `api/tests/test_container.py`, `test_fetch.py`, `test_health.py`, `test_no_torch.py`, `test_settings.py` | Container tests (`-m container`), fetch, `.env.example` complete | Tests alongside the code |
+| `Makefile` | `api-image`, `pipeline-image`, `images`, `test-container`, `pipeline-test-docker` | Canonical commands |
+| `tools/loadtest/run.py`, `docs/load-test.md`, `docs/load-test-container-summary.json` | Container mode and soak | Memory and CPU in the container |
+| `docs/adr/0033-docker-images.md`, `README.md`, `CLAUDE.md`, `docs/ROADMAP.md`, `docs/BUILD_LOG.md` | Decisions; Docker section; rules; entry 33 | Decision record and docs |
+
+- **CLI commands added:** none (`python -m api.app.fetch`, `python -m api.app.selfcheck`).
+- **Outputs:** local images `mutascope-api:dev*`, `mutascope-pipeline:dev*` (not in git).
+
+## Step 34 — CI/CD and deployment to Cloud Run (Phase 4 Task 7, 2026-10-18, `3abd052`–`b8343a0`)
+
+- **What this step did:** five required CI checks, actions pinned by exact tag, Dependabot,
+  release-please, and a release workflow that pushes one image to Artifact Registry and GHCR
+  and deploys it to Cloud Run by digest, keyless (ADR 0034).
+- **Files created or modified:**
+
+| Path | What it does | Why it exists |
+|---|---|---|
+| `.github/workflows/ci.yml` | The five jobs whose names are the required checks | main stays green |
+| `.github/workflows/release.yml` | Tag → version check → image → deploy → wait | Tags deploy automatically |
+| `.github/workflows/release-please.yml`, `release-please-config.json`, `.release-please-manifest.json` | Release PR, version in `pyproject.toml` and `uv.lock`, changelog | No hand-edited versions |
+| `.github/dependabot.yml`, `api/Dockerfile`, `pipeline/Dockerfile` | uv, Actions, Docker updates; literal `FROM` lines | Pins that move by PR |
+| `conf/deploy/cloudrun.yaml`, `api/deploy/cloudrun.py`, `api/tests/test_deploy.py` | The service as a file; `render` and `wait` | Nothing set in the console |
+| `tools/deploy/setup-gcp.sh` | Project, registry, service accounts, Workload Identity Federation | Keyless deploy, set up once |
+| `tools/loadtest/live.py` | Measurement of the deployed service | ADR 0031's rule on the real host |
+| `docs/adr/0034-ci-cd-and-deployment.md`, `CLAUDE.md`, `docs/ROADMAP.md`, `docs/BUILD_LOG.md` | Decisions; CI rules; entry 34 | Decision record and docs |
+
+- **CLI commands added:** none (`python -m api.deploy.cloudrun render|wait`).
+- **Outputs:** none in git.
+
+## Step 35 — First deploy, measured live (Phase 4 Task 7, 2026-10-18, `454656c`–`32a166e`)
+
+- **What this step did:** released `v0.2.0` (release-please, `2b6aeb6`), measured it on Cloud
+  Run, and set the default model (35M), the precise limit (400) and the trusted proxy from the
+  measurements; fixed an order-dependent container test and the redeploy's config checkout
+  (ADR 0034 section 6).
+- **Files created or modified:**
+
+| Path | What it does | Why it exists |
+|---|---|---|
+| `api/tests/test_container.py` | The log test sends its own score request | It depended on test order (#39) |
+| `CHANGELOG.md`, `pyproject.toml`, `uv.lock`, `.release-please-manifest.json` | Release 0.2.0 | Written by release-please |
+| `.github/workflows/release.yml` | Deploy job checks out the run's commit, image from the tag | A redeploy uses main's config |
+| `conf/deploy/cloudrun.yaml` | `env`: default model, precise limit, trusted proxy | Measured values, applied by redeploy |
+| `docs/live-measure-summary.json`, `docs/load-test.md` (section 6) | Live numbers | Committed evidence |
+| `docs/adr/0034-ci-cd-and-deployment.md`, `CLAUDE.md`, `docs/ROADMAP.md`, `docs/BUILD_LOG.md` | Section 6; rules; items ticked; entry 35 | Decision record and docs |
+
+- **CLI commands added:** none.
+- **Outputs:** the live service, https://mutascope-api-2lvmztrsha-ew.a.run.app.
+
+## Step 36 — Phase 4 close-out (Phase 4, 2026-10-18)
+
+- **What this step did:** reviewed the Phase 4 checklist and done-when line against the
+  repository, GitHub and the live service, rebuilt the released image to measure it, recorded
+  what is open or weak, and pointed the project at Phase 5 (ADR 0035). No code changed and no
+  number in `results/` changed.
+- **Files created or modified:**
+
+| Path | What it does | Why it exists |
+|---|---|---|
+| `docs/adr/0035-phase-4-close.md` | Done-when check, reported numbers, checklist audit, open and weak items, what Phase 5 inherits | One-page phase summary, as ADR 0026 was for Phase 3 |
+| `CLAUDE.md` | Current phase → Phase 5, with what Phase 4 delivered and what is carried | The section is updated at the start of each phase |
+| `docs/ROADMAP.md` | Phase 1 profile item ticked; Phase 4 close note; Phase 5 "Carried from Phase 4" | Open items need an owner |
+| `README.md` | Status line → Phase 5, live API link; "Space" comments → Cloud Run | The line named Phase 4; the host changed |
+| `docs/BUILD_LOG.md`, `docs/PROJECT_MAP.md` | Entry 36; steps 28–36, the Phase 4 index and retrospective | Journal and index |
+
+- **CLI commands added:** none.
+- **Outputs:** none. The audit read the results files, the CI and release history and the live
+  service, rebuilt the `v0.2.0` image, and reran `make lint test`.
+
+## Where Phase 4 left things
+
+A map of what exists after steps 27–36, by the question it answers.
+
+| Question | Where to look |
+|---|---|
+| What does the website download? | The bundle: `src/mutascope/export/` (`format.py` is the contract), `docs/schema/bundle/`, `docs/BUNDLE_CARD.md`, Hub dataset `bundle/` at `export.publish.revision`; ADR 0028 |
+| How does live scoring run without torch? | `src/mutascope/scoring/onnx_esm2.py` on `scoring/marginals.py`; `conf/onnx/default.yaml`; `results/onnx/`; ADR 0029 |
+| What does the API serve, and how? | `api/app/` (`routes.py`, `live_routes.py`, `jobs.py`, `score_cache.py`, `bundle.py`, `scorers.py`); `/docs` on the live URL; ADR 0030, 0031 |
+| What protects it? | `api/app/` (`clients.py`, `ratelimit.py`, `middleware.py`, `logs.py`, `metrics.py`, `process.py`), `docs/threat-model.md`; ADR 0032 |
+| How is it packaged? | `api/Dockerfile`, `pipeline/Dockerfile`, `api/app/{fetch,selfcheck}.py`, `.env.example`; ADR 0033 |
+| How does a change reach production? | `.github/workflows/{ci,release,release-please}.yml`, `conf/deploy/cloudrun.yaml`, `api/deploy/cloudrun.py`, `tools/deploy/setup-gcp.sh`; ADR 0034 |
+| How fast is it, and under what load? | `docs/load-test.md` (sections 1–5 local and container, 6 live), `docs/*summary.json`, `tools/loadtest/` |
+| What is open? | ADR 0035 ("Open and weak"), ROADMAP Phase 5 "Carried from Phase 4" |
+| What is not in git? | `build/bundle/`, `build/onnx/`, the images, the score cache (in the container) |
+
+## Phase 4 retrospective
+
+What Phase 4 (steps 27–36) is worth remembering for, in three themes. Numbers are from the
+build-log entries, `results/` and the live service.
+
+**1. Every artefact is pinned, checked and refused if wrong.**
+
+- The bundle, the ONNX files and the Phase 3 release are read by Hub commit and checked against
+  `SHA256SUMS` when the image is built and again when the API starts (ADR 0028, 0030, 0033). An
+  unknown schema version or a non-fp32 model stops the start. The image's last build step is
+  the self-check the tests run, so an image that cannot score is never produced.
+- Deployment continues the chain: Cloud Run runs the image by digest, routes no traffic until
+  `/ready`, and the workflow fails unless the public URL reports the tag's version (ADR 0034).
+  A broken release leaves the previous one serving.
+- The cost of this is paid once, at build: the image is 600 MB compressed and needs no network
+  at run time.
+
+**2. Gates fixed before results decide what ships.**
+
+- *int8* (ADR 0029): its aggregate change was too small to tell from zero (−0.0005, −0.0006),
+  and it still failed the per-assay agreement gate on 3 + 1 assays. On the M4 Pro it was 0–28%
+  slower, not faster. fp32 is served; the recipe and threshold were not touched.
+- *The bundle encoding* (ADR 0028): its first full build failed the fidelity check 5 times
+  (4 coverages and one Spearman, from ties at an interval bound after rounding). The decimals
+  rule was fixed (up to 9 decimals per assay), not the thresholds.
+- *The release check* (ADR 0027): `make pipeline` publishes only a bit-identical rerun of the
+  deployed model.
+
+**3. Measure where it runs, change by configuration.**
+
+- The laptop was a poor guide to the server: 150M at 1,000 residues took 0.53 s on the M4 Pro
+  and 5.72 s (p95) on Cloud Run's 2 vCPUs; a 600-residue precise job took 64 s and 406 s.
+- The default model, the precise limit and the trusted proxy were settings from the start, so
+  one measured deploy changed all three in `conf/deploy/cloudrun.yaml` without touching code.
+- The host changed mid-phase (Docker Spaces became paid) and the image did not.
+- What the measurements did not fix is listed in ADR 0035: the 2-second rule at 1,000 residues
+  and under load, and the forward-pass bound that would help with both.
