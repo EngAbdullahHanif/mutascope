@@ -104,23 +104,30 @@ def live_models(
     return models
 
 
-def fast_landscape(
+def cached_fast(
     model: LiveModel, sequence: str, cache: ScoreCache, metrics: Metrics
-) -> tuple[FloatArray, bool]:
-    """The wild-type-marginal landscape of ``sequence`` and whether it came from the cache.
+) -> FloatArray | None:
+    """The cached wild-type-marginal landscape of ``sequence``, or None.
 
-    Blocking (one forward pass on a cache miss): call it from a worker thread.
+    Blocking (a disk read), but no forward pass: it needs no inference slot.
     """
-    key = model.key_for("wt", sequence)
-    cached = cache.get(key, len(sequence))
+    cached = cache.get(model.key_for("wt", sequence), len(sequence))
     metrics.cache_lookup("wt", hit=cached is not None)
-    if cached is not None:
-        return cached, True
+    return cached
+
+
+def compute_fast(
+    model: LiveModel, sequence: str, cache: ScoreCache, metrics: Metrics
+) -> FloatArray:
+    """The wild-type-marginal landscape of ``sequence`` (one forward pass), then cached.
+
+    Blocking: run it through :class:`api.app.inference.Inference`.
+    """
     start = perf_counter()
     landscape = model.scorer.landscape(sequence, fast=True)
     metrics.observe_inference(model.key, "wt", perf_counter() - start)
-    cache.put(key, landscape)
-    return landscape, False
+    cache.put(model.key_for("wt", sequence), landscape)
+    return landscape
 
 
 def to_grid(landscape: FloatArray) -> list[float | None]:

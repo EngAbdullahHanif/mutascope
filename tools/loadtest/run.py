@@ -62,13 +62,21 @@ SCENARIOS: dict[str, dict[str, Any]] = {
     # Mixed traffic.
     "load5": {"users": "Visitor", "n": 5, "seconds": 180},
     "load20": {"users": "Visitor", "n": 20, "seconds": 600},
+    # The 20-user run of the live measurement (at most 2 minutes on Cloud Run's free tier).
+    "load20_2m": {"users": "Visitor", "n": 20, "seconds": 120},
     # Memory soak (ADR 0033): mixed traffic long enough to see whether memory levels off.
     "soak5": {"users": "Visitor", "n": 5, "seconds": 1200},
 }
 DEFAULT_SCENARIOS = ("read", "score", "score_global", "jobs", "streams", "load5", "load20")
 SPACE_LIMITS = ("--cpus=2", "--memory=16g")
 """The free Hugging Face Space: 2 vCPUs, 16 GB."""
-GAUGES = ("mutascope_job_queue_length", "mutascope_jobs_running", "mutascope_sse_streams_open")
+GAUGES = (
+    "mutascope_job_queue_length",
+    "mutascope_jobs_running",
+    "mutascope_sse_streams_open",
+    "mutascope_inference_running",
+    "mutascope_inference_waiting",
+)
 
 
 def free_port() -> int:
@@ -181,13 +189,16 @@ def docker(*args: str, check: bool = True) -> str:
 class ContainerServer:
     """The API image under the Space's limits, published on ``127.0.0.1:<port>``."""
 
-    def __init__(self, image: str, port: int, token: str) -> None:
+    def __init__(
+        self, image: str, port: int, token: str, limits: tuple[str, ...] = SPACE_LIMITS
+    ) -> None:
+        self.limits = limits
         self.name = f"mutascope-load-{secrets.token_hex(4)}"
         gateway = docker(
             "network", "inspect", "bridge", "-f", "{{(index .IPAM.Config 0).Gateway}}"
         ).strip()
         docker(
-            "run", "--detach", "--name", self.name, *SPACE_LIMITS,
+            "run", "--detach", "--name", self.name, *limits,
             "--publish", f"127.0.0.1:{port}:7860",
             "--env", f"MUTASCOPE_API_TRUSTED_PROXIES={gateway}",
             "--env", f"MUTASCOPE_API_METRICS_TOKEN={token}",
@@ -282,13 +293,17 @@ def read_stats(prefix: Path) -> list[dict[str, Any]]:
 
 
 def run_scenario(
-    name: str, spec: dict[str, Any], out: Path, image: str | None = None
+    name: str,
+    spec: dict[str, Any],
+    out: Path,
+    image: str | None = None,
+    limits: tuple[str, ...] = SPACE_LIMITS,
 ) -> dict[str, Any]:
     workdir = Path(tempfile.mkdtemp(prefix=f"mutascope-load-{name}-"))
     port, token = free_port(), secrets.token_hex(24)
     base = f"http://127.0.0.1:{port}"
     server: Server = (
-        ContainerServer(image, port, token) if image else LocalServer(workdir, port, token)
+        ContainerServer(image, port, token, limits) if image else LocalServer(workdir, port, token)
     )
     try:
         wait_ready(base, server)
@@ -359,7 +374,7 @@ def run_scenario(
             {
                 "image": image,
                 "image_id": server.image_id,
-                "limits": list(SPACE_LIMITS),
+                "limits": list(server.limits),
                 "trusted_proxy": server.trusted_proxy,
                 "memory": "anon_mb (cgroup)",
             }
@@ -400,6 +415,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--image", help="run the API image in Docker instead of a local process")
+    parser.add_argument(
+        "--limits",
+        default=" ".join(SPACE_LIMITS),
+        help="docker run limits of the container, e.g. '--cpus=2 --memory=4g' (Cloud Run)",
+    )
     parser.add_argument("scenarios", nargs="*", default=list(DEFAULT_SCENARIOS))
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
@@ -408,7 +428,7 @@ def main() -> None:
     summary_path = out / "summary.json"
     summary = json.loads(summary_path.read_text()) if summary_path.exists() else {}
     for name in args.scenarios:
-        result = run_scenario(name, SCENARIOS[name], out, args.image)
+        result = run_scenario(name, SCENARIOS[name], out, args.image, tuple(args.limits.split()))
         summary[name] = result
         summary_path.write_text(json.dumps(summary, indent=1))
         log.info(

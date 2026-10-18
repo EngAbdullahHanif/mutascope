@@ -308,6 +308,11 @@ Run `make lint test` before declaring any task done.
   `failed` | `cancelled`; `id` = index, `Last-Event-ID` resumes. Every live response is
   `kind: zero_shot`, `label: Zero-shot`. Mutations go through `parse_mutation`, and every bad
   one is reported with its own `loc`.
+- Inference pool (ADR 0036): every live forward pass, fast or one precise batch, runs through
+  `api.app.inference.Inference`, `inference_concurrency` (1) at a time, never `asyncio.to_thread`.
+  Fast mode waits `inference_wait_seconds` for a slot, then 503 `scoring-busy` with
+  `Retry-After`; precise batches wait their turn. Cache hits take no slot. A slot is freed when
+  its thread finishes, not when the request goes away.
 - The live-score cache (`api.app.score_cache`, diskcache) is keyed by sha256 of
   `[hf_id/file, revision, method, sha256(sequence)]`; files from `onnx_local_dir` are keyed
   `local:<dir>`, never by a Hub commit. A partial (cancelled, failed) landscape is never cached.
@@ -394,7 +399,9 @@ stay green on `main`.
   key to GitHub.
 - The service is defined only by `conf/deploy/cloudrun.yaml` (`env`: exactly the container's
   environment); never change it in the console, the next deploy undoes it. `max_instances` stays
-  1 (ADR 0032). The only GitHub secret is `RELEASE_PLEASE_TOKEN`.
+  1 (ADR 0032). The only GitHub secret is `RELEASE_PLEASE_TOKEN`. The API's secrets
+  (`MUTASCOPE_API_METRICS_TOKEN`, `MUTASCOPE_API_SENTRY_DSN`) are in Secret Manager, under
+  `secrets` in that file; the runtime account may read exactly those (`setup-gcp.sh`, ADR 0036).
 - Request-based billing: an instance has CPU only during a request, so a precise job advances
   while its SSE stream is open. Scale-to-zero: the site must work with the API asleep.
 - Live measurement: `tools/loadtest/live.py --url <service url>` (short: free tier). ADR 0031's

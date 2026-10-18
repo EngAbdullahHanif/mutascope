@@ -3,18 +3,21 @@
 ``make test-container`` (``pytest -m container``), after ``make api-image``. Needs Docker; the
 image is ``MUTASCOPE_API_IMAGE`` (default ``mutascope-api:dev``). Each check talks to one
 container over HTTP, as a client would: health (Docker's own ``HEALTHCHECK`` too), readiness at
-the pinned revisions, one fast-mode score and one precise-mode job end to end, the user and
-its write paths, the thread settings, no torch, and the one-process rule.
+the pinned revisions, one fast-mode score and one precise-mode job end to end, reads while
+scoring is saturated (the inference pool, ADR 0036), the user and its write paths, the thread
+settings, no torch, and the one-process rule.
 
 Latencies printed here are from a local container, not the Space.
 """
 
 import json
 import os
+import random
 import secrets
 import subprocess
 import time
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
@@ -24,6 +27,7 @@ from tests.scoring.test_esm2 import UBIQUITIN
 
 from api.app.settings import Settings
 from api.tests.test_live import parse_sse
+from mutascope.alphabet import AA_ORDER
 from mutascope.utils.logging import get_logger
 
 pytestmark = pytest.mark.container
@@ -151,6 +155,64 @@ def test_precise_job_end_to_end(container: Container) -> None:
     log.info(
         "container_precise_job", seconds=round(seconds, 2), note="local container, not the Space"
     )
+
+
+def test_reads_stay_fast_while_scoring_is_saturated(container: Container) -> None:
+    """Four 1,000-residue fast-mode requests at once, and reads every 0.25 s meanwhile.
+
+    The inference pool runs one pass at a time (ADR 0036): the gauges must show one running
+    and others waiting, never two running, and every read must answer within 1 s. A request
+    that waits past ``inference_wait_seconds`` is a 503, which is the pool doing its job.
+    Within one client's limits: 4 of 20 scores a minute and about 50 of 120 reads.
+    """
+    rng = random.Random(11)
+    sequences = ["".join(rng.choices(AA_ORDER, k=1000)) for _ in range(4)]
+    path = f"{container.base}/v1/proteins/TCRG1_MOUSE_Tsuboyama_2023_1E0L"
+    auth = {"Authorization": f"Bearer {container.token}"}
+    reads: list[float] = []
+    running: list[float] = []
+    waiting: list[float] = []
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        scores = [
+            pool.submit(
+                httpx.post,
+                f"{container.base}/v1/score",
+                json={"sequence": seq, "model": "esm2_35m"},
+                timeout=60,
+            )
+            for seq in sequences
+        ]
+        time.sleep(0.5)  # the first pass is running, the others wait for its slot
+        while not all(future.done() for future in scores):
+            started = time.perf_counter()
+            assert httpx.get(path, timeout=30).status_code == 200
+            reads.append(time.perf_counter() - started)
+            gauges = httpx.get(f"{container.base}/metrics", headers=auth, timeout=30).text
+            running.append(_gauge(gauges, "mutascope_inference_running"))
+            waiting.append(_gauge(gauges, "mutascope_inference_waiting"))
+            time.sleep(0.25)
+    statuses = sorted(future.result().status_code for future in scores)
+    log.info(
+        "container_reads_under_scoring",
+        reads=len(reads),
+        max_s=round(max(reads), 3),
+        running_max=max(running),
+        waiting_max=max(waiting),
+        scores=statuses,
+        note="local container, not the Space",
+    )
+    assert set(statuses) <= {200, 503} and statuses[0] == 200, statuses
+    assert len(reads) >= 3, "scoring finished before the reads could overlap it"
+    assert max(running) == 1 and max(waiting) >= 1, (running, waiting)
+    assert max(reads) < 1.0, sorted(reads)[-5:]
+
+
+def _gauge(text: str, name: str) -> float:
+    """An unlabelled sample of a Prometheus text exposition (missing: an error)."""
+    for line in text.splitlines():
+        if line.startswith(f"{name} "):
+            return float(line.split()[1])
+    raise AssertionError(f"{name} not in /metrics")
 
 
 def test_write_paths_are_the_users_and_code_is_read_only(container: Container) -> None:

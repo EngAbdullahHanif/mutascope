@@ -291,10 +291,12 @@ async def test_queue_full_is_429(
     assert full.status_code == 429
     assert full.headers["content-type"] == "application/problem+json"
     assert full.json()["type"] == PROBLEM + "queue-full"
-    # Fast mode does not queue.
-    assert (await client.post("/v1/score", json={"sequence": SEQ[:5]})).status_code == 200
+    # Fast mode is not in the job queue: it waits only for the running batch's slot
+    # (test_inference.py), and runs once the gate opens.
+    fast = asyncio.create_task(client.post("/v1/score", json={"sequence": SEQ[:5]}))
 
     gate.set()
+    assert (await fast).status_code == 200
     await eventually(lambda: all(jobs(started).get(j["id"]).finished for j in queued))
     statuses = [(await client.get(f"/v1/jobs/{j['id']}")).json()["status"] for j in queued]
     assert statuses == ["succeeded"] * settings.job_queue_size
