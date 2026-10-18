@@ -391,6 +391,14 @@ Run `make lint test` before declaring any task done.
 - Heatmap colour scale: colourblind-safe diverging (blue–white–red), symmetric around 0: blue =
   harmful, white = neutral, red = tolerated (RdBu, OKLab, `src/lib/color/diverging.ts`); missing
   is grey, never white; every chart using it shows `EffectLegend`.
+- Explorer (ADR 0038): `/explore` (picker) and `/explore/[assayId]` (prerendered from the
+  manifest). The heatmap is one window-sized canvas drawn from a one-pixel-per-cell raster, never
+  SVG. White is 0 for zero-shot log-ratios and the assay's median measured score for DMS units
+  (`DMS_score` has no common zero); measured and supervised views share one scale; half-width =
+  99th percentile, clamped ends marked. The wild type is never a value. Grid maths lives in
+  `src/lib/explorer/` (pure, unit-tested); `mutationCode` is the only place that writes a
+  1-indexed residue. Budget: a ~1,000-residue protein drawn < 300 ms after its data loads
+  (Playwright test).
 - Linked views: hovering a heatmap column highlights the residue in 3D and vice versa.
 - Always label results as "Supervised (n = …)" or "Zero-shot".
 
