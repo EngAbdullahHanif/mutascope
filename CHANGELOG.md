@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.3.0](https://github.com/EngAbdullahHanif/mutascope/compare/v0.2.0...v0.3.0) (2026-10-18)
+
+
+### Features
+
+* **deploy:** apply the live Cloud Run measurement (default 35M, precise limit 400, trusted proxy) ([24d5adf](https://github.com/EngAbdullahHanif/mutascope/commit/24d5adf7a8f14e4705da8951d4df7d6da5b76fa9))
+* **deploy:** default model 35M, precise limit 400, trust Cloud Run's front end ([3e15d8c](https://github.com/EngAbdullahHanif/mutascope/commit/3e15d8c5be533a747f0b66aa28df485e29869330))
+
+
+### Bug Fixes
+
+* **release:** a manual redeploy uses main's service config, not the tag's ([fc307a7](https://github.com/EngAbdullahHanif/mutascope/commit/fc307a7fd1e370e6a1354bd44886d8887cbd4ebf))
+
+
+### Documentation
+
+* close out Phase 4 (ADR 0035, roadmap, build log entry 36, current phase → Phase 5) ([9be551e](https://github.com/EngAbdullahHanif/mutascope/commit/9be551e3544fb09fe19004d8a279058c2acaa253))
+* close out Phase 4 (ADR 0035) and start Phase 5 ([1f8f627](https://github.com/EngAbdullahHanif/mutascope/commit/1f8f627b45ac599859cde1521f3b79c3abf6e8b5))
+* live measurement on Cloud Run (load-test section 6, ADR 0034, build log entry 35) ([32a166e](https://github.com/EngAbdullahHanif/mutascope/commit/32a166e412914644746084b8e2062b22caeb8021))
+* project map steps 28-36, Phase 4 index and retrospective ([0877e0c](https://github.com/EngAbdullahHanif/mutascope/commit/0877e0c4b076e9a6a533d5d08c2f44ba8364b0ff))
+
 ## [0.2.0](https://github.com/EngAbdullahHanif/mutascope/compare/v0.1.0...v0.2.0) (2026-10-18)
 
 
