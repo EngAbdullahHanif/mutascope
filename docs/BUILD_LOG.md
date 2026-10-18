@@ -3454,19 +3454,21 @@ ADR 0037.
    "Benchmar…". *Fix:* below the `sm` breakpoint the nav takes its own row. *Verified:* phone
    screenshot, `document.documentElement.scrollWidth` = 375.
 
-7. **The first Vercel builds failed.** *Found:* the preview build of `660d0fc` stopped after 1 s
-   with "Found invalid or discontinued Node.js Version: ">=26"": Vercel builds with Node 24 at
-   most. `bbf80b3` set `engines` to `24.x`, and that build failed too. Its log was not available
-   here (no Vercel CLI login), and redeploying `660d0fc` from the dashboard reused the old
-   `engines`. *Reproduced:* a clean clone of `bbf80b3` builds under Node 24.22.0 with pnpm
-   12.10.1, so the code was not the cause. The remaining difference is the package manager.
-   pnpm 12's lockfile says `lockfileVersion: '9.0'` but is two YAML documents, Vercel picks its
-   pnpm from that label, and it honours `packageManager` only through Corepack. *Fix:*
-   `web/vercel.json` installs with `corepack enable pnpm && pnpm install --frozen-lockfile`, and
-   CI's `web` job moves to Node 24. *Verified locally:* Node 24.22.0's Corepack (0.36.0)
-   downloads pnpm 12.10.1, installs from the frozen lockfile and builds from scratch, including the
-   real bundle download (223 files, 217 assays). Whether this was Vercel's error is confirmed only
-   when the next preview build passes.
+7. **The first Vercel builds failed, and my first diagnosis was wrong.** *Found:* the preview
+   build of `660d0fc` stopped after 1 s with "Found invalid or discontinued Node.js Version:
+   ">=26"": Vercel builds with Node 24 at most. `bbf80b3` set `engines` to `24.x`, and that build
+   failed too. Redeploying `660d0fc` from the dashboard reused the old `engines`. Without the
+   log, I reproduced `bbf80b3` from a clean clone under Node 24.22.0 (it built) and guessed pnpm:
+   pnpm 12 labels its lockfile `lockfileVersion: '9.0'`. `c875c54` added a `web/vercel.json`
+   with a Corepack install command and `"framework": "nextjs"`, and Vercel passed. *Actual
+   cause:* once logged in to the Vercel CLI, the `bbf80b3` log showed that install (pnpm 12.10.1,
+   taken from `packageManager`), the bundle download (223 files) and `next build` had all
+   succeeded. The build then failed with "No Output Directory named "dist" found": the project's
+   Framework Preset was "Other". The `framework` line was the fix; the Corepack line was not
+   needed. *Fix:* `web/vercel.json` is now only `"framework": "nextjs"` (Node 25+ no longer ships
+   Corepack, so an unneeded dependency on it was removed). *Verified:* the Vercel log of
+   `bbf80b3` (`vercel inspect --logs`), the project settings (`vercel project inspect`: preset
+   "Other", Node 24.x, root `web`), and the next preview build.
 
 8. **A failed download could hide its own error.** *Found:* after the move to Node 24, CI's
    `web` job failed 2 of the 14 download tests: the tamper test expected "benchmarks.json: sha256
@@ -3495,6 +3497,7 @@ ADR 0037.
 - `make web-check` and `make web-e2e` were added. `make lint test` passes.
 - Loose ends:
   - add the new CI job to the `main` ruleset's required checks;
-  - on the first successful Vercel deploy, check that `/data/proteins/*.json.gz` is served
-    without `Content-Encoding` (the loader refuses decoded files);
+  - previews are behind Vercel's deployment protection, so the served headers of
+    `/data/proteins/*.json.gz` were not checked from the CLI; the Explorer's "Sample protein"
+    line in a signed-in browser exercises that path (the loader refuses decoded files);
   - the Explorer itself is next.

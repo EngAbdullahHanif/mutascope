@@ -86,12 +86,11 @@ requires `^5`. ESLint stays at 9.39.5 because eslint-config-next 16.4's plugins 
 two majors. Scripts run as TypeScript directly on Node 24 (type stripping; erasable syntax only),
 with no tsx or ts-node.
 
-Node 24 and pnpm 12 on Vercel. Vercel offers Node 24 as its newest major, so `engines` is `24.x`
-and CI's `web` job uses Node 24 too. Vercel picks a pnpm version from the lockfile's
-`lockfileVersion`, and pnpm 12 still writes `9.0` there (in a two-document file older pnpm does
-not read). `web/vercel.json` therefore installs with `corepack enable pnpm && pnpm install
---frozen-lockfile`, so Corepack (bundled with Node 24) runs the `packageManager` pin, pnpm
-12.10.1, checked against its registry signature.
+Node 24 on Vercel. Vercel offers Node 24 as its newest major, so `engines` is `24.x` and CI's
+`web` job uses Node 24 too. Vercel reads `packageManager` and installs with pnpm 12.10.1 itself.
+`web/vercel.json` sets `"framework": "nextjs"`: the project had been created with the preset
+"Other", which looks for a static output directory after `next build`, and the file keeps
+the preset in the repository rather than in the dashboard.
 
 CI gets a sixth job, `web (lint, typecheck, unit tests, build)`. To make it a required check, it
 must be added to the `main` ruleset (ADR 0034).
