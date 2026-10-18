@@ -174,12 +174,30 @@ export function checkManifest(manifest: unknown, sums: Map<string, string>): num
   return proteins.length;
 }
 
-async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<void>) {
+/**
+ * Run `fn` over `items`, at most `limit` at a time. After the first failure no new item starts,
+ * and this returns only when every started call has settled, then throws that first error.
+ * (`Promise.all` would reject while other calls were still writing into the staging directory,
+ * and the cleanup would race them.)
+ */
+export async function mapLimit<T>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<void>,
+): Promise<void> {
   let next = 0;
+  let failure: { error: unknown } | undefined;
   const worker = async () => {
-    while (next < items.length) await fn(items[next++] as T);
+    while (!failure && next < items.length) {
+      try {
+        await fn(items[next++] as T);
+      } catch (error) {
+        failure ??= { error };
+      }
+    }
   };
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  if (failure) throw failure.error;
 }
 
 /**
@@ -239,7 +257,8 @@ export async function fetchBundle(
     );
     return sums.size;
   } catch (error) {
-    await rm(staging, { recursive: true, force: true });
+    // Keep the original error even if the cleanup fails.
+    await rm(staging, { recursive: true, force: true }).catch(() => {});
     throw error;
   }
 }
