@@ -1,7 +1,8 @@
 # 0036 — Bounded live inference, and the deployed service's secrets
 
-- Status: accepted; measured in a local container (section 5); the live measurement on Cloud
-  Run follows the deploy (section 6)
+- Status: accepted. The pool works live (never more than one pass), but it **did not make reads
+  fast on Cloud Run**: read p99 at 5 users is 8.5 s, not under 1 s (section 6). The cause of slow
+  reads is open (ADR 0035 item 1 stays open, reworded)
 - Date: 2026-10-18
 - Builds on: ADR 0031 (live scoring, jobs), ADR 0032 (limits, `/metrics`, Sentry), ADR 0033
   (the image, the 20-user container run), ADR 0034 (Cloud Run, `secrets`), ADR 0035 (items 1
@@ -82,10 +83,13 @@ with the limit.
 ```yaml
 secrets:
   MUTASCOPE_API_METRICS_TOKEN: MUTASCOPE_API_METRICS_TOKEN
-  MUTASCOPE_API_SENTRY_DSN: MUTASCOPE_API_SENTRY_DSN
 ```
 
-and `env` gains `MUTASCOPE_API_SENTRY_ENVIRONMENT: production`. The runtime account
+and `env` gains `MUTASCOPE_API_SENTRY_ENVIRONMENT: production`. The Sentry DSN was listed too,
+but there is no Sentry project yet. The secret held a value that is not a DSN, and `sentry_sdk`
+raises `BadDsn` at startup, so v0.4.0's first deploy failed its startup probe and v0.3.0 kept
+serving. PR #46 removed the line, and v0.4.0 was redeployed from main. The DSN goes back when a
+Sentry project exists. The runtime account
 (`mutascope-api-runtime`) still has no project role. It gets
 `roles/secretmanager.secretAccessor` on **these two secrets only**, granted per secret by
 `tools/deploy/setup-gcp.sh`, which now also enables `secretmanager.googleapis.com`. Without
@@ -97,6 +101,14 @@ Two details the settings now handle:
   header, so the server's stored token must be stripped too, or every request would get a 401.
 - **The token still needs 32 or more characters** (`min_length`, ADR 0032). A shorter one
   stops the API at startup, so the deploy's `/ready` wait fails.
+- **A rejected setting is never echoed** (`hide_input_in_errors`). Reproducing the failed
+  deploy showed that pydantic's message printed the rejected value in full
+  (`input_value='…'`), which would have put a too-short token into Cloud Run's logs. The error
+  now names the field and the reason only. The live token is 64 characters and was never
+  rejected, so nothing leaked.
+- **CORS** (`env`): `MUTASCOPE_API_CORS_ORIGINS` is now the website's two origins,
+  `https://mutascope.abdullahhanif.me` and `https://mutascope-web.vercel.app` (Vercel). It takes
+  effect with the next deploy; v0.4.0 still allows only `http://localhost:3000`.
 
 ### 4. The load tools know the pool
 
@@ -166,20 +178,91 @@ Tests:
   after the event loop had closed raised `RuntimeError: Event loop is closed` in its
   done-callback (one error line in the server log). The release now ignores a closed loop.
 
-## 6. Live measurement on Cloud Run
+## 6. Live measurement on Cloud Run (v0.4.0, 2026-10-18)
 
-To be added after the deploy, with `tools/loadtest/live.py` as in ADR 0034: p95 of the read
-routes and of `POST /v1/score` at 1 and 5 users, 20 users for at most 2 minutes, memory against
-the 4 GiB limit, read p99 at 5 users against 1 s, and `/metrics` 401 without the token and 200
-with it.
+`tools/loadtest/live.py --load-users 5 20 --load-seconds 120 --seed 36`, from one laptop in
+Germany (network round trip p95 0.21 s), with the same method as ADR 0034. Results are in
+`docs/live-measure-0036-summary.json`. The earlier v0.2.0 numbers (ADR 0034, section 6) are
+given for comparison; they come from a different day and possibly a different host.
+
+**`/metrics`:** 401 without the token, 401 with a wrong one, 200 with the right one, and the
+inference gauges are present. `/health`: 0.4.0.
+
+**One user, one request at a time** (20 each; seconds, network included):
+
+| | p50 | p95 | p99 / max | v0.2.0 p95 |
+|---|---|---|---|---|
+| `GET /v1/proteins/{id}` | 0.16 | 0.25 | 0.26 | — |
+| `GET /v1/proteins/{id}/landscape` | 0.23 | 0.33 | 1.26 | — |
+| `GET /v1/benchmarks` | 0.23 | 0.33 | 0.37 | — |
+| `POST /v1/score` 35M, 300 aa | 0.56 | 0.64 | 0.89 | 0.92 |
+| `POST /v1/score` 35M, 1,000 aa | 2.16 | 2.48 | 2.58 | 2.09 |
+| `POST /v1/score` 150M, 300 aa | 1.54 | 1.91 | 2.51 | 1.85 |
+| `POST /v1/score` 150M, 1,000 aa | 6.30 | 7.22 | 7.71 | 5.72 |
+| precise job, 400 aa (whole) | 203 s | | | 163 s |
+
+Every long computation is 19–26% slower than on v0.2.0 (35M at 1,000 aa ×1.19, 150M at 1,000
+aa ×1.26, the precise job ×1.25), with one user and so nothing to queue behind. The code of a
+pass did not change, only the thread it runs on. The likely cause is a slower host, but that is
+not verified. The precise job now takes 203 s, over ADR 0029's three-minute target at the
+400-residue limit. The limit is not changed here; that needs a second measurement.
+
+**Load** (Locust `Visitor` mix, 120 s each, a minute apart; ms; one client address, so all users
+share one client's limits):
+
+| | 5 users: p50 / p95 / p99 | v0.2.0, 5 users: p50 / p95 / p99 | 20 users: p50 / p95 / p99 |
+|---|---|---|---|
+| `GET /v1/proteins/{id}` | 120 / 4,200 / **8,500** (n = 89) | 98 / 2,500 / 9,900 | 3,200 / 24,000 / 29,000 (n = 110) |
+| `GET /v1/proteins/{id}/landscape` | 190 / 1,300 / 3,200 | 210 / 1,300 / 1,900 | 4,700 / 16,000 / 21,000 |
+| `GET /v1/benchmarks` | 110 / 4,900 / 4,900 | 120 / 200 / 200 | 2,100 / 24,000 / 29,000 |
+| `POST /v1/score` (200s) | 2,600 / 6,700 / 8,600 | 1,400 / 10,000 / 11,000 | 9,500 / 30,000 / 34,000 |
+| `POST /v1/jobs` refused (429) | 120 / 5,200 / 5,200 | 73 / 11,000 / 11,000 | 400 / 27,000 / 28,000 |
+| statuses | 179 × 200, 4 × 202, 26 × 429 | 191 / 4 / 31 | 232 × 200, 3 × 202, 153 × 429, 1 × 503 |
+| memory, max (resident + cache) | 2,565 MiB (63% of 4 GiB) | — | 2,592 MiB (63%) |
+| inference running, max | 1 | — | 1 |
+
+**Verdict: read p99 at 5 users is 8.5 s, not under 1 s.** Bounding forward passes did not fix
+slow reads on Cloud Run. At 5 users, every row is within the noise of a 2-minute run with n = 19
+to 89, and `/v1/benchmarks` got worse. At 20 users the service is far past its capacity.
+
+What the numbers say about the cause:
+- **The pool held.** No scrape ever saw two passes running, and the one 503 came after 10.5 s,
+  as designed. Ten-second scrapes are too sparse to see the queue, so the waiting gauge's
+  maximum of 1 says little.
+- **The time is spent outside the pool.** Two observations show it:
+  - A 429 for a job takes no model work at all: a rate-limit check, then an answer. At 20 users
+    those answers took up to 28 s.
+  - A successful score has a wait of at most 10 s plus a pass of at most about 7 s, yet took
+    up to 34 s.
+
+  Requests waited for the event loop (or the GIL), not for a slot. On 2 vCPUs, one pass with 2
+  ONNX threads still keeps both cores busy. Every Python step that needs the GIL competes with
+  it:
+  - decoding protein files (`get_protein` and `get_landscape` are sync routes);
+  - building and serialising 20,000-cell responses;
+  - computing ETags and gzipping on the loop.
+
+  Locally (section 5) the same mix stayed fast, because two M4 Pro cores are much faster per
+  operation.
+- **Memory is not a constraint**: 63% of the limit at 20 users, flat during each run.
+
+What would show the cause, as a follow-up (not done here):
+- a live run with `MUTASCOPE_API_ONNX_THREADS=1`, which leaves one vCPU to the loop and the
+  reads;
+- a profile of the loop under load (where the 28-second 429s spend their time);
+- moving gzip and ETag hashing of large bodies off the loop.
+
+Each is a setting or a small change, and each should be measured live before it is adopted.
 
 ## Consequences
 
-- Under load, a fast-mode request waits its turn, behind at most a precise batch (about 6.5 s
-  live at 400 residues) and the fast requests ahead of it. It no longer competes for CPU. A
+- Under load, a fast-mode request waits its turn for a slot, behind at most a precise batch
+  (about 6.5 s live at 400 residues, now about 8 s) and the fast requests ahead of it. A
   client sees either the answer or, after 10 s, a 503 with `Retry-After`; the website must
   handle that like a 429.
 - `inference_concurrency` and `inference_wait_seconds` are settings (`.env.example`), so a
   different instance shape is a config change, measured first.
+- Reads on Cloud Run are still slow under load (section 6). ADR 0035's item 1 stays open,
+  reworded: find and fix what makes the loop wait.
 - The API's secrets live only in Secret Manager. The repository names them but never holds them,
   and the one GitHub secret is still `RELEASE_PLEASE_TOKEN`.

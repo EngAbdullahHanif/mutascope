@@ -3188,3 +3188,118 @@ ADR 0035, and pointed the project at Phase 5.
 - **Docs changed:** ADR 0035; CLAUDE.md (current phase → Phase 5); ROADMAP (Phase 1 profile
   item ticked, Phase 4 close note, Phase 5 "Carried from Phase 4"); README (status line, live API
   link, two "Space" comments); PROJECT_MAP (steps 28–36, the Phase 4 index and retrospective).
+
+---
+
+## Entry 37 — Bounded live inference, secrets, live re-measurement (Phase 5 Task 0, 2026-10-18)
+
+**Plain-language summary.** The live API on Cloud Run answered simple page reads slowly whenever
+someone was scoring a sequence. At 5 users the slowest 1% took 9.9 s. The suspected cause was that
+every scoring request started its own model run, so several runs fought over the two CPUs. This
+task put every model run through one queue, so that only one runs at a time. A request that cannot
+start within 10 s now gets a clear "busy, retry later" answer (503 with `Retry-After`) instead of
+hanging. In a local container this halved the worst scoring delays at 20 users and saved about
+600 MB of memory. It also wired the metrics token from Google Secret Manager into the deployed
+service, so `/metrics` now answers there. The token is required: 401 without it, 200 with it. On
+Cloud Run the queue works as designed, but **reads are still slow**: the slowest 1% of protein
+reads at 5 users took 8.5 s, not under 1 s. So the model runs piling up were not the main cause
+there, and finding the real one is the next task. Code in PR #43 (`748fe32`), the deploy fix in
+PR #46 (`5b254ea`), measurement and docs in this entry's PR. Decision record: ADR 0036.
+
+**The 3 most important design choices.**
+
+1. **One pool for every forward pass, with the slot released when the thread ends.** Fast mode
+   and precise-mode batches both go through `api.app.inference.Inference`: one slot (one pass
+   already uses both vCPUs), fast mode waits up to 10 s, precise batches wait their turn, and
+   asyncio's semaphore wakes waiters in order. The slot is freed by the future's done-callback,
+   not when the request goes away. A forward pass cannot be interrupted, so freeing it on
+   cancellation would let a second pass share the CPU. A unit test cancels a caller mid-pass and
+   checks that the next caller still waits.
+2. **A test that fails on the old code, and a before/after on the same load.** The first container
+   test passed against the image from `main` (reads were 23–53 ms locally either way), so it
+   proved nothing. It now also requires the inference gauges to show one pass running and others
+   waiting, and the `main` image fails it. The local before/after ran the same Locust mix against
+   both images under the same limits (`--cpus=2 --cpuset-cpus=0,1 --memory=4g`), and a fresh
+   container per run.
+3. **Report the live miss as a miss.** The task asked whether read p99 at 5 users is now under
+   1 s. It is 8.5 s. ADR 0036 says so in its status line, keeps ADR 0035's item 1 open (reworded),
+   and records what the numbers point to. A 429 does no model work, yet at 20 users those answers
+   took up to 28 s. So requests wait for the event loop or the GIL, not for an inference slot.
+   The next experiments are listed, not guessed at in this PR.
+
+**Problems encountered and how they were solved.**
+
+1. **Reads on Cloud Run did not get fast.** *Found:* the live run (`live.py --load-users 5 20`,
+   v0.4.0). At 5 users `GET /v1/proteins/{id}` had a p99 of 8,500 ms (89 requests), against
+   9,900 ms on v0.2.0, and `/v1/benchmarks` reached a p95 of 4,900 ms (v0.2.0: 200 ms). At 20
+   users reads took up to 29 s, scores up to 34 s, and refused job submissions (429s) up to
+   28 s. *Not solved:* the pool held (inference running never above 1; one 503 after 10.5 s), so
+   the waiting is outside it. Recorded in ADR 0036, section 6, and as a Phase 5 roadmap item with
+   three concrete experiments.
+2. **The first v0.4.0 deploy failed its startup probe.** *Found:* the release run's deploy step:
+   "The user-provided container failed the configured startup probe checks"; v0.3.0 kept serving
+   (`/health` 0.3.0). *Diagnosis:*
+   - Not IAM: the revision was created.
+   - Not the code: the same image started in about 2 s locally with the deployed environment
+     and a well-formed DSN.
+   - Not the token: 64 characters, checked by length only.
+   - Locally, a malformed DSN gives `sentry_sdk.utils.BadDsn` at startup.
+
+   The author had no Sentry project, so the DSN secret was not a DSN. *Fix:* PR #46 removed it
+   from `secrets`, and `workflow_dispatch` redeployed v0.4.0 from main. *Verified:* `/health`
+   0.4.0, `/metrics` 401 without the token and 200 with it.
+3. **A rejected setting printed its value.** *Found:* while reproducing problem 2, a too-short
+   token gave `input_value='short-token'` in pydantic's error, which on Cloud Run goes to the
+   logs. *Fix:* a regression test first, then `hide_input_in_errors=True` on the settings.
+   *Verified:* the test passes, and the message now names the field and the reason only. The
+   live token was never rejected, so nothing leaked.
+4. **A pass outliving the event loop logged an error at shutdown.** *Found:* the local 20-user
+   run's server log: one `RuntimeError: Event loop is closed` from the done-callback
+   (`concurrent.futures`, one line, after "Application shutdown complete"). *Fix:* a regression
+   test that closes the loop with a pass in flight, then the release ignores a closed loop.
+   *Verified:* the test, and `make test-container` (11 passed) on the rebuilt image.
+5. **`live.py` stopped twice before finishing.**
+   - *First:* one 150M request at 1,000 residues got `RemoteDisconnected`. The instance had not
+     restarted: its 150M pass count was 39 = 1 warm-up + 20 + 18, so the request never reached
+     the model. *Fix:* a connection closed without an answer is counted (`no_answer`) instead of
+     ending the run.
+   - *Second:* the rerun used the same seed as the first, so it sent the same sequences to a
+     warm instance whose cache kept them, and the script stopped at the first cache hit (as
+     designed: it times misses only). *Fix:* rerun with `--seed 36`; the error now says to pass
+     another seed.
+   - *Verified:* the third run completed with `no_answer` 0 in every cell.
+
+**Supporting details.**
+
+- Local before/after, 20 users, 120 s:
+
+  | | Before | After |
+  |---|---|---|
+  | Fast-mode p95 | 16,000 ms | 7,600 ms |
+  | Fast-mode median | 2,400 ms | 3,400 ms |
+  | Landscape p99 | 2,900 ms | 1,600 ms |
+  | Scores accepted | 145 | 163 |
+  | Memory | 2,584 MB | 1,989 MB |
+
+  No 503 in either local run.
+- Live, one user (p95): reads 0.25–0.33 s. Fast mode:
+
+  | | 300 aa | 1,000 aa |
+  |---|---|---|
+  | 35M | 0.64 s | 2.48 s |
+  | 150M | 1.91 s | 7.22 s |
+
+  The precise job at 400 aa took 203 s. Every long computation was 19–26% slower than on v0.2.0
+  with no competing traffic. Not explained: the pass code is unchanged, and a slower host is
+  likely but unverified. 203 s exceeds the ~3 min precise target; a roadmap item asks for a
+  second measurement before the limit changes.
+- Live memory: 2,592 MiB at most (resident plus score cache), 63% of the 4 GiB limit.
+- CORS now lists `https://mutascope.abdullahhanif.me` and `https://mutascope-web.vercel.app`; it
+  is live from the next deploy.
+- Settings added: `inference_concurrency` (1), `inference_wait_seconds` (10). No new
+  dependency.
+- Loose ends:
+  - the cause of slow reads (roadmap);
+  - the precise limit (roadmap);
+  - Sentry (no project; roadmap);
+  - GHCR visibility and the trusted-proxy log check, still open from ADR 0035.

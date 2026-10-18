@@ -46,6 +46,9 @@ env:
   MUTASCOPE_API_PRECISE_MAX_LENGTH: "400"
   # Cloud Run's front end: every request of the first deploy came from this address (413 of 413).
   MUTASCOPE_API_TRUSTED_PROXIES: 169.254.169.126/32
+  # Browser origins of the website (Vercel): the custom domain and Vercel's own URL. Preview
+  # deployments and the local dev server are not allowed against the live API.
+  MUTASCOPE_API_CORS_ORIGINS: https://mutascope.abdullahhanif.me,https://mutascope-web.vercel.app
   # Sentry events from this service (the DSN is a secret, below) are tagged production.
   MUTASCOPE_API_SENTRY_ENVIRONMENT: production
 
