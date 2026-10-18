@@ -1,8 +1,9 @@
 # Every pull request and every push to main: lint and type-check, tests with coverage, the API
-# types check, both Docker images built for linux/amd64, the Nextflow smoke test on 2 assays in
-# the pipeline image, and the API image's container tests. Python steps run through the
-# Makefile, so CI runs the same commands as a laptop. Branch protection requires every job here
-# (ADR 0034), so the job names are the check names: renaming one means updating the rule.
+# types check, the website (lint, typecheck, unit tests, bundle download, build), both Docker
+# images built for linux/amd64, the Nextflow smoke test on 2 assays in the pipeline image, and
+# the API image's container tests. Python steps run through the Makefile, so CI runs the same
+# commands as a laptop. Branch protection requires every job here (ADR 0034), so the job names
+# are the check names: renaming one means updating the rule.
 # Actions are pinned by exact release tag (CLAUDE.md); Dependabot moves the pins.
 name: CI
 
@@ -84,6 +85,53 @@ jobs:
       - run: make types
       - name: Committed types match the API
         run: git diff --exit-code web/src/lib/api-types.ts
+
+  # The website (ADR 0037): generated bundle validators up to date, lint, typecheck, unit tests,
+  # the download's checksum checks, the real download of the pinned bundle, then the build.
+  web:
+    name: web (lint, typecheck, unit tests, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: web
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: pnpm/action-setup@v6.1.0
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v7.1.0
+        with:
+          # The Node major Vercel builds with (web/package.json "engines": 24.x).
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: Bundle validators match docs/schema/bundle
+        run: |
+          pnpm schemas
+          git diff --exit-code src/lib/bundle/schemas.generated.ts
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      # The unit tests above include these; this step names the guarantee: a file whose digest
+      # differs from SHA256SUMS (or a manifest that disagrees with it) fails the download and
+      # leaves public/data as it was.
+      - name: Bundle download refuses files that fail SHA256SUMS
+        run: pnpm exec vitest run scripts/fetch-bundle.test.ts
+      # The cached copy is re-verified file by file against SHA256SUMS and the pin before use;
+      # any difference and the script downloads the bundle again.
+      - uses: actions/cache@v6.1.0
+        with:
+          path: web/public/data
+          key: bundle-${{ hashFiles('web/bundle.json') }}
+      - name: Download the pinned bundle and verify SHA256SUMS
+        run: |
+          pnpm data:fetch
+          pnpm data:verify
+      - run: pnpm build
 
   # The smoke test runs in the pipeline image (-profile docker,test; ADR 0007, 0033), built here
   # for the runner's architecture (linux/amd64), as `make pipeline-image` does on a laptop.
