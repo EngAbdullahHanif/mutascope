@@ -1,5 +1,6 @@
 """The API's pins are the config's pins, and only fp32 ONNX models are served."""
 
+import re
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from api.app.settings import Settings
 from mutascope.utils.config import load_config
 
 CONF = Path(__file__).parents[2] / "conf"
+ENV_EXAMPLE = Path(__file__).parents[2] / ".env.example"
 
 
 def test_defaults_are_the_config_pins() -> None:
@@ -48,3 +50,12 @@ def test_environment_overrides_and_revision_format(monkeypatch: pytest.MonkeyPat
     monkeypatch.setenv("MUTASCOPE_API_BUNDLE_REVISION", "main")
     with pytest.raises(ValidationError):
         Settings()
+
+
+def test_env_example_lists_every_setting_and_sets_none() -> None:
+    """``.env.example`` documents each variable once and, copied to ``.env``, changes nothing."""
+    text = ENV_EXAMPLE.read_text()
+    listed = re.findall(r"^# (MUTASCOPE_API_[A-Z0-9_]+)=", text, flags=re.MULTILINE)
+    expected = {f"MUTASCOPE_API_{name.upper()}" for name in Settings.model_fields}
+    assert sorted(listed) == sorted(expected)
+    assert not re.findall(r"^MUTASCOPE_API_", text, flags=re.MULTILINE)

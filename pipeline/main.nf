@@ -57,6 +57,12 @@ def as_list(value) {
 
 workflow {
     log.info "MutaScope pipeline | profile: ${workflow.profile}"
+    if (workflow.containerEngine) {
+        // The docker profile mounts these at their host paths; a missing one would be created
+        // by the Docker daemon, owned by root on a Linux host.
+        [params.data_dir, params.processed_dir, params.results_dir, params.tracking_dir,
+         params.cache_dir, params.embedding_cache_dir].findAll { it }.each { file(it).mkdirs() }
+    }
     log.info "data cache: ${params.data_dir} | processed: ${params.processed_dir} | reports: ${params.reports_dir}"
     def models = as_list(params.models)
     def methods = as_list(params.methods)

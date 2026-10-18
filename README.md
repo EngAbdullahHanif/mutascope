@@ -55,6 +55,10 @@ DOWNLOAD -> [SUBSET] -> VALIDATE -> CLEAN, STRUCT_FEATURES, FOLDSEEK_3DI -> STRU
 - `make pipeline-test` runs the same steps on 2 small assays, with the 30 MB `esm2_t6_8M`
   model and both methods, and skips the 1.9 GB zero-shot archive. It writes only to `pipeline/results/`
   (gitignored), taking about 30 s from an empty cache. CI runs it on every push.
+- `make pipeline-test-docker` runs the same smoke test in the pipeline image (`-profile
+  docker,test`; CPU-only torch and the pinned Foldseek; build it once with `make
+  pipeline-image`). Data, caches and outputs stay on the host, mounted at their own paths
+  ([ADR 0033](docs/adr/0033-docker-images.md)).
 
 ### Resuming an interrupted scoring run
 
@@ -219,6 +223,28 @@ uv run mutascope data publish --push
 
 A new repo is created private; an existing one keeps its visibility
 ([ADR 0008](docs/adr/0008-eda-and-hub-publication.md)).
+
+## Docker
+
+Two images ([ADR 0033](docs/adr/0033-docker-images.md)), built from the repository root:
+
+```bash
+make api-image                          # mutascope-api:dev, this machine's architecture
+make api-image PLATFORM=linux/amd64     # the Space's
+docker compose up                       # http://localhost:7860/docs; settings from .env
+make test-container                     # the image under the Space's limits (2 CPUs, 16 GB)
+make pipeline-image                     # mutascope-pipeline:dev, for -profile docker
+```
+
+The API image has no torch or transformers. It holds the website bundle and the fp32 ONNX
+models, fetched at the pinned commits and checked against their `SHA256SUMS` when the image is
+built. It runs offline as UID 1000, as one process (`python -m api.app.serve`), on port 7860.
+Settings are `MUTASCOPE_API_*` environment variables, all listed in `.env.example`. Copy it to
+`.env` for `docker compose`. Never put a secret in the image or in a committed file.
+
+The package's dependencies are split so that the API image can leave torch out: `mutascope`
+alone is the base the API imports, and `mutascope[pipeline]` is what the pipeline and the CLI
+need. `make setup` installs every extra.
 
 ## Installing Foldseek
 

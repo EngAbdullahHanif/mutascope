@@ -2,7 +2,8 @@
 
 export PYTORCH_ENABLE_MPS_FALLBACK := 1
 
-.PHONY: setup lint fmt test test-slow pipeline pipeline-test mlflow api web types
+.PHONY: setup lint fmt test test-slow pipeline pipeline-test pipeline-test-docker mlflow api web types
+.PHONY: api-image pipeline-image images test-container
 
 setup:
 	uv sync --all-extras
@@ -39,6 +40,30 @@ pipeline:
 pipeline-test:
 	rm -rf pipeline/results/logprob_cache pipeline/results/embedding_cache
 	nextflow run pipeline/main.nf -profile local,test
+
+# The same smoke test in the pipeline image (ADR 0033): CPU only, data_dir and the output and
+# cache directories mounted at their host paths. Needs `make pipeline-image` first.
+pipeline-test-docker:
+	rm -rf pipeline/results/logprob_cache pipeline/results/embedding_cache
+	nextflow run pipeline/main.nf -profile docker,test
+
+# Images (ADR 0033), for this machine's architecture unless PLATFORM is set, e.g.
+# make api-image PLATFORM=linux/amd64 (the Space's). The API image fetches and verifies the
+# bundle and the fp32 ONNX files at the pinned revisions, then runs its self-check.
+PLATFORM ?= linux/$(shell uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')
+VCS_REF := $(shell git rev-parse --short HEAD)
+api-image:
+	docker buildx build -f api/Dockerfile --platform $(PLATFORM) --build-arg VCS_REF=$(VCS_REF) \
+		-t mutascope-api:dev --load .
+pipeline-image:
+	docker buildx build -f pipeline/Dockerfile --platform $(PLATFORM) --build-arg VCS_REF=$(VCS_REF) \
+		-t mutascope-pipeline:dev --load .
+images: api-image pipeline-image
+
+# The API image under the Space's limits (2 CPUs, 16 GB): health, readiness, one fast score and
+# one precise job end to end, user, write paths, no torch. Needs `make api-image`.
+test-container:
+	uv run pytest -m container api/tests/test_container.py
 
 # Local MLflow UI over the tracking store (conf/tracking; ADR 0014). 5001: macOS uses 5000.
 mlflow:

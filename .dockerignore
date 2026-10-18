@@ -1,0 +1,51 @@
+# Build context of both images (api/Dockerfile, pipeline/Dockerfile; ADR 0033). The Dockerfiles
+# copy named paths only; this keeps data, outputs, secrets and caches out of the context.
+
+# Data and outputs: never in an image (CLAUDE.md "Docker"). The pipeline mounts data_dir.
+data/
+build/
+mlruns/
+results/
+work/
+outputs/
+multirun/
+pipeline/results/
+.nextflow/
+.nextflow.log*
+timeline.html*
+report.html*
+trace.txt*
+
+# Secrets
+.env
+.env.*
+
+# Environments and caches
+.venv/
+**/.venv/
+**/__pycache__/
+**/*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+__marimo__/
+web/node_modules/
+web/.next/
+
+# Not needed to build or run either image
+.git/
+.github/
+.claude/
+.idea/
+.vscode/
+**/.DS_Store
+notebooks/
+docs/
+web/
+tools/
+tests/
+api/tests/
