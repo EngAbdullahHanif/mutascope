@@ -160,10 +160,10 @@ Run `make lint test` before declaring any task done.
   and `onnx check-scores` (the model gate's checks against our PyTorch score set). The
   quantization recipe (`onnx.quantization`) was fixed before any result. Never change it, or
   the thresholds, to make a check pass. The int8 files fail `check-scores` on 3 + 1 assays and
-  are rejected. The API serves fp32 ONNX (`esm2_*_onnx_fp32`, Hub `82e1528`). If 150M's
-  fast-mode p95 on the deployed service for 1,000 residues exceeds 2 s, the live default becomes 35M fp32.
-  Precise mode is a background job with 35M only, with a length limit of about 3 min on the
-  deployed service (ADR 0029, section 6).
+  are rejected. The API serves fp32 ONNX (`esm2_*_onnx_fp32`, Hub `82e1528`). 150M's
+  fast-mode p95 at 1,000 residues on the deployed service was 5.72 s (> 2 s), so the live default
+  is 35M fp32 (ADR 0034, section 6). Precise mode is a background job with 35M only, limited to
+  about 3 min: 400 residues (163 s measured; 600 took 406 s).
 
 ## Evaluation rules (non-negotiable)
 
@@ -301,8 +301,8 @@ Run `make lint test` before declaring any task done.
 - Input validation: only canonical 20 amino acids, length 1–1022, max 50 mutations per `score` request.
 - Live scoring (ADR 0031): `POST /v1/score` is fast mode (wild-type marginal, `esm2_35m` |
   `esm2_150m`, default `score_default_model`); `POST /v1/jobs` is precise mode (masked marginal,
-  35M only, at most `precise_max_length` residues: 600, provisional until the deployed service
-  is measured). One job runs at a time (`api.app.jobs`, in-process worker); `job_queue_size` wait,
+  35M only, at most `precise_max_length` residues: 400 on the deployed service, measured, ADR 0034;
+  the image's default is still 600). One job runs at a time (`api.app.jobs`, in-process worker); `job_queue_size` wait,
   then 429; finished jobs expire after `job_ttl_seconds`. SSE events are a replayable log per
   job: `queued`, `running`, one `progress` per forward batch (its rows), then `succeeded` |
   `failed` | `cancelled`; `id` = index, `Last-Event-ID` resumes. Every live response is
@@ -413,7 +413,7 @@ stay green on `main`.
 
 ## Current phase
 
-Week 7: API, Docker, CI/CD (Phase 4). Phase 1 delivered a pinned, checksum-verified ProteinGym
+Weeks 8–10: Frontend and launch (Phase 5). Phase 1 delivered a pinned, checksum-verified ProteinGym
 v1.3 pipeline producing 696,311 validated single mutants across 217 assays, structure features and
 3Di for 213 of them, an EDA notebook and a data card (ADR 0009). Phase 2 delivered zero-shot scores
 from ESM-2 35M / 150M / 650M (217 assays), SaProt 650M and the ESM-2 650M + SaProt ensemble (213),
@@ -426,7 +426,13 @@ in `data/processed/supervised_landscapes/`, and a manifest naming each assay's d
 (ADR 0025, 0026). Phase 4 Task 0 closed the Phase 3 leftovers: both Hub repos are public and
 pinned by commit (`train.publish.revision`, `publish.revision`; ADR 0026 addendum), and `make
 pipeline` runs `data folds` through `train final` and publishes only after `train check-release`
-(ADR 0027). The Phase 4 export reads supervised landscapes from the bundle and zero-shot ones
-from the cache.
+(ADR 0027). Phase 4 delivered the website bundle (`bundle-v1.0.0`, 217 files, 29.2 MB), fp32
+ONNX ESM-2 35M / 150M (int8 rejected), the FastAPI service with live scoring and hardening, a
+torch-free API image (600 MB compressed) and a pipeline image, five required CI checks,
+release-please and keyless deployment to Cloud Run: `v0.2.0` serves at
+https://mutascope-api-2lvmztrsha-ew.a.run.app (ADR 0035). Carried into Phase 5 (ROADMAP): bound
+concurrent forward passes, live metrics token / Sentry, GHCR visibility, the trusted-proxy log
+check, and the frontend's CORS origin. The frontend reads the bundle from the Hub at
+`export.publish.revision` and must work with the API asleep (cold start ~20 s).
 Update this section at the start of each phase.
 The per-phase task checklist lives in `docs/ROADMAP.md`; mark items `[x]` there as they land.
