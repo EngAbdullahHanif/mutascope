@@ -56,7 +56,10 @@ make fmt          # ruff format . && ruff check --fix .
 make test         # pytest -q, then LightGBM tests in their own process (esm2_t6_8M; < 2 min)
 make test-slow    # pytest -m slow (real 650M models, MPS; run locally only)
 make pipeline     # nextflow run pipeline/main.nf -profile local
-make pipeline-test# nextflow run pipeline/main.nf -profile local,test (docker,test once the image exists, Phase 4)
+make pipeline-test# nextflow run pipeline/main.nf -profile local,test
+make pipeline-test-docker # the same in the pipeline image (-profile docker,test; ADR 0033)
+make api-image    # API image (PLATFORM=linux/amd64 for the Space); make pipeline-image, make images
+make test-container # pytest -m container: the API image under --cpus=2 --memory=16g
 make mlflow       # MLflow UI on http://127.0.0.1:5001 over mlruns/mlflow.db
 make api          # uvicorn api.app.main:app --reload --port 7860
 make web          # cd web && pnpm dev
@@ -339,11 +342,24 @@ Run `make lint test` before declaring any task done.
 - After changing any response schema, run `make types` and commit the regenerated TypeScript types
   (CI's `types` job fails when `web/src/lib/api-types.ts` is stale).
 
-## Docker
+## Docker (ADR 0033)
 
 - Multi-stage, `python:3.11-slim`, uv, CPU-only torch/onnxruntime wheels, non-root user, `HEALTHCHECK`, port 7860.
 - Model weights fetched from the Hugging Face Hub at pinned revisions.
 - Never copy `data/` or secrets into images.
+- Dependencies: the base `dependencies` are what the API imports; torch, transformers and the
+  rest of the pipeline's stack are the `pipeline` extra. Never move a pipeline-only package
+  back into the base.
+- API image (`api/Dockerfile`): `--extra api --extra onnx` only. `api.app.fetch` bakes the
+  bundle and the fp32 ONNX files in at the pinned commits, checked against their `SHA256SUMS`.
+  The image runs offline (`HF_HUB_OFFLINE=1`) as UID 1000, BLAS/OpenMP at 1 thread. Its last
+  build step is `api.app.selfcheck`, the same check as `test_no_torch.py`. The write paths
+  (`score_cache_dir`, `lock_file`) are settings, under `/home/user/.cache/mutascope`.
+- `.env.example` lists every `MUTASCOPE_API_*` setting, commented out at its default; a test
+  fails if one is missing or set. New setting → add it there.
+- Pipeline image (`pipeline/Dockerfile`): `--extra pipeline --extra tracking`, Foldseek per
+  architecture (`ADD --checksum`). `-profile docker` mounts the directories that task commands
+  name by host path, and reads the configs from the image (`params.conf_dir`).
 
 ## Frontend (`web/`)
 
