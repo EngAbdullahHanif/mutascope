@@ -30,6 +30,25 @@ updates:
     commit-message:
       prefix: "build(deps)"
 
+  # The website (ADR 0037): exact pins in web/package.json, pnpm-lock.yaml updated with them.
+  # TypeScript stays on 5.x (openapi-typescript's peer range) and ESLint on 9.x
+  # (eslint-config-next's plugins) until those move; their majors are not proposed.
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      web-minor-patch:
+        update-types: [minor, patch]
+    ignore:
+      - dependency-name: typescript
+        update-types: [version-update:semver-major]
+      - dependency-name: eslint
+        update-types: [version-update:semver-major]
+    commit-message:
+      prefix: "build(deps)"
+
   - package-ecosystem: github-actions
     directory: /
     schedule:
