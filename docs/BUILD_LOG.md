@@ -3093,3 +3093,98 @@ settings are in `conf/deploy/cloudrun.yaml` and reach the service by a redeploy.
 - **Where earlier documents say "the Space"**, they mean the deployed service (ADR 0034).
 - **Loose ends:** bounding concurrent forward passes; checking, after the redeploy, that the
   access lines show visitors' addresses instead of the front end's.
+
+---
+
+## Entry 36 — Phase 4 close-out (2026-10-18)
+
+**Plain-language summary.** Phase 4 is closed. Its goal was a tested, observable service that
+deploys itself, and most of that is true. Every pull request runs five required checks. A
+version tag builds the API image, pushes it and deploys it to Google Cloud Run, which serves
+version 0.2.0 at https://mutascope-api-2lvmztrsha-ew.a.run.app with its interactive docs at
+`/docs`. Two parts fall short and are written down. The 2-second rule for fast scoring holds at
+300 residues (0.92 s) but not at 1,000 (2.09 s) or with five users at once (10 s). And
+"observable" is weaker live than in the code: the metrics endpoint and error reporting exist and
+are tested, but the deployed service has neither switched on. This task wrote no code. It
+checked every Phase 4 item against the repository, GitHub and the live service, rebuilt the
+released image to measure it, recomputed the int8 and bundle numbers from their files, wrote
+ADR 0035, and pointed the project at Phase 5.
+
+**The 3 most important design choices.**
+
+1. **Judge the done-when line part by part, and close with the miss stated.** All but one
+   checklist item are ticked, but the done-when line is what the phase promised. Three of its
+   four parts are met. The fourth, fast mode under 2 s, is met at 300 residues and missed at
+   1,000 and under load, so ADR 0035 and the roadmap's close note say exactly that, with the
+   numbers, instead of a tick.
+2. **Measure the image again rather than copy the old figure.** ADR 0033's 600 MB was measured
+   before the base images were pinned to literal `FROM` lines, and the registry could not be read
+   from this machine. The `v0.2.0` commit was rebuilt for linux/amd64 into an OCI archive: 12
+   layers, 600,190,175 bytes compressed, 1,124 MiB unpacked (`du -sxm /`, as ADR 0033). The
+   number held, and the ADR says it is a rebuild, not the pushed bytes.
+3. **Turn every weak point into an owned next step.** The open item and four follow-ups
+   (forward-pass bound, live metrics and Sentry secrets, GHCR visibility, the trusted-proxy log
+   check) and the frontend's CORS origin are now Phase 5 roadmap items, and CLAUDE.md's current
+   phase names them. A weak point with no owner stays weak.
+
+**Problems encountered and how they were solved.**
+
+1. **The live service is not observable through the API's own metrics.** *Found:* reading
+   `conf/deploy/cloudrun.yaml` (`secrets: {}`), then `GET /metrics` on the live URL: 404, which
+   is the designed answer when no `metrics_token` is set. No `sentry_dsn` either. *Cause:* ADR
+   0034 wired Secret Manager into the deploy, but no secret was created. *Fix:* none in this task
+   (it needs a secret created in Google Cloud by the author). Recorded as ADR 0035 weak point 3
+   and a Phase 5 roadmap item. *Verified:* the 404 above; `/health` and `/ready` answer 200.
+2. **The "public" GHCR image could not be pulled anonymously.** *Found:* `docker buildx
+   imagetools inspect ghcr.io/engabdullahhanif/mutascope-api:v0.2.0` failed: GHCR refused an
+   anonymous pull token (401). The release log shows the push itself succeeded (manifest
+   `sha256:4692a941…` to both registries). *Cause (likely, not confirmed):* new GHCR packages are
+   private by default; the `gh` token here lacks `read:packages`, so the visibility could not be
+   read. *Fix:* none here. ADR 0035 weak point 4 says "probably not public", and the roadmap asks
+   the author to set it or drop the claim.
+3. **The frontend could not call the live API.** *Found:* a request with `Origin:
+   https://mutascope.abdullahhanif.me` got no `Access-Control-Allow-Origin` header back.
+   `cors_origins` defaults to `http://localhost:3000` and the deploy config does not set it.
+   *Fix:* none yet, because the frontend's domain does not exist. It is a Phase 5 roadmap item and
+   is listed under "What Phase 5 inherits".
+4. **A Phase 1 item was still open although done.** *Found:* the roadmap audit. "Profiles:
+   `local`, `docker`, `test`" waited for "the Phase 4 image". ADR 0033 built it, and CI's
+   `Nextflow smoke test (docker,test, 2 assays)` passes on main (`24d5adf`). *Fix:* ticked, with
+   the evidence on the item.
+5. **ADR 0029 gives only the aggregate int8 change.** *Found:* recomputing it from
+   `results/zero_shot/comparisons.parquet`. The aggregate matched (−0.000534 [−0.001349,
+   +0.000158] for 35M, −0.000615 [−0.001223, +0.000153] for 150M), but within function types
+   int8 is lower with intervals that exclude 0 for Organismal Fitness (35M −0.0014, 150M
+   −0.0015, 77 assays), Stability (35M, −0.0022, 66) and Activity (150M, −0.0011, 43). *Fix:*
+   recorded in ADR 0035. int8 was rejected on the per-assay gate, so the serving decision does
+   not change.
+
+**Supporting details.**
+
+- **Reported numbers** (all rechecked 2026-10-18):
+  - Live URL: https://mutascope-api-2lvmztrsha-ew.a.run.app; `/health` 0.2.0; `/ready`
+    `esm2_35m`, limit 400, bundle `3ae76721…`, 217 proteins. The redeploy check left open in
+    entry 35 passed.
+  - Image (linux/amd64, rebuild of `v0.2.0`): 600 MB compressed, 1,124 MiB unpacked.
+  - Fast-mode p95, network included: 35M 0.92 s (300 aa) / 2.09 s (1,000 aa); 150M 1.85 s /
+    5.72 s. Precise 400 aa 163 s. Cold start 20.5 s.
+  - int8: aggregate Spearman −0.0005 (35M) and −0.0006 (150M), both CIs include 0; per-assay
+    agreement below 0.99 on 3 and 1 assays → rejected; fp32 served.
+  - Bundle: 217 protein files, 29,218,051 bytes (29.2 MB); 29.7 MB in all; largest 1,153,890
+    bytes under the 2 MB budget; `shasum -c SHA256SUMS` all OK.
+- **CI on main in Phase 4:** one red run (`9de9434`, the merge of #35), fixed by #39 (entry 35,
+  problem 1); green since `9533655`. Open PRs #37, #38 (Dependabot) and #41 (release 0.3.0) pass
+  all five checks. The running image's code equals main's.
+- **Unchecked:** bounding concurrent forward passes (moved to Phase 5); stretch items from
+  Phases 2 and 3 (ESM-1v / ESM C, LoRA, leave-protein-out).
+- **Weak (ADR 0035, items 2–10):** 2 s missed at 1,000 residues and under load; no live metrics
+  or Sentry; GHCR visibility; trusted proxy unchecked in logs; memory at 20 users on 4 GiB not
+  measured; scale-to-zero costs; thin live sample; image size from a rebuild; "the Space" in
+  older ADRs.
+- **Tests:** `make lint` clean (ruff, format: 260 files, pyright 0 errors). `make test`: 650
+  passed, 1 skipped, then 15 LightGBM tests passed in their own process. No code changed, so
+  `make test-slow` and `make test-container` were not rerun here; CI's API image job ran the
+  container tests on main (`24d5adf`).
+- **Docs changed:** ADR 0035; CLAUDE.md (current phase → Phase 5); ROADMAP (Phase 1 profile
+  item ticked, Phase 4 close note, Phase 5 "Carried from Phase 4"); README (status line, live API
+  link, two "Space" comments); PROJECT_MAP (steps 28–36, the Phase 4 index and retrospective).

@@ -413,7 +413,7 @@ stay green on `main`.
 
 ## Current phase
 
-Week 7: API, Docker, CI/CD (Phase 4). Phase 1 delivered a pinned, checksum-verified ProteinGym
+Weeks 8–10: Frontend and launch (Phase 5). Phase 1 delivered a pinned, checksum-verified ProteinGym
 v1.3 pipeline producing 696,311 validated single mutants across 217 assays, structure features and
 3Di for 213 of them, an EDA notebook and a data card (ADR 0009). Phase 2 delivered zero-shot scores
 from ESM-2 35M / 150M / 650M (217 assays), SaProt 650M and the ESM-2 650M + SaProt ensemble (213),
@@ -426,7 +426,13 @@ in `data/processed/supervised_landscapes/`, and a manifest naming each assay's d
 (ADR 0025, 0026). Phase 4 Task 0 closed the Phase 3 leftovers: both Hub repos are public and
 pinned by commit (`train.publish.revision`, `publish.revision`; ADR 0026 addendum), and `make
 pipeline` runs `data folds` through `train final` and publishes only after `train check-release`
-(ADR 0027). The Phase 4 export reads supervised landscapes from the bundle and zero-shot ones
-from the cache.
+(ADR 0027). Phase 4 delivered the website bundle (`bundle-v1.0.0`, 217 files, 29.2 MB), fp32
+ONNX ESM-2 35M / 150M (int8 rejected), the FastAPI service with live scoring and hardening, a
+torch-free API image (600 MB compressed) and a pipeline image, five required CI checks,
+release-please and keyless deployment to Cloud Run: `v0.2.0` serves at
+https://mutascope-api-2lvmztrsha-ew.a.run.app (ADR 0035). Carried into Phase 5 (ROADMAP): bound
+concurrent forward passes, live metrics token / Sentry, GHCR visibility, the trusted-proxy log
+check, and the frontend's CORS origin. The frontend reads the bundle from the Hub at
+`export.publish.revision` and must work with the API asleep (cold start ~20 s).
 Update this section at the start of each phase.
 The per-phase task checklist lives in `docs/ROADMAP.md`; mark items `[x]` there as they land.
