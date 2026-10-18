@@ -4,8 +4,8 @@
 # `gcloud run services replace`, so nothing about it is set by hand in the console.
 # One-time setup: tools/deploy/setup-gcp.sh prints the values for `project_id` and
 # `project_number`.
-project_id: ""
-project_number: ""
+project_id: "mutascope-512012"
+project_number: "218880708059"
 region: europe-west1
 service: mutascope-api
 
