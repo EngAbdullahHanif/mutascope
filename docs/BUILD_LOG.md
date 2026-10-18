@@ -3375,3 +3375,101 @@ keep it. Decision record: ADR 0036, section 7.
   - the precise limit (roadmap);
   - profiling the loop and moving gzip / ETag off it, now optional;
   - GHCR visibility, the trusted-proxy log check and Sentry, still open.
+
+---
+
+## Entry 39 — Website foundation (Phase 5 Task 1, 2026-10-18)
+
+**Plain-language summary.** The website now exists as a working shell. It has a header with
+Explorer, Benchmarks, How it works and About, a footer with the GitHub and Hugging Face links and
+the not-for-clinical-use note, light and dark mode, and placeholder pages. The important part is
+underneath. When the site is built, a script downloads the published data bundle (217 assay files
+plus manifest and benchmarks, 29 MB) from the exact Hub commit the API uses. It checks every file
+against the bundle's checksum list and places the files on the site's own CDN only if every check
+passes. The browser checks every file again when it loads it, with validators generated
+automatically from the bundle's schema, so the site can never quietly show data it misreads. The
+site needs neither the Hub nor the API to show precomputed results, so it works while the API
+sleeps. The visual rules (colours, type, spacing, the blue–white–red effect scale and its legend)
+are written down in `web/DESIGN.md`. CI gets a sixth job for the website. Decision record:
+ADR 0037.
+
+**The 3 most important design choices.**
+
+1. **Copy the bundle into the site at build time, all-or-nothing.** The pin (`web/bundle.json`)
+   is the same commit as `export.publish.revision`, and a pytest fails if they differ. The
+   download checks all 223 files against `SHA256SUMS`, checks the manifest's 217 protein digests
+   against the same list, and validates every file with Zod. It writes to a staging directory and
+   swaps it in only when all of that passes. A tampered file therefore fails the build and leaves
+   the previous data in place, which a unit test checks. The alternatives were weaker: fetching
+   from the Hub in the browser ties every page view to a third party, and committing the data puts
+   29 MB of generated files in git.
+2. **Generate the validators, and fail on what the generator does not understand.** A small
+   generator turns the Pydantic-written JSON Schemas into Zod code. It handles exactly the
+   keywords those schemas use and throws on any other, so the validator can never be looser than
+   the schema. Off-the-shelf converters skip unsupported keywords silently. The bundle also ships
+   its own copy of the schemas, and the download requires them to equal the repo copy the
+   validators came from. In the browser, each file passes a schema-version check, then Zod, then
+   (for protein files) the manifest's sha256 of the gzip bytes. Validating all 217 protein files
+   takes 0.6 s, so checking everything costs little.
+3. **A fixed effect scale, separate from the interface colour.** Effects use ColorBrewer RdBu
+   arms (blue = harmful, red = tolerated) around a pure-white 0, interpolated in OKLab, symmetric,
+   and the same in both themes. Missing values are grey, never white. The interface uses one teal
+   accent away from both poles. Tests keep the CSS tokens and the TypeScript stops identical,
+   check that lightness falls steadily on both arms, and check that the arms match within OKLab
+   ΔL 0.08. Every text and accent token pair passes WCAG AA, computed rather than eyeballed (the
+   lowest is 5.5:1).
+
+**Problems encountered and how they were solved.**
+
+1. **The shadcn CLI installed an unrelated npm package.** *Found:* after
+   `shadcn add button`, `package.json` had a new dependency `"cn": "^0.5.0"` (a caret range in a
+   repo of exact pins), and `button.tsx` imported `cn` from it instead of from our
+   `@/lib/utils`. *Fix:* `pnpm remove cn` and the import pointed at `@/lib/utils`. DESIGN.md now
+   says to check the diff after any `shadcn add`. *Verified:* `grep -c "cn@" pnpm-lock.yaml` gives
+   0, and lint, typecheck and build pass.
+2. **The first real download failed on the bundle's own schema files.** *Found:* the first
+   `pnpm data:fetch` stopped at file 223 with "schema/benchmarks.schema.json has schema version
+   undefined". The script treated every `.json` as a bundle file, and the bundle also ships its
+   JSON Schemas under `schema/`. *Fix:* files get a role from their path (manifest, benchmarks,
+   protein, schema, other). Schema files must now equal `docs/schema/bundle/`, which turns them
+   into a check that the validators were generated from this bundle's schema. *Verified:* 223
+   files, 217 proteins, 14 s; `data:verify` re-checks 223 files in 0.2 s; a unit test feeds a
+   changed schema file and expects the refusal.
+3. **The logo's colour cells did not render.** *Found:* in the first screenshots the logo was an
+   empty outline. Tailwind 4 emits a theme variable only when a utility uses it, and the logo reads
+   `var(--color-effect-*)` from inline styles, so the variables did not exist. *Fix:* the effect
+   tokens moved to `@theme static`. *Verified:* the logo shows the five cells in the light, dark
+   and phone screenshots.
+4. **"217 proteins" was wrong.** *Found:* while writing the hero text, checked against the
+   manifest: 217 entries, but 186 distinct UniProt IDs. The bundle's "protein" files are per
+   assay (ADR 0028). *Fix:* the hero says "every ProteinGym assay", and the Explorer status says
+   "217 assays". *Verified:* the end-to-end test expects "217 assays".
+5. **pnpm 12 refused to install.** *Found:* `ERR_PNPM_IGNORED_BUILDS` for `unrs-resolver`, a
+   dependency of eslint-config-next. pnpm 12 fails when a dependency's build script has neither
+   been allowed nor denied. *Fix:* `pnpm-workspace.yaml` denies it (`allowBuilds: unrs-resolver:
+   false`). It ships prebuilt binaries as optional dependencies, so the script is only a
+   fallback. *Verified:* install, ESLint (which loads the resolver) and CI's
+   `--frozen-lockfile` install all work.
+6. **The phone header scrolled sideways.** *Found:* at 375 px the nav was cut off at
+   "Benchmar…". *Fix:* below the `sm` breakpoint the nav takes its own row. *Verified:* phone
+   screenshot, `document.documentElement.scrollWidth` = 375.
+
+**Supporting details.**
+
+- Versions (exact, from the npm registry on 2026-10-18): Next.js 16.4.2, React 19.3.1,
+  Tailwind 4.3.3, Zod 4.6.7, Vitest 5.0.5, Playwright 1.64.1, Prettier 3.9.10, shadcn CLI 4.22.1.
+  Held back on purpose: TypeScript 5.9.3 (7.0.2 is out, but openapi-typescript 7.13 needs `^5`
+  and typescript-eslint `<6.1`) and ESLint 9.39.5 (10.13 is out, but eslint-config-next's
+  `react`, `import` and `jsx-a11y` plugins declare `^9`). Dependabot now covers `/web` and does
+  not propose those two majors.
+- Tests: 38 Vitest tests (loader, both scripts, scale, legend) and 5 Playwright tests (navigation,
+  footer on every page, dark mode across a reload, Explorer data with every request to another
+  origin blocked, protein files served as gzip bytes). Mutation check: with the digest
+  comparison disabled in the script or in the loader, exactly the two tamper tests fail.
+- `make web-check` and `make web-e2e` were added. `make lint test` passes.
+- Loose ends:
+  - add the new CI job to the `main` ruleset's required checks;
+  - Vercel's build runs `pnpm build`, so it downloads the bundle; check it on the first
+    deploy, and check there that `/data/proteins/*.json.gz` is served without
+    `Content-Encoding` (the loader refuses decoded files);
+  - the Explorer itself is next.
