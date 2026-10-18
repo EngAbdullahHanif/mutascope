@@ -188,6 +188,16 @@ def not_ready(detail: str) -> ApiError:
     return ApiError(503, "not-ready", "Not ready", detail)
 
 
+def inference_busy(waited: float, retry_after: int) -> ApiError:
+    return ApiError(
+        503,
+        "scoring-busy",
+        "Scoring busy",
+        f"Every scoring slot stayed busy for {waited:g} s. Retry after {retry_after} s.",
+        headers={"Retry-After": str(retry_after)},
+    )
+
+
 def problem_response(request: Request, problem: Problem) -> JSONResponse:
     content = problem.model_dump(mode="json", exclude_none=True)
     return JSONResponse(content, status_code=problem.status, media_type=MEDIA_TYPE)

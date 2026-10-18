@@ -3,7 +3,8 @@
 Startup reads the website bundle at the pinned revision (ADR 0028) and refuses to start if its
 checksums fail or its schema version is not one this code reads; then it loads the fp32 ONNX
 scorers (ADR 0029), opens the live-score cache and starts the precise-mode job worker
-(ADR 0031). Nothing in the API imports torch or transformers.
+(ADR 0031). Every forward pass, fast or precise, runs in one bounded pool (``inference``), so
+reads never wait behind scoring. Nothing in the API imports torch or transformers.
 
 Hardening (ADR 0032): a host-wide lock keeps the server to one process, every request gets an
 id and a client address, bodies are size-limited, routes are rate-limited, CORS is restricted
@@ -23,6 +24,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from api.app import problems
 from api.app.bundle import open_bundle
 from api.app.caching import ETagMiddleware
+from api.app.inference import Inference
 from api.app.jobs import JobManager
 from api.app.live import live_models
 from api.app.live_routes import CACHE_HEADER, live
@@ -63,8 +65,12 @@ def load_state(settings: Settings, metrics: Metrics) -> AppState:
         local_dir=settings.onnx_local_dir,
     )
     cache = ScoreCache(settings.score_cache_dir, size_limit=settings.score_cache_bytes)
+    inference = Inference(
+        concurrency=settings.inference_concurrency, wait_seconds=settings.inference_wait_seconds
+    )
     jobs = JobManager(
         cache=cache,
+        inference=inference,
         version=api_version(bundle),
         queue_size=settings.job_queue_size,
         ttl_seconds=settings.job_ttl_seconds,
@@ -78,6 +84,7 @@ def load_state(settings: Settings, metrics: Metrics) -> AppState:
             scorers, revision=settings.onnx_revision, local_dir=settings.onnx_local_dir
         ),
         score_cache=cache,
+        inference=inference,
         jobs=jobs,
         settings=settings,
         metrics=metrics,
@@ -101,6 +108,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
             queue_length=lambda: state.jobs.waiting,
             running=lambda: state.jobs.running,
             streams=lambda: slots.count,
+            inference_running=lambda: state.inference.running,
+            inference_waiting=lambda: state.inference.waiting,
+            score_cache_bytes=state.score_cache.volume,
         )
         app.state.mutascope = state
         worker = asyncio.create_task(state.jobs.run(), name="precise-jobs")
@@ -109,6 +119,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         worker.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await worker
+        state.inference.close()
         state.score_cache.close()
         app.state.mutascope = None
     finally:

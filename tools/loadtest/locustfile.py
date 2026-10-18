@@ -2,8 +2,9 @@
 
 The API runs with ``trusted_proxies = 127.0.0.1``, as it will behind the Space's proxy, and each
 user sends its own ``X-Forwarded-For`` address, so every user is a separate client for the rate
-limits. A 429 is an expected answer here, not a failure: it is recorded under its own request
-name (``... [429]``), and checked to be a problem with ``Retry-After``. Any other status that the
+limits. A 429, or a 503 ``scoring-busy`` (no inference slot freed in time, ADR 0036), is an
+expected answer here, not a failure: it is recorded under its own request name (``... [429]``,
+``... [503]``), and checked to be a problem with ``Retry-After``. Any other status that the
 route does not document, a 5xx, or a connection error is a failure.
 
 Classes ending in ``Hammer`` send as fast as they can (one per limit, run alone, to see the 429s
@@ -52,7 +53,14 @@ class Client(FastHttpUser):
         ) as response:
             status = response.status_code
             COUNTS[(type(self).__name__, self.address, status)] += 1
-            if status == 429:
+            if status == 503 and "scoring-busy" in response.text:
+                # Every inference slot stayed busy (ADR 0036): an answer, like a 429.
+                response.request_meta["name"] = f"{label} [503]"
+                if not response.headers.get("retry-after", "").isdigit():
+                    response.failure("scoring-busy 503 without Retry-After")
+                else:
+                    response.success()
+            elif status == 429:
                 response.request_meta["name"] = f"{label} [429]"
                 retry_after = response.headers.get("retry-after", "")
                 if response.headers.get("content-type") != "application/problem+json":

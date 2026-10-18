@@ -20,7 +20,14 @@ from fastapi.sse import EventSourceResponse, ServerSentEvent
 
 from api.app import problems
 from api.app.jobs import Job, parse_last_event_id
-from api.app.live import DECIMALS, LiveModelName, fast_landscape, mutation_errors, to_grid
+from api.app.live import (
+    DECIMALS,
+    LiveModelName,
+    cached_fast,
+    compute_fast,
+    mutation_errors,
+    to_grid,
+)
 from api.app.logs import sequence_fields
 from api.app.ratelimit import client_of, rate_limit, stream_slot
 from api.app.routes import State, api_version
@@ -62,15 +69,20 @@ async def score(state: State, request: ScoreRequest, response: Response) -> Scor
     """Fast mode: the wild-type marginal of ESM-2 35M or 150M (one forward pass).
 
     Without ``mutations`` the full 19 x L landscape; with them, just their scores. An identical
-    request (model, revision, sequence) is answered from the cache.
+    request (model, revision, sequence) is answered from the cache. A new one waits for a
+    scoring slot (one forward pass at a time, precise-mode batches included); 503 with
+    ``Retry-After`` when none frees up in time.
     """
     seq = request.sequence
     if request.mutations is not None and (errors := mutation_errors(seq, request.mutations)):
         raise RequestValidationError(errors)
     model = state.live[request.model or LiveModelName(state.settings.score_default_model)]
-    landscape, hit = await asyncio.to_thread(
-        fast_landscape, model, seq, state.score_cache, state.metrics
-    )
+    landscape = await asyncio.to_thread(cached_fast, model, seq, state.score_cache, state.metrics)
+    hit = landscape is not None
+    if landscape is None:
+        landscape = await state.inference.run(
+            compute_fast, model, seq, state.score_cache, state.metrics, wait=False
+        )
     response.headers[CACHE_HEADER] = "hit" if hit else "miss"
     log.info(
         "score_request",

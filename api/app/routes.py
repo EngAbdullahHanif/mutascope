@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Query, Request
 
 from api.app import problems
 from api.app.bundle import Bundle
+from api.app.inference import Inference
 from api.app.jobs import JobManager
 from api.app.live import LiveModel, LiveModelName
 from api.app.metrics import Metrics
@@ -47,6 +48,8 @@ class AppState:
     live: Mapping[LiveModelName, LiveModel]
     """The served models by request key (:mod:`api.app.live`)."""
     score_cache: ScoreCache
+    inference: Inference
+    """The slots every live forward pass runs in."""
     jobs: JobManager
     settings: Settings
     metrics: Metrics
