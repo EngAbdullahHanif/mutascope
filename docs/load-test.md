@@ -288,6 +288,27 @@ In `conf/deploy/cloudrun.yaml` (`env`), applied by the next deploy:
 Not changed: the rate limits, and the open question of bounding concurrent forward passes
 (ADR 0033). At 5 users the platform, not the API, refused 2 of 226 requests.
 
+## 7. With the inference pool: before and after locally, then live (Phase 5 Task 0, ADR 0036)
+
+One forward pass at a time (`inference_concurrency = 1`). Details and every number are in ADR
+0036, sections 5 and 6. The live numbers are in `docs/live-measure-0036-summary.json`.
+
+- **Local container** (`run.py --limits "--cpus=2 --cpuset-cpus=0,1 --memory=4g"`, `load5` and
+  `load20_2m`, old and new image): at 20 users fast mode's p95 fell from 16 s to 7.6 s, the
+  landscape p99 from 2.9 s to 1.6 s, and memory from 2,584 to 1,989 MB. Fast mode's median rose
+  from 2.4 s to 3.4 s, because requests now wait their turn.
+- **Cloud Run, v0.4.0** (`live.py --load-users 5 20`): the pool held at one pass, and memory
+  peaked at 2,592 MiB (63% of 4 GiB). Reads did **not** get fast. At 5 users
+  `GET /v1/proteins/{id}` had a p99 of 8.5 s, against 9.9 s before, the same within noise. At 20
+  users reads, scores and even 429 answers took up to 28–34 s. The waiting is on the event loop
+  (or the GIL), not on inference slots. Every long computation was also 19–26% slower than on
+  v0.2.0 with one user (precise, 400 aa: 203 s against 163 s).
+- **Running `live.py` twice on a warm instance needs a new `--seed`.** The second run otherwise
+  sends the same sequences, which are cache hits, and the script stops rather than time them.
+  A connection closed without an answer is now counted (`no_answer`) instead of ending the run:
+  the first attempt lost one 150M request that way, with the instance still up (its counters
+  continued).
+
 ## What this does not show
 
 - Latency from other places than a laptop in Germany, or with more than one client address

@@ -291,14 +291,22 @@ measured at 20 users on 4 GiB.
 ## Phase 5 — Weeks 8–10: Frontend, launch
 
 ### Carried from Phase 4 (ADR 0035)
-- [ ] Bound concurrent forward passes (ADR 0033 section on 20 users, ADR 0034 section 6); measure
-      5 users live again
-- [ ] Live observability: create the `metrics_token` (and, if wanted, `sentry_dsn`) secrets and
-      list them under `secrets` in `conf/deploy/cloudrun.yaml`
+- [x] Bound concurrent forward passes (ADR 0036: one pass at a time, 503 `scoring-busy` after
+      10 s); measure 5 users live again (ADR 0036, section 6: read p99 8.5 s, not fixed)
+- [ ] Reads stay slow on Cloud Run under load although the pool holds (ADR 0036, section 6): find
+      what makes the event loop wait (try `ONNX_THREADS=1` live, profile the loop, move gzip /
+      ETag of large bodies off it); goal read p99 < 1 s at 5 users
+- [ ] Precise job at 400 residues took 203 s live (v0.4.0) against the ~3 min target: measure
+      again, lower `PRECISE_MAX_LENGTH` if it holds
+- [x] Live observability: `metrics_token` from Secret Manager (ADR 0036); `/metrics` 401 / 200
+      checked live
+- [ ] Sentry: create a project, add `MUTASCOPE_API_SENTRY_DSN` under `secrets` again (removed in
+      PR #46: the secret was not a DSN and stopped the API at startup)
 - [ ] Make `ghcr.io/engabdullahhanif/mutascope-api` public (package settings), or stop calling it
       the public copy
 - [ ] Check in Cloud Logging that access lines show visitors' addresses (trusted proxy, ADR 0034)
-- [ ] Add the frontend's origin to `MUTASCOPE_API_CORS_ORIGINS` in `conf/deploy/cloudrun.yaml`
+- [x] Add the frontend's origin to `MUTASCOPE_API_CORS_ORIGINS` in `conf/deploy/cloudrun.yaml`
+      (`mutascope.abdullahhanif.me`, `mutascope-web.vercel.app`; live with the next deploy)
 
 ### Frontend
 
