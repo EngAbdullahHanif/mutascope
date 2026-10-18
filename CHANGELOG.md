@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.1](https://github.com/EngAbdullahHanif/mutascope/compare/v0.4.0...v0.4.1) (2026-10-18)
+
+
+### Bug Fixes
+
+* **deploy:** drop the Sentry DSN secret until a Sentry project exists ([5b254ea](https://github.com/EngAbdullahHanif/mutascope/commit/5b254ea459510f7df93f4b26afc976e490f8476c))
+* **deploy:** drop the Sentry DSN secret until a Sentry project exists ([055a013](https://github.com/EngAbdullahHanif/mutascope/commit/055a013d90ba9b22ded87529a7da9a79bf33d5aa))
+
 ## [0.4.0](https://github.com/EngAbdullahHanif/mutascope/compare/v0.3.0...v0.4.0) (2026-10-18)
 
 
