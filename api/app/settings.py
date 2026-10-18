@@ -24,7 +24,13 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 class Settings(BaseSettings):
     """Everything the API reads at startup."""
 
-    model_config = SettingsConfigDict(env_prefix="MUTASCOPE_API_", frozen=True)
+    model_config = SettingsConfigDict(
+        env_prefix="MUTASCOPE_API_",
+        frozen=True,
+        # A startup error lands in the platform's logs; it must name the field, never echo a
+        # value (a too-short metrics token was printed in full).
+        hide_input_in_errors=True,
+    )
 
     host: str = "0.0.0.0"
     """Address the start command (``python -m api.app.serve``) binds."""
