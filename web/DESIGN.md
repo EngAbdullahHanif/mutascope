@@ -54,11 +54,16 @@ Re-check this table when you change a token.
 
 ## Effect colours (the data scale)
 
-A diverging scale, symmetric around 0:
+A diverging scale, symmetric around the quantity's neutral point:
 
-- **blue = harmful** (negative: lower fitness than wild type),
-- **white = neutral** (0),
-- **red = tolerated** (positive).
+- **blue = harmful** (below neutral: lower fitness),
+- **white = neutral**,
+- **red = tolerated** (above neutral).
+
+The neutral point is 0 for zero-shot log-ratios (0 is the wild type) and **the assay's median
+measured score** for anything in DMS units (measured scores, supervised predictions). ProteinGym's
+`DMS_score` has no common zero: in 111 of 217 assays at least 80% of scores sit on one side of 0
+(ADR 0038). A DMS-unit legend says so: ends "Less fit", "Assay median", "Fitter".
 
 | Stop | −1        | −0.8      | −0.6      | −0.4      | −0.2      | 0         | +0.2      | +0.4      | +0.6      | +0.8      | +1        |
 | ---- | --------- | --------- | --------- | --------- | --------- | --------- | --------- | --------- | --------- | --------- | --------- |
@@ -72,18 +77,24 @@ A diverging scale, symmetric around 0:
   [`src/lib/color/diverging.ts`](src/lib/color/diverging.ts) for cells, and
   `linear-gradient(in oklab …)` for the legend. The CSS tokens `--color-effect-*` hold the same
   stops; a test fails if they drift apart.
-- **Symmetric domain.** The scale always runs from −m to +m (`symmetricMax`), so 0 is white
-  whatever the data's skew. Never use a min-to-max domain.
+- **Symmetric domain.** The scale always runs from centre − m to centre + m, so the neutral
+  point is white whatever the data's skew. Never use a min-to-max domain. Landscapes use
+  `robustHalfWidth` (m = 99th percentile of |value − centre|) and pass `clamped` to the legend,
+  whose ends then read "≤" / "≥"; `symmetricMax` (m = largest |value|) is for small charts
+  without outliers.
 - **Missing** (not measured, no structure): `--color-effect-missing` (`#bdbdbd`), with its own
   legend swatch. White means "neutral", never "no value".
 - **Same in light and dark.** A cell's colour means one thing everywhere, and a screenshot
   reads the same in either theme. In dark mode, give heatmaps a 1px `border` frame so the white
   midpoint does not bleed into the page.
 - **Effect colours are for effects only.** Not for buttons, status or categories.
+- **Wild type** is never a value on the scale. In a heatmap its cell is the page colour with an
+  ink bar, and the legend shows it (`showWildType`).
 - **Every chart that uses the scale shows an `EffectLegend`**
   ([`src/components/charts/effect-legend.tsx`](src/components/charts/effect-legend.tsx)). It
   takes `maxAbs`, a `title` naming the quantity ("ESM-2 650M score", "DMS score"), `decimals` and
-  `showMissing`. Its ticks use a true minus sign and the mono face.
+  `showMissing`, plus `center`, `ends`, `clamped` and `showWildType` where they apply. Its ticks
+  use a true minus sign and the mono face.
 
 ## Typography
 
@@ -129,6 +140,19 @@ sequences are always mono and never hyphenated.
   `destructive`. Never colour alone.
 - **Focus:** every interactive element shows the `ring` on `:focus-visible`. There is a
   skip-to-content link.
+
+## Heatmap (Explorer, ADR 0038)
+
+- Canvas, never SVG: one sticky canvas the width of the window over a scroll spacer; each frame
+  draws only the visible columns from a one-pixel-per-cell raster. Rows 14 px, columns 3–24 px.
+- Above the grid: mean effect per residue (signed bars from the neutral line, same scale), a
+  1-indexed ruler, and the sequence once columns are 8 px or wider. The amino-acid axis is
+  `AA_ORDER`, top to bottom.
+- Canvas ink (text, marks, outlines) comes from the theme tokens at draw time (`--foreground`,
+  `--muted-foreground`, `--border`, `--ring`), so it follows light and dark mode.
+- Anything drawn is also text: the tooltip, the live region for the focused cell, the table
+  alternative and the CSV. Each one carries the label ("Supervised (n = …)", "Zero-shot" or
+  "Measured").
 
 ## Data
 
