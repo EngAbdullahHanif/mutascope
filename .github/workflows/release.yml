@@ -1,10 +1,13 @@
 # A version tag (vMAJOR.MINOR.PATCH, created by release-please when its release PR is merged):
-# build the API image for linux/amd64, push it to GHCR, point the Hugging Face Space at it by
-# tag and digest, then wait until the live Space serves that version and /ready passes. If it
-# does not, the workflow fails (ADR 0034).
+# build the API image for linux/amd64, push it to Artifact Registry (what Cloud Run pulls) and
+# GHCR (the public copy), deploy it to Cloud Run by digest, then wait until the public URL
+# serves that version and /ready passes. If it does not, the workflow fails (ADR 0034).
 #
-# Run by hand (workflow_dispatch) to redeploy an image that is already in GHCR, e.g. after a
-# change to conf/deploy/space.yaml: the image is not rebuilt, its digest is looked up.
+# Google Cloud access is keyless: Workload Identity Federation lets only this workflow, on a
+# version tag or on main, act as the deployer service account (tools/deploy/setup-gcp.sh).
+#
+# Run by hand (workflow_dispatch, from main) to redeploy an image that is already in Artifact
+# Registry, e.g. after a change to conf/deploy/cloudrun.yaml: nothing is rebuilt.
 name: Release
 
 on:
@@ -13,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to redeploy (vMAJOR.MINOR.PATCH, already in GHCR)"
+        description: "Release tag to redeploy (vMAJOR.MINOR.PATCH, already in Artifact Registry)"
         required: true
 
 permissions:
@@ -26,17 +29,19 @@ concurrency:
 
 env:
   UV_VERSION: "0.12.24"
+  GCLOUD_VERSION: "589.0.0"
   TAG: ${{ github.event.inputs.tag || github.ref_name }}
 
 jobs:
   image:
-    name: Push the API image to GHCR (linux/amd64)
+    name: Push the API image (Artifact Registry + GHCR, linux/amd64)
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
       contents: read
       packages: write
+      id-token: write
     outputs:
       digest: ${{ steps.build.outputs.digest }}
     steps:
@@ -44,16 +49,27 @@ jobs:
       - uses: astral-sh/setup-uv@v10.3.0
         with:
           version: ${{ env.UV_VERSION }}
-      # /health reports the package version, and the deploy waits for the tag's: a tag that
-      # does not match pyproject.toml would never pass, so fail before building.
+      # /health reports the package version, and the deploy waits for it: a tag that does not
+      # match pyproject.toml would never pass, so fail before building.
       - name: Tag matches the package version
         run: |
           version="$(uv version --short)"
           test "v${version}" = "$TAG" || { echo "tag $TAG, pyproject.toml $version" >&2; exit 1; }
       - run: uv sync --locked --no-dev
-      - id: image
-        run: uv run --no-sync python -m api.deploy.space outputs >> "$GITHUB_OUTPUT"
+      - id: cfg
+        run: uv run --no-sync python -m api.deploy.cloudrun outputs >> "$GITHUB_OUTPUT"
+      - id: gcp
+        uses: google-github-actions/auth@v3.0.0
+        with:
+          workload_identity_provider: ${{ steps.cfg.outputs.provider }}
+          service_account: ${{ steps.cfg.outputs.deployer }}
+          token_format: access_token
       - uses: docker/setup-buildx-action@v4.4.1
+      - uses: docker/login-action@v4.6.0
+        with:
+          registry: ${{ steps.cfg.outputs.registry }}
+          username: oauth2accesstoken
+          password: ${{ steps.gcp.outputs.access_token }}
       - uses: docker/login-action@v4.6.0
         with:
           registry: ghcr.io
@@ -67,25 +83,29 @@ jobs:
           platforms: linux/amd64
           build-args: VCS_REF=${{ github.sha }}
           tags: |
-            ${{ steps.image.outputs.image }}:${{ env.TAG }}
-            ${{ steps.image.outputs.image }}:sha-${{ github.sha }}
+            ${{ steps.cfg.outputs.image }}:${{ env.TAG }}
+            ${{ steps.cfg.outputs.ghcr_image }}:${{ env.TAG }}
+            ${{ steps.cfg.outputs.ghcr_image }}:sha-${{ github.sha }}
           push: true
           cache-from: type=gha,scope=api-image
           cache-to: type=gha,scope=api-image,mode=max
       - name: Summary
         run: |
-          echo "Pushed \`${{ steps.image.outputs.image }}:$TAG@${{ steps.build.outputs.digest }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Pushed \`${{ steps.cfg.outputs.image }}:$TAG@${{ steps.build.outputs.digest }}\`" >> "$GITHUB_STEP_SUMMARY"
 
   deploy:
-    name: Deploy to the Hugging Face Space
+    name: Deploy to Cloud Run
     needs: [image]
     # On a tag, only after the push succeeded; by hand, without a build.
     if: always() && (needs.image.result == 'success' || (github.event_name == 'workflow_dispatch' && needs.image.result == 'skipped'))
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
     environment:
-      name: huggingface-space
-      url: ${{ steps.space.outputs.url }}
+      name: cloud-run
+      url: ${{ steps.url.outputs.url }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -93,10 +113,18 @@ jobs:
       - uses: astral-sh/setup-uv@v10.3.0
         with:
           version: ${{ env.UV_VERSION }}
-      # The deploy needs only the API's light base dependencies (huggingface_hub, httpx).
+      # The deploy needs only the API's light base dependencies.
       - run: uv sync --locked --no-dev
-      - id: space
-        run: uv run --no-sync python -m api.deploy.space outputs >> "$GITHUB_OUTPUT"
+      - id: cfg
+        run: uv run --no-sync python -m api.deploy.cloudrun outputs >> "$GITHUB_OUTPUT"
+      - uses: google-github-actions/auth@v3.0.0
+        with:
+          workload_identity_provider: ${{ steps.cfg.outputs.provider }}
+          service_account: ${{ steps.cfg.outputs.deployer }}
+      - uses: google-github-actions/setup-gcloud@v3.0.1
+        with:
+          version: ${{ env.GCLOUD_VERSION }}
+          project_id: ${{ steps.cfg.outputs.project_id }}
       - name: Image digest
         id: digest
         env:
@@ -105,15 +133,22 @@ jobs:
           if [ -n "$BUILT" ]; then
             echo "digest=$BUILT" >> "$GITHUB_OUTPUT"
           else
-            digest="$(docker buildx imagetools inspect "${{ steps.space.outputs.image }}:$TAG" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+            digest="$(gcloud artifacts docker images describe "${{ steps.cfg.outputs.image }}:$TAG" --format='value(image_summary.digest)')"
             echo "digest=$digest" >> "$GITHUB_OUTPUT"
           fi
-      - name: Point the Space at the image
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          SPACE_METRICS_TOKEN: ${{ secrets.SPACE_METRICS_TOKEN }}
-        run: uv run --no-sync python -m api.deploy.space deploy --tag "$TAG" --digest "${{ steps.digest.outputs.digest }}"
-      - name: Wait for /ready on the live Space
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: uv run --no-sync python -m api.deploy.space wait --tag "$TAG"
+      - name: Render the service
+        run: uv run --no-sync python -m api.deploy.cloudrun render --tag "$TAG" --digest "${{ steps.digest.outputs.digest }}" --out service.json
+      # Waits until the new revision is ready and has all the traffic; a revision whose /ready
+      # never passes fails here and the previous one keeps serving.
+      - name: Deploy (gcloud run services replace)
+        run: gcloud run services replace service.json --region "${{ steps.cfg.outputs.region }}"
+      - name: Public (anyone may call the API)
+        run: |
+          gcloud run services add-iam-policy-binding "${{ steps.cfg.outputs.service }}" \
+            --region "${{ steps.cfg.outputs.region }}" --member=allUsers --role=roles/run.invoker
+      - id: url
+        run: echo "url=$(gcloud run services describe "${{ steps.cfg.outputs.service }}" --region "${{ steps.cfg.outputs.region }}" --format='value(status.url)')" >> "$GITHUB_OUTPUT"
+      - name: Wait for /ready on the public URL
+        run: uv run --no-sync python -m api.deploy.cloudrun wait --tag "$TAG" --url "${{ steps.url.outputs.url }}"
+      - name: Summary
+        run: echo "Deployed $TAG to ${{ steps.url.outputs.url }}" >> "$GITHUB_STEP_SUMMARY"
