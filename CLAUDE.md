@@ -372,8 +372,27 @@ Run `make lint test` before declaring any task done.
 
 ## CI (GitHub Actions)
 
-lint → typecheck → tests (+ coverage) → Nextflow `-profile local,test` smoke run (`docker,test` from Phase 4, ADR 0007) → build & push image to GHCR
-(amd64) → deploy to Hugging Face Space on version tags. CI must stay green on `main`.
+ADR 0034. `ci.yml` on every PR and push to main, five parallel jobs whose names are the required
+checks of the `main` ruleset (rename a job → update the rule): `lint + typecheck (ruff, pyright)`,
+`pytest + coverage`, `API types up to date`, `Nextflow smoke test (docker,test, 2 assays)`,
+`API image (build + container tests)`. Branches must be up to date with main to merge. CI must
+stay green on `main`.
+
+- Every action is pinned by exact release tag (never `@v7`); Dependabot (`uv`, Actions, Docker)
+  moves the pins. Dockerfile `FROM` lines stay literal so Dependabot can read them.
+- Versions: release-please (`RELEASE_PLEASE_TOKEN`, not `GITHUB_TOKEN`, or its PR gets no CI and
+  its tag starts nothing) bumps `pyproject.toml` and `uv.lock` and writes `CHANGELOG.md`. Never
+  edit the version by hand.
+- `release.yml` on a tag `vX.Y.Z`: tag must equal the package version → API image (amd64) to
+  `ghcr.io/engabdullahhanif/mutascope-api:<tag>` → `python -m api.deploy.space deploy` (Space
+  Dockerfile = one `FROM <image>:<tag>@<digest>` line) → `wait` (latest commit running,
+  `/health` version = tag, `/ready` 200) or the workflow fails. `workflow_dispatch` redeploys a
+  tag without rebuilding.
+- The Space's non-secret settings live only in `conf/deploy/space.yaml` (`variables`, exactly
+  those on the Space); never set them in the Space UI. Secrets: `HF_TOKEN`,
+  `RELEASE_PLEASE_TOKEN`, optional `SPACE_METRICS_TOKEN` (GitHub repository secrets).
+- Live measurement: `tools/loadtest/space.py --url <space>` (short: free Space). ADR 0031's
+  rule is applied in `conf/deploy/space.yaml` from its result.
 
 ## How to work in this repo
 

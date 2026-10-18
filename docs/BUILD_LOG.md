@@ -2913,3 +2913,98 @@ ADR 0033; results in `docs/load-test.md`, section 5.
   - CI still runs the smoke test natively. Building the images in CI, `docker,test` there and
     the GHCR push are the CI task.
   - The memory soak did not run under a real 16 GB limit.
+
+---
+
+## Entry 34 — CI/CD: required checks, release-please, GHCR and the Space deploy (Phase 4 Task 7, 2026-10-18)
+
+**Plain-language summary.** Every pull request now runs five checks: lint and type-check, the
+tests with coverage, the generated API types, the Nextflow smoke test inside the pipeline image,
+and a build of the API image followed by its container tests. Merging into main will require all
+five to pass and the branch to be up to date (the rule is set in GitHub by the author). Versions
+are managed by release-please: it keeps a release PR open with the next version and the
+changelog, and merging it creates a tag. A tag builds the API image for linux/amd64, pushes it to
+GitHub's registry (GHCR), and points the Hugging Face Space at it with a one-line Dockerfile,
+`FROM ghcr.io/engabdullahhanif/mutascope-api:<tag>@<digest>`. The workflow then watches the live
+Space and fails unless it runs the new version and `/ready` passes. Dependabot opens weekly
+update PRs for Python packages, GitHub Actions and the Docker base images. Decisions in ADR
+0034. The deploy and the live latency measurement wait for the first release (secrets first).
+
+**The 3 most important design choices.**
+
+1. **The Space pulls the tested image; it never builds the API.** The Space's Dockerfile is a
+   single `FROM` line naming the tag and the digest of the image CI built. The image the Space
+   runs is therefore byte for byte the one that passed the self-check and, on the PR, the
+   container tests, and a retag in GHCR cannot change it. Letting the Space build `api/Dockerfile`
+   would run an untested build and download the 760 MB of weights on every build. *Evidence:*
+   `api/tests/test_deploy.py` checks that the Dockerfile is exactly one line with tag and digest
+   and that a tag without a digest or a non-release tag is refused.
+2. **"Deployed" means the new version is serving, not that the push worked.** While the Space
+   builds, the previous container keeps answering `/ready`, so polling `/ready` alone would pass
+   on the old release. `wait` passes only when the Space runs its latest commit, `/health`
+   reports the tag's version and `/ready` is 200 together. A build or runtime error fails at once
+   with the end of the Space's log. The release also checks first that the tag equals the package
+   version, which `/health` reports, so a mismatched tag fails before the build rather than after
+   a 25-minute wait. *Evidence:* the tests script a Space that answers with the old commit, then
+   building, then the old version, then not ready, and `wait` passes only on the last poll. They
+   also cover a build error, a runtime error and the timeout.
+3. **The Space's configuration is a file in the repository.** `conf/deploy/space.yaml` lists the
+   Space's variables, and each deploy makes the Space's variables exactly those, deleting any
+   others. ADR 0031's 2-second fallback (`MUTASCOPE_API_SCORE_DEFAULT_MODEL`), the measured
+   `trusted_proxies` and the precise-mode limit then become reviewed one-line changes, applied by
+   a redeploy (`workflow_dispatch`, no rebuild). Secrets are set from GitHub secrets, never
+   logged, never deleted. *Evidence:* the tests check that a stale variable is deleted, a changed
+   one is reset, a missing secret is left alone and an identical redeploy restarts the Space
+   instead of committing.
+
+**Problems encountered and how they were solved.**
+
+1. **main had a protection rule that required nothing.** *Found:* reading the repository's
+   rules through the API for this task. The active ruleset "protect main" has a
+   required-status-checks rule whose list is empty (`"required_status_checks": []`), and
+   `strict_required_status_checks_policy` is `false`. A PR could therefore merge with red checks
+   or with checks that ran against an old main, which is how main went red twice in Phase 3.
+   *Fix:* CI's job names are now stable check names, and the PR gives the exact steps to add the
+   five checks and turn on "up to date" in that ruleset. *Verified:* not yet. The rule has to be
+   set by the author, and the check names appear in GitHub's picker only after this PR's CI has
+   run once.
+2. **12 of the 16 action references in CI were moving major tags.** *Found:* reviewing
+   `ci.yml` against CLAUDE.md's pinning rule: `actions/checkout@v7`, `actions/cache@v6`,
+   `actions/upload-artifact@v7`, `pnpm/action-setup@v6`, `actions/setup-node@v7` and
+   `nf-core/setup-nextflow@v3`. *Fix:* each is pinned to its latest exact release, looked up on
+   the action's releases (`checkout@v7.0.1`, `cache@v6.1.0`, `upload-artifact@v7.0.2`,
+   `action-setup@v6.1.0`, `setup-node@v7.1.0`, `setup-nextflow@v3.0.1`), as are the new Docker
+   and release-please actions. Dependabot moves them from now on. *Verified:* no `uses:` line in
+   the three workflows ends in a bare major version.
+3. **release-please cannot bump `uv.lock`, and a stale lock fails every CI job.** *Found:*
+   uv records the project's own version in `uv.lock`, and CI installs with
+   `uv sync --locked`, which refuses a lock that does not match `pyproject.toml`. release-please
+   has no uv support (googleapis/release-please#2561). A release PR that bumped only
+   `pyproject.toml` would therefore be red and could never merge. *Fix:* release-please's
+   generic TOML updater with `$.package[?(@.name.value=='mutascope')].version`. The `.value` is
+   needed because its TOML parser wraps each string in an object (#2455). *Verified:* locally,
+   with release-please 17.11.2's own updaters on this repository's files: exactly one line of
+   `uv.lock` changes (line 1476, mutascope's `0.1.0` → `0.2.0`), `pyproject.toml` changes one
+   line, and `uv lock --check` passes on the bumped pair.
+
+**Supporting details.**
+
+- **CI jobs** (ADR 0034, section 1). The smoke test moved from the native environment to
+  `-profile docker,test` in an image built in the job. CI no longer installs Foldseek; the
+  image's checksum-verified build is the one tested. Coverage now includes `api/`.
+- **Secrets** (GitHub repository secrets): `HF_TOKEN` (fine-grained, write to the Space only),
+  `RELEASE_PLEASE_TOKEN` (fine-grained PAT, this repository, Contents, Pull requests and Issues
+  read and write), optional `SPACE_METRICS_TOKEN`. release-please needs its own token because
+  GitHub starts no workflow for events made with `GITHUB_TOKEN`: its PR would get no checks and
+  its tag would start no release.
+- **Dependabot** uses the `uv` ecosystem, not `pip`, so `uv.lock` is updated too. The
+  Dockerfiles' `FROM` lines are now literal (tag and digest) instead of `ARG`s, so that
+  Dependabot can read them. The images are unchanged. Python is held to 3.11 patches.
+- **Space measurement tool:** `tools/loadtest/space.py` (ADR 0034, section 6). It was
+  dry-run against a local server (the numbers there are M4 Pro numbers and are not reported),
+  and every step completed: baseline, four latency cells of cache misses, a precise job, the
+  5-user Locust run, the decision.
+- **Loose ends:** the first release, the deploy, the live numbers and ADR 0031's decision;
+  `trusted_proxies` from the Space's run log; making the GHCR package public after its first
+  push; ADR 0033's 20-user CPU saturation is still open (bounding concurrent forward passes),
+  to be judged on the Space's own numbers.
