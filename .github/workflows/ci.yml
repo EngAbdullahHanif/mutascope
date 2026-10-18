@@ -104,7 +104,8 @@ jobs:
           package_json_file: web/package.json
       - uses: actions/setup-node@v7.1.0
         with:
-          node-version: "26"
+          # The Node major Vercel builds with (web/package.json "engines": 24.x).
+          node-version: "24"
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile

@@ -3454,6 +3454,20 @@ ADR 0037.
    "Benchmar…". *Fix:* below the `sm` breakpoint the nav takes its own row. *Verified:* phone
    screenshot, `document.documentElement.scrollWidth` = 375.
 
+7. **The first Vercel builds failed.** *Found:* the preview build of `660d0fc` stopped after 1 s
+   with "Found invalid or discontinued Node.js Version: ">=26"": Vercel builds with Node 24 at
+   most. `bbf80b3` set `engines` to `24.x`, and that build failed too. Its log was not available
+   here (no Vercel CLI login), and redeploying `660d0fc` from the dashboard reused the old
+   `engines`. *Reproduced:* a clean clone of `bbf80b3` builds under Node 24.22.0 with pnpm
+   12.10.1, so the code was not the cause. The remaining difference is the package manager.
+   pnpm 12's lockfile says `lockfileVersion: '9.0'` but is two YAML documents, Vercel picks its
+   pnpm from that label, and it honours `packageManager` only through Corepack. *Fix:*
+   `web/vercel.json` installs with `corepack enable pnpm && pnpm install --frozen-lockfile`, and
+   CI's `web` job moves to Node 24. *Verified locally:* Node 24.22.0's Corepack (0.36.0)
+   downloads pnpm 12.10.1, installs from the frozen lockfile and builds from scratch, including the
+   real bundle download (223 files, 217 assays). Whether this was Vercel's error is confirmed only
+   when the next preview build passes.
+
 **Supporting details.**
 
 - Versions (exact, from the npm registry on 2026-10-18): Next.js 16.4.2, React 19.3.1,
@@ -3469,7 +3483,6 @@ ADR 0037.
 - `make web-check` and `make web-e2e` were added. `make lint test` passes.
 - Loose ends:
   - add the new CI job to the `main` ruleset's required checks;
-  - Vercel's build runs `pnpm build`, so it downloads the bundle; check it on the first
-    deploy, and check there that `/data/proteins/*.json.gz` is served without
-    `Content-Encoding` (the loader refuses decoded files);
+  - on the first successful Vercel deploy, check that `/data/proteins/*.json.gz` is served
+    without `Content-Encoding` (the loader refuses decoded files);
   - the Explorer itself is next.

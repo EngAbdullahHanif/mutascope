@@ -374,6 +374,8 @@ Run `make lint test` before declaring any task done.
 
 - Next.js (App Router) + TypeScript strict + Tailwind + shadcn/ui; 3Dmol.js for structures; D3/visx for the heatmap.
   pnpm, exact pins; ESLint + Prettier; Vitest for units, Playwright for end-to-end (ADR 0037).
+  Node 24 (Vercel's newest; CI's `web` job matches). `web/vercel.json` installs pnpm 12 through
+  Corepack: Vercel would otherwise pick an older pnpm from the lockfile's version label.
 - API types come only from the generated `api-types.ts`; never hand-write response types.
 - Precomputed ProteinGym landscapes are static assets; the site must work with the backend asleep.
 - The bundle (ADR 0037): `web/bundle.json` pins it at `export.publish.revision` (a test fails if
