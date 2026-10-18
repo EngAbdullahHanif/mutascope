@@ -311,7 +311,11 @@ measured at 20 users on 4 GiB.
 
 ### Frontend
 
-- [ ] Next.js (App Router) + TypeScript + Tailwind + shadcn/ui; Explorer page first
+- [x] Foundation (Task 1, ADR 0037): Next.js (App Router) + TypeScript + Tailwind + shadcn/ui,
+      bundle downloaded at build and checksum-verified, generated Zod validators, design tokens
+      (`web/DESIGN.md`), layout and placeholder pages, CI `web` job
+- [ ] Add `web (lint, typecheck, unit tests, build)` to the `main` ruleset's required checks
+- [ ] Explorer page
 - [ ] Heatmap (D3/visx, colourblind-safe diverging) linked to 3D structure (3Dmol.js); label the
       5 proteins whose benchmark scores use the MSA region (ADR 0012)
 - [ ] Pages: Landing, Explorer, Benchmarks, How it works (pipeline, model card, limitations), About

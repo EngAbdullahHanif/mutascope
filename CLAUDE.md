@@ -63,6 +63,8 @@ make test-container # pytest -m container: the API image under --cpus=2 --memory
 make mlflow       # MLflow UI on http://127.0.0.1:5001 over mlruns/mlflow.db
 make api          # uvicorn api.app.main:app --reload --port 7860
 make web          # cd web && pnpm dev
+make web-check    # what CI's web job runs: validators fresh, lint, typecheck, vitest, build
+make web-e2e      # Playwright against the production build (after make web-check)
 make types        # regenerate web/src/lib/api-types.ts from OpenAPI (openapi-typescript)
 ```
 
@@ -371,21 +373,37 @@ Run `make lint test` before declaring any task done.
 ## Frontend (`web/`)
 
 - Next.js (App Router) + TypeScript strict + Tailwind + shadcn/ui; 3Dmol.js for structures; D3/visx for the heatmap.
+  pnpm, exact pins; ESLint + Prettier; Vitest for units, Playwright for end-to-end (ADR 0037).
+  Node 24 (Vercel's newest; CI's `web` job matches). `web/vercel.json` sets the framework
+  (`nextjs`); the dashboard preset was "Other", which fails after `next build`.
 - API types come only from the generated `api-types.ts`; never hand-write response types.
 - Precomputed ProteinGym landscapes are static assets; the site must work with the backend asleep.
-- Heatmap colour scale: colourblind-safe diverging (blue–white–red), symmetric around 0.
+- The bundle (ADR 0037): `web/bundle.json` pins it at `export.publish.revision` (a test fails if
+  they differ); `pnpm build` downloads it into `public/data/` (never committed), every file
+  checked against `SHA256SUMS`, staged and swapped in only when all pass. Pages load bundle files
+  only through `src/lib/bundle/load.ts` (schema version, Zod, the manifest's sha256), never from
+  the Hub or the API.
+- Bundle types and validators come only from `src/lib/bundle/schemas.generated.ts`, generated
+  from `docs/schema/bundle/` by `pnpm schemas` (CI fails when stale). The generator fails on a
+  keyword it does not translate; never make it skip one.
+- Design tokens and rules: `web/DESIGN.md`. One accent (teal); colours are tokens, never raw
+  values in components.
+- Heatmap colour scale: colourblind-safe diverging (blue–white–red), symmetric around 0: blue =
+  harmful, white = neutral, red = tolerated (RdBu, OKLab, `src/lib/color/diverging.ts`); missing
+  is grey, never white; every chart using it shows `EffectLegend`.
 - Linked views: hovering a heatmap column highlights the residue in 3D and vice versa.
 - Always label results as "Supervised (n = …)" or "Zero-shot".
 
 ## CI (GitHub Actions)
 
-ADR 0034. `ci.yml` on every PR and push to main, five parallel jobs whose names are the required
+ADR 0034. `ci.yml` on every PR and push to main, six parallel jobs whose names are the required
 checks of the `main` ruleset (rename a job → update the rule): `lint + typecheck (ruff, pyright)`,
-`pytest + coverage`, `API types up to date`, `Nextflow smoke test (docker,test, 2 assays)`,
+`pytest + coverage`, `API types up to date`, `web (lint, typecheck, unit tests, build)` (ADR 0037;
+add it to the ruleset), `Nextflow smoke test (docker,test, 2 assays)`,
 `API image (build + container tests)`. Branches must be up to date with main to merge. CI must
 stay green on `main`.
 
-- Every action is pinned by exact release tag (never `@v7`); Dependabot (`uv`, Actions, Docker)
+- Every action is pinned by exact release tag (never `@v7`); Dependabot (`uv`, npm, Actions, Docker)
   moves the pins. Dockerfile `FROM` lines stay literal so Dependabot can read them.
 - Versions: release-please (`RELEASE_PLEASE_TOKEN`, not `GITHUB_TOKEN`, or its PR gets no CI and
   its tag starts nothing) bumps `pyproject.toml` and `uv.lock` and writes `CHANGELOG.md`. Never
