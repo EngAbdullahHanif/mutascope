@@ -1,0 +1,196 @@
+{
+ "url": "https://mutascope-api-2lvmztrsha-ew.a.run.app",
+ "started": "2026-10-18T13:54:28Z",
+ "cold_start_s": 0.21,
+ "ready": {
+  "status": "ready",
+  "schema_version": "1.0.0",
+  "bundle_revision": "3ae767217bb0a56b8f2e7c79c68b73119e308066",
+  "proteins": 217,
+  "models": [
+   "esm2_150m_onnx_fp32",
+   "esm2_35m_onnx_fp32"
+  ],
+  "score_default_model": "esm2_150m",
+  "precise_max_length": 600
+ },
+ "version": "0.2.0",
+ "network": {
+  "n": 20,
+  "p50_s": 0.2,
+  "p95_s": 0.282,
+  "max_s": 0.283,
+  "mean_s": 0.212
+ },
+ "fast": {
+  "esm2_35m@300": {
+   "n": 20,
+   "p50_s": 0.592,
+   "p95_s": 0.919,
+   "max_s": 1.081,
+   "mean_s": 0.617,
+   "refused_429": 0
+  },
+  "esm2_35m@1000": {
+   "n": 20,
+   "p50_s": 1.831,
+   "p95_s": 2.086,
+   "max_s": 2.248,
+   "mean_s": 1.806,
+   "refused_429": 0
+  },
+  "esm2_150m@300": {
+   "n": 20,
+   "p50_s": 1.564,
+   "p95_s": 1.853,
+   "max_s": 1.891,
+   "mean_s": 1.588,
+   "refused_429": 0
+  },
+  "esm2_150m@1000": {
+   "n": 20,
+   "p50_s": 4.799,
+   "p95_s": 5.715,
+   "max_s": 5.737,
+   "mean_s": 4.825,
+   "refused_429": 0
+  }
+ },
+ "decision": {
+  "rule": "150M fast-mode p95 at 1,000 residues > 2.0 s -> default 35M",
+  "esm2_150m_p95_1000_s": 5.715,
+  "score_default_model": "esm2_35m"
+ },
+ "precise": {
+  "length": 600,
+  "status": "succeeded",
+  "seconds": 405.9,
+  "events": 41
+ },
+ "load": {
+  "users": 5,
+  "seconds": 120,
+  "locust_exit": 1,
+  "status_counts": {
+   "200": 191,
+   "202": 4,
+   "429": 31
+  },
+  "stats": [
+   {
+    "name": "GET /v1/benchmarks",
+    "count": 16,
+    "failures": 0,
+    "median_ms": 120.0,
+    "p95_ms": 200.0,
+    "p99_ms": 200.0,
+    "max_ms": 203.87508301064372,
+    "rps": 0.1349489917557097
+   },
+   {
+    "name": "GET /v1/jobs/{id}/stream",
+    "count": 4,
+    "failures": 0,
+    "median_ms": 12000.0,
+    "p95_ms": 13000.0,
+    "p99_ms": 13000.0,
+    "max_ms": 12911.955250077881,
+    "rps": 0.03373724793892743
+   },
+   {
+    "name": "GET /v1/proteins",
+    "count": 5,
+    "failures": 0,
+    "median_ms": 390.0,
+    "p95_ms": 400.0,
+    "p99_ms": 400.0,
+    "max_ms": 404.8534579342231,
+    "rps": 0.042171559923659285
+   },
+   {
+    "name": "GET /v1/proteins/{id}",
+    "count": 105,
+    "failures": 0,
+    "median_ms": 98.0,
+    "p95_ms": 2500.0,
+    "p99_ms": 9900.0,
+    "max_ms": 10081.436500069685,
+    "rps": 0.885602758396845
+   },
+   {
+    "name": "GET /v1/proteins/{id}/landscape",
+    "count": 25,
+    "failures": 0,
+    "median_ms": 210.0,
+    "p95_ms": 1300.0,
+    "p99_ms": 1900.0,
+    "max_ms": 1928.9427499752492,
+    "rps": 0.21085779961829643
+   },
+   {
+    "name": "POST /v1/jobs",
+    "count": 4,
+    "failures": 0,
+    "median_ms": 250.0,
+    "p95_ms": 1600.0,
+    "p99_ms": 1600.0,
+    "max_ms": 1552.4148750118911,
+    "rps": 0.03373724793892743
+   },
+   {
+    "name": "POST /v1/jobs [429]",
+    "count": 19,
+    "failures": 2,
+    "median_ms": 73.0,
+    "p95_ms": 11000.0,
+    "p99_ms": 11000.0,
+    "max_ms": 11089.858791907318,
+    "rps": 0.1602519277099053
+   },
+   {
+    "name": "POST /v1/score",
+    "count": 36,
+    "failures": 0,
+    "median_ms": 1400.0,
+    "p95_ms": 10000.0,
+    "p99_ms": 11000.0,
+    "max_ms": 11279.333624988794,
+    "rps": 0.3036352314503468
+   },
+   {
+    "name": "POST /v1/score [429]",
+    "count": 12,
+    "failures": 0,
+    "median_ms": 69.0,
+    "p95_ms": 180.0,
+    "p99_ms": 180.0,
+    "max_ms": 183.91566595528275,
+    "rps": 0.10121174381678229
+   },
+   {
+    "name": "Aggregated",
+    "count": 226,
+    "failures": 2,
+    "median_ms": 130.0,
+    "p95_ms": 5000.0,
+    "p99_ms": 11000.0,
+    "max_ms": 12911.955250077881,
+    "rps": 1.9061545085493996
+   }
+  ]
+ },
+ "cold_start_and_precise_400": {
+  "started": "2026-10-18T14:33:05Z",
+  "idle_before_s": 1260,
+  "cold_ready_status": 200,
+  "cold_ready_s": 20.46,
+  "warm_ready_s": 0.215,
+  "precise": {
+   "length": 400,
+   "status": "succeeded",
+   "seconds": 163.4,
+   "events": 28
+  }
+ },
+ "note": "cold_start_s in the main run was a warm instance (0.21 s); the real cold start is cold_start_and_precise_400.cold_ready_s, after 21 idle minutes"
+}
