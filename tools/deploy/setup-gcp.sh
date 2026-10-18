@@ -13,7 +13,9 @@
 #     that GitHub Actions acts as (Cloud Run admin, write to that one repository, may run
 #     services as the runtime account);
 #   - Workload Identity Federation for GitHub: only this repository's release workflow, on a
-#     version tag or on main, can act as the deployer. No key file is created anywhere.
+#     version tag or on main, can act as the deployer. No key file is created anywhere;
+#   - read access for the runtime account to each secret in SECRETS that exists (created by
+#     hand in Secret Manager; their values never pass through this script).
 # At the end it prints the two values to put into conf/deploy/cloudrun.yaml.
 set -euo pipefail
 
@@ -26,6 +28,8 @@ DEPLOYER=mutascope-deployer
 POOL=github
 PROVIDER=github
 GITHUB_REPO=EngAbdullahHanif/mutascope
+# The secret names under `secrets` in conf/deploy/cloudrun.yaml.
+SECRETS=(MUTASCOPE_API_METRICS_TOKEN MUTASCOPE_API_SENTRY_DSN)
 
 RUNTIME_EMAIL="${RUNTIME}@${PROJECT_ID}.iam.gserviceaccount.com"
 DEPLOYER_EMAIL="${DEPLOYER}@${PROJECT_ID}.iam.gserviceaccount.com"
@@ -45,7 +49,7 @@ fi
 
 step "Enabling APIs (takes a minute the first time)"
 gcloud services enable run.googleapis.com artifactregistry.googleapis.com iam.googleapis.com \
-  iamcredentials.googleapis.com sts.googleapis.com
+  iamcredentials.googleapis.com sts.googleapis.com secretmanager.googleapis.com
 
 step "Artifact Registry repository ${REPOSITORY} (${REGION})"
 if ! gcloud artifacts repositories describe "${REPOSITORY}" --location="${REGION}" >/dev/null 2>&1; then
@@ -78,6 +82,18 @@ gcloud artifacts repositories add-iam-policy-binding "${REPOSITORY}" --location=
   --member="serviceAccount:${DEPLOYER_EMAIL}" --role=roles/artifactregistry.writer >/dev/null
 gcloud iam service-accounts add-iam-policy-binding "${RUNTIME_EMAIL}" \
   --member="serviceAccount:${DEPLOYER_EMAIL}" --role=roles/iam.serviceAccountUser >/dev/null
+
+step "Runtime access to the API's secrets"
+# Per secret, not project-wide: the runtime account can read these and nothing else.
+for secret in "${SECRETS[@]}"; do
+  if gcloud secrets describe "${secret}" >/dev/null 2>&1; then
+    gcloud secrets add-iam-policy-binding "${secret}" --member="serviceAccount:${RUNTIME_EMAIL}" \
+      --role=roles/secretmanager.secretAccessor --condition=None >/dev/null
+    echo "${RUNTIME} can read ${secret}"
+  else
+    echo "No secret ${secret} yet: create it, then run this script again."
+  fi
+done
 
 step "Workload Identity Federation for ${GITHUB_REPO}"
 if ! gcloud iam workload-identity-pools describe "${POOL}" --location=global >/dev/null 2>&1; then

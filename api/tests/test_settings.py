@@ -59,3 +59,17 @@ def test_env_example_lists_every_setting_and_sets_none() -> None:
     expected = {f"MUTASCOPE_API_{name.upper()}" for name in Settings.model_fields}
     assert sorted(listed) == sorted(expected)
     assert not re.findall(r"^MUTASCOPE_API_", text, flags=re.MULTILINE)
+
+
+def test_secrets_lose_a_trailing_newline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``echo token | gcloud secrets create ...`` stores the newline too."""
+    token = "t" * 32
+    monkeypatch.setenv("MUTASCOPE_API_METRICS_TOKEN", f"{token}\n")
+    monkeypatch.setenv("MUTASCOPE_API_SENTRY_DSN", "https://key@example.ingest.sentry.io/1\n")
+    settings = Settings()
+    assert settings.metrics_token is not None and settings.sentry_dsn is not None
+    assert settings.metrics_token.get_secret_value() == token
+    assert settings.sentry_dsn.get_secret_value().endswith("/1")
+    monkeypatch.setenv("MUTASCOPE_API_METRICS_TOKEN", "t" * 31 + "\n")  # 31 characters
+    with pytest.raises(ValidationError):
+        Settings()
