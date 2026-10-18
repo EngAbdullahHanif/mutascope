@@ -259,10 +259,13 @@ Goal: a tested, observable service deployed automatically.
       deployed to Google Cloud Run by digest (Docker Spaces need a paid plan), keyless
       (Workload Identity Federation); deploy fails unless the live `/ready` passes
 - [x] Dependabot (`uv`, Actions, Docker), release-please (version in `pyproject.toml` + `uv.lock`, `CHANGELOG.md`)
-- [ ] Branch protection: the `main` ruleset requires the five checks and up-to-date branches (set by the author)
-- [ ] First release deployed to Cloud Run; live service measured (`tools/loadtest/live.py`: cold
-      start, fast mode at 300 / 1,000 residues, a 600-residue precise job, 5 users); ADR 0031's
-      2-second rule, the precise limit and `trusted_proxies` set in `conf/deploy/cloudrun.yaml`
+- [x] Branch protection: the `main` ruleset requires the five checks and up-to-date branches (set by the author)
+- [x] First release deployed to Cloud Run (`v0.2.0`); live service measured (ADR 0034 section 6,
+      `docs/load-test.md` section 6): fast-mode p95 at 1,000 residues 2.09 s (35M) / 5.72 s
+      (150M) → default 35M; precise 400 residues 163 s (600: 406 s) → limit 400; cold start
+      20.5 s; `trusted_proxies` = Cloud Run's front end
+- [ ] Bound concurrent forward passes: at 5 users reads wait behind scoring (p99 9.9 s) and Cloud
+      Run refused 2 of 226 requests (ADR 0033, 0034)
 - [x] Phase 3 in Nextflow (ADR 0027): `FOLDS → EMBED → FEATURES_BUILD → TRAIN_CV (ridge seq_struct)
       → TRAIN_CALIBRATE → TRAIN_FINAL → CHECK_RELEASE`; `train check-release` publishes only a
       bit-identical rerun (provenance stamps aside); LightGBM / MLP behind `params.extra_models`
