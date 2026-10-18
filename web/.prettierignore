@@ -1,0 +1,8 @@
+.next/
+node_modules/
+public/data/
+playwright-report/
+test-results/
+pnpm-lock.yaml
+openapi.json
+src/lib/api-types.ts

@@ -1,0 +1,8 @@
+# The bundle is downloaded at build time (pnpm data:fetch); never committed.
+/public/data/
+/public/.data-staging/
+next-env.d.ts
+*.tsbuildinfo
+/playwright-report/
+/test-results/
+/coverage/

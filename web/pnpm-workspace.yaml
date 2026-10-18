@@ -1,0 +1,4 @@
+# Dependency build scripts are off unless listed here (pnpm 10+). unrs-resolver (eslint's import
+# resolver) ships prebuilt binaries as optional dependencies; its postinstall is only a fallback.
+allowBuilds:
+  unrs-resolver: false
