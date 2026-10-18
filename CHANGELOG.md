@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.2](https://github.com/EngAbdullahHanif/mutascope/compare/v0.4.1...v0.4.2) (2026-10-18)
+
+
+### Performance Improvements
+
+* **deploy:** try one ONNX intra-op thread on Cloud Run ([e4e69ed](https://github.com/EngAbdullahHanif/mutascope/commit/e4e69ed11e66a33ee42beff29c4baef3917a1bde))
+* **deploy:** try one ONNX intra-op thread on Cloud Run ([6cf47e4](https://github.com/EngAbdullahHanif/mutascope/commit/6cf47e47971061008c30198b6d7ad966c1f70930))
+
+
+### Documentation
+
+* live measurement of the inference pool (ADR 0036 section 6, load test 7, build log 37) ([458312e](https://github.com/EngAbdullahHanif/mutascope/commit/458312e1e7cfd5428b7688db6f5ca896af878811))
+* live measurement of the inference pool; CORS for the website; no secret values in startup errors ([e5043f3](https://github.com/EngAbdullahHanif/mutascope/commit/e5043f382745b21a74078914c7a2aecfac1c2cfb))
+
 ## [0.4.1](https://github.com/EngAbdullahHanif/mutascope/compare/v0.4.0...v0.4.1) (2026-10-18)
 
 
