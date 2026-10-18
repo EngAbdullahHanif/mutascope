@@ -51,11 +51,11 @@ env:
 
 # Secret Manager secrets as environment variables: variable -> secret name (latest version).
 # The runtime service account needs roles/secretmanager.secretAccessor on each (setup-gcp.sh);
-# without it the deploy fails. The token makes /metrics answer (401 without it, ADR 0032); the
-# DSN turns Sentry on.
+# without it the deploy fails. The token makes /metrics answer (401 without it, ADR 0032).
+# No Sentry DSN yet: there is no Sentry project, and a DSN that is not a valid URL stops the API
+# at startup (v0.4.0's first deploy). Add `MUTASCOPE_API_SENTRY_DSN` here once one exists.
 secrets:
   MUTASCOPE_API_METRICS_TOKEN: MUTASCOPE_API_METRICS_TOKEN
-  MUTASCOPE_API_SENTRY_DSN: MUTASCOPE_API_SENTRY_DSN
 
 # After `replace`: /health must report the tag's version and /ready answer 200 within this time,
 # or the workflow fails.
