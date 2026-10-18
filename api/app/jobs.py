@@ -2,9 +2,9 @@
 
 The masked marginal takes minutes beyond a few hundred residues (ADR 0029), so it runs in the
 background. :class:`JobManager` lives on the event loop: one worker task takes queued jobs in
-order and runs each forward batch in a thread (``asyncio.to_thread``), so the loop keeps serving
-while the CPU scores. All job state is changed on the loop, between batches, which is why no
-lock is needed.
+order and runs each forward batch on the inference pool (:mod:`api.app.inference`), taking
+turns with fast-mode requests, so the loop keeps serving while the CPU scores. All job state is
+changed on the loop, between batches, which is why no lock is needed.
 
 - **Queue.** At most ``queue_size`` jobs wait behind the running one; another submission is a
   429. A cached result (an identical earlier job) never enters the queue.
@@ -37,6 +37,7 @@ import structlog
 from fastapi.sse import ServerSentEvent
 
 from api.app import problems
+from api.app.inference import Inference
 from api.app.live import DECIMALS, LiveModel, to_grid
 from api.app.logs import sequence_fields
 from api.app.metrics import Metrics
@@ -106,6 +107,7 @@ class JobManager:
         self,
         *,
         cache: ScoreCache,
+        inference: Inference,
         version: ApiVersion,
         queue_size: int,
         ttl_seconds: float,
@@ -114,6 +116,7 @@ class JobManager:
         now: Callable[[], datetime] = _utcnow,
     ) -> None:
         self.cache = cache
+        self.inference = inference
         self.metrics = metrics
         self.max_active_per_client = max_active_per_client
         self.version = version
@@ -260,7 +263,7 @@ class JobManager:
         try:
             for positions in job.model.precise_batches(job.sequence):
                 start = time.perf_counter()
-                rows = await asyncio.to_thread(scorer.landscape, job.sequence, positions=positions)
+                rows = await self.inference.run(scorer.landscape, job.sequence, positions=positions)
                 self.metrics.observe_inference(job.model.key, "masked", time.perf_counter() - start)
                 if job.finished:  # cancelled while the batch ran: drop it
                     return
