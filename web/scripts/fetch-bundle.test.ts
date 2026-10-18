@@ -75,6 +75,26 @@ describe("fetchBundle", () => {
     expect(existsSync(`${out}.staging`)).toBe(false);
   });
 
+  it("reports the first failure and cleans up only after in-flight downloads finish", async () => {
+    // Regression: one bad file used to reject at once while other workers were still writing
+    // into staging, so the cleanup raced them (ENOTEMPTY) and hid the real error.
+    const files = bundleFiles((f) => {
+      f["benchmarks.json"] = enc({ ...benchmarks(), deployed_model: "tampered" });
+    });
+    const served = fakeFetch(files);
+    const slow = async (url: string) => {
+      if (!url.endsWith("/benchmarks.json") && !url.endsWith("/SHA256SUMS")) {
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      return served(url);
+    };
+    await expect(fetchBundle(pin, out, { fetchFn: slow, log: quiet })).rejects.toThrow(
+      "benchmarks.json: sha256 differs from SHA256SUMS",
+    );
+    await new Promise((r) => setTimeout(r, 150));
+    expect(existsSync(`${out}.staging`)).toBe(false);
+  });
+
   it("refuses a listed file that cannot be downloaded", async () => {
     const files = bundleFiles();
     delete files["proteins/TEST_HUMAN_Example_2024.json.gz"];

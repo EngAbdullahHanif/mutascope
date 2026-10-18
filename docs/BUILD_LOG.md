@@ -3468,6 +3468,18 @@ ADR 0037.
    real bundle download (223 files, 217 assays). Whether this was Vercel's error is confirmed only
    when the next preview build passes.
 
+8. **A failed download could hide its own error.** *Found:* after the move to Node 24, CI's
+   `web` job failed 2 of the 14 download tests: the tamper test expected "benchmarks.json: sha256
+   differs from SHA256SUMS" but got "ENOTEMPTY: directory not empty, rmdir
+   '.../data.staging'". *Cause:* the downloads ran 8 at a time under `Promise.all`, which
+   rejects at the first failure while the other downloads are still writing into the staging
+   directory. The cleanup's `rm` raced those writes, and its error replaced the real one.
+   Locally the race had not shown; the CI runner's timing exposed it. *Fix:* `mapLimit` starts no
+   new download after the first failure, returns only when every started one has settled, then
+   throws the first error. A failing cleanup can no longer replace that error. *Verified:* a
+   regression test (one bad file served at once, the others after 50 ms) failed before the fix
+   and passes after it, 5 runs out of 5, and all 39 unit tests pass on Node 24.22.0 and Node 26.
+
 **Supporting details.**
 
 - Versions (exact, from the npm registry on 2026-10-18): Next.js 16.4.2, React 19.3.1,
@@ -3476,7 +3488,7 @@ ADR 0037.
   and typescript-eslint `<6.1`) and ESLint 9.39.5 (10.13 is out, but eslint-config-next's
   `react`, `import` and `jsx-a11y` plugins declare `^9`). Dependabot now covers `/web` and does
   not propose those two majors.
-- Tests: 38 Vitest tests (loader, both scripts, scale, legend) and 5 Playwright tests (navigation,
+- Tests: 39 Vitest tests (loader, both scripts, scale, legend) and 5 Playwright tests (navigation,
   footer on every page, dark mode across a reload, Explorer data with every request to another
   origin blocked, protein files served as gzip bytes). Mutation check: with the digest
   comparison disabled in the script or in the loader, exactly the two tamper tests fail.
