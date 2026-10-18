@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.3](https://github.com/EngAbdullahHanif/mutascope/compare/v0.4.2...v0.4.3) (2026-10-18)
+
+
+### Documentation
+
+* keep one ONNX thread on Cloud Run (ADR 0036 §7, build log 38) ([4eb8b66](https://github.com/EngAbdullahHanif/mutascope/commit/4eb8b666494ba4956b57877d41e07cc5dd256916))
+* keep one ONNX thread on Cloud Run (ADR 0036 section 7, build log 38) ([f24e3e0](https://github.com/EngAbdullahHanif/mutascope/commit/f24e3e0d94d5dbc28515601edd08fe8b3fe88f58))
+
 ## [0.4.2](https://github.com/EngAbdullahHanif/mutascope/compare/v0.4.1...v0.4.2) (2026-10-18)
 
 
