@@ -293,11 +293,12 @@ measured at 20 users on 4 GiB.
 ### Carried from Phase 4 (ADR 0035)
 - [x] Bound concurrent forward passes (ADR 0036: one pass at a time, 503 `scoring-busy` after
       10 s); measure 5 users live again (ADR 0036, section 6: read p99 8.5 s, not fixed)
-- [ ] Reads stay slow on Cloud Run under load although the pool holds (ADR 0036, section 6): find
-      what makes the event loop wait (try `ONNX_THREADS=1` live, profile the loop, move gzip /
-      ETag of large bodies off it); goal read p99 < 1 s at 5 users
-- [ ] Precise job at 400 residues took 203 s live (v0.4.0) against the ~3 min target: measure
-      again, lower `PRECISE_MAX_LENGTH` if it holds
+- [x] Reads stay slow on Cloud Run under load although the pool holds (ADR 0036, section 6):
+      fixed by one ONNX thread (section 7): read p99 at 5 users 140 ms (was 8,500 ms)
+- [ ] Precise job at 400 residues takes 293 s live with one ONNX thread (ADR 0036, section 7)
+      against the ~3 min target: measure at a lower `PRECISE_MAX_LENGTH` (about 250–300) and set it
+- [ ] Optional, for heavier load: profile the event loop, move gzip / ETag of large bodies off it
+      (ADR 0036, section 6, experiments 2 and 3)
 - [x] Live observability: `metrics_token` from Secret Manager (ADR 0036); `/metrics` 401 / 200
       checked live
 - [ ] Sentry: create a project, add `MUTASCOPE_API_SENTRY_DSN` under `secrets` again (removed in
