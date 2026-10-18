@@ -1,0 +1,27 @@
+# The Hugging Face Space that serves the API (ADR 0034; `python -m api.deploy.space`).
+#
+# The Space repo holds two files, both written by the deploy: a README (the Space's metadata)
+# and a one-line Dockerfile, `FROM <image>:<tag>@<digest>`. The image is built and pushed once,
+# by CI, from a version tag; the Space only pulls it. GHCR names are lowercase.
+repo_id: engAbdullahHanif/mutascope-api
+url: https://engabdullahhanif-mutascope-api.hf.space
+image: ghcr.io/engabdullahhanif/mutascope-api
+title: MutaScope API
+short_description: Zero-shot mutation-effect landscapes (ESM-2, ONNX, CPU)
+
+# The Space's variables: exactly these, on every deploy (any other variable is deleted), so this
+# file is the whole of the Space's non-secret configuration. Unset = the image's default
+# (.env.example). Measured values go here, with the measurement in docs/load-test.md.
+variables: {}
+
+# Space secrets: name on the Space -> environment variable that holds the value in CI (a GitHub
+# secret). An empty or missing variable leaves the Space's secret as it is; the deploy never
+# deletes secrets.
+secrets:
+  MUTASCOPE_API_METRICS_TOKEN: SPACE_METRICS_TOKEN
+
+# After the push: the Space must run the new commit, report the tag's version on /health and
+# answer /ready with 200 within this time, or the workflow fails. The first build pulls ~600 MB.
+wait:
+  timeout_seconds: 1500
+  interval_seconds: 15
