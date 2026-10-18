@@ -399,9 +399,10 @@ stay green on `main`.
   key to GitHub.
 - The service is defined only by `conf/deploy/cloudrun.yaml` (`env`: exactly the container's
   environment); never change it in the console, the next deploy undoes it. `max_instances` stays
-  1 (ADR 0032). The only GitHub secret is `RELEASE_PLEASE_TOKEN`. The API's secrets
-  (`MUTASCOPE_API_METRICS_TOKEN`, `MUTASCOPE_API_SENTRY_DSN`) are in Secret Manager, under
-  `secrets` in that file; the runtime account may read exactly those (`setup-gcp.sh`, ADR 0036).
+  1 (ADR 0032). The only GitHub secret is `RELEASE_PLEASE_TOKEN`. The API's secrets are in
+  Secret Manager, under `secrets` in that file: `MUTASCOPE_API_METRICS_TOKEN` (the Sentry DSN
+  returns when a Sentry project exists; an invalid DSN stops the API at startup). The runtime
+  account may read exactly those (`setup-gcp.sh`, ADR 0036).
 - Request-based billing: an instance has CPU only during a request, so a precise job advances
   while its SSE stream is open. Scale-to-zero: the site must work with the API asleep.
 - Live measurement: `tools/loadtest/live.py --url <service url>` (short: free tier). ADR 0031's
