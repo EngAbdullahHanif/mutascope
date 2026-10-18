@@ -41,6 +41,7 @@ model becomes 35M (``MUTASCOPE_API_SCORE_DEFAULT_MODEL`` in ``conf/deploy/cloudr
 """
 
 import argparse
+import http.client
 import json
 import logging
 import math
@@ -75,7 +76,12 @@ def request(
     timeout: float = 120,
     headers: dict[str, str] | None = None,
 ) -> tuple[int, dict[str, str], bytes, float]:
-    """One request; returns status, headers, body and wall time in seconds."""
+    """One request; returns status, headers, body and wall time in seconds.
+
+    A connection the server (or Google's front end) closes without an answer is status 0, so
+    the caller counts it instead of the whole measurement stopping (the first run of ADR 0036
+    lost one request this way, with the instance still up).
+    """
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method="POST" if data else "GET")
     if data:
@@ -89,6 +95,9 @@ def request(
             status, headers = response.status, dict(response.headers)
     except urllib.error.HTTPError as error:
         payload, status, headers = error.read(), error.code, dict(error.headers)
+    except (http.client.HTTPException, ConnectionError, urllib.error.URLError) as error:
+        log.warning("no answer from %s: %r", url.split("?")[0], error)
+        payload, status, headers = b"", 0, {}
     return status, headers, payload, time.perf_counter() - started
 
 
@@ -129,16 +138,24 @@ def read_latency(base: str, n: int, spacing: float, rng: random.Random) -> dict[
     }
     for name, path in routes.items():
         times: list[float] = []
+        dropped = 0
         while len(times) < n:
             status, headers, _, elapsed = request(f"{base}{path(rng.choice(assays))}")
             if status == 429:
                 time.sleep(float(headers.get("Retry-After", "10")))
                 continue
+            if status == 0:
+                dropped += 1
+                continue
             if status != 200:
                 raise RuntimeError(f"{name}: unexpected {status}")
             times.append(elapsed)
             time.sleep(spacing)
-        cells[name] = {**summarise(times), "p99_s": round(percentile(times, 99), 3)}
+        cells[name] = {
+            **summarise(times),
+            "p99_s": round(percentile(times, 99), 3),
+            "no_answer": dropped,
+        }
         log.info("%s: %s", name, cells[name])
     return cells
 
@@ -235,7 +252,7 @@ def fast_latency(base: str, n: int, spacing: float, rng: random.Random) -> dict[
         time.sleep(spacing)
         for length in LENGTHS:
             times: list[float] = []
-            refused = 0
+            refused = dropped = 0
             while len(times) < n:
                 sequence = "".join(rng.choice(AA) for _ in range(length))
                 status, headers, _, elapsed = request(
@@ -245,13 +262,24 @@ def fast_latency(base: str, n: int, spacing: float, rng: random.Random) -> dict[
                     refused += 1
                     time.sleep(float(headers.get("Retry-After", "10")))
                     continue
+                if status == 0:  # no answer: counted, not timed
+                    dropped += 1
+                    time.sleep(spacing)
+                    continue
                 if status != 200:
                     raise RuntimeError(f"{model} {length}: unexpected {status}")
                 if headers.get("X-MutaScope-Cache", headers.get("x-mutascope-cache")) != "miss":
-                    raise RuntimeError(f"{model} {length}: not a cache miss")
+                    raise RuntimeError(
+                        f"{model} {length}: not a cache miss (a warm instance keeps its cache: "
+                        "pass another --seed than the last run's)"
+                    )
                 times.append(elapsed)
                 time.sleep(spacing)
-            cells[f"{model}@{length}"] = {**summarise(times), "refused_429": refused}
+            cells[f"{model}@{length}"] = {
+                **summarise(times),
+                "refused_429": refused,
+                "no_answer": dropped,
+            }
             log.info("%s @ %d: %s", model, length, cells[f"{model}@{length}"])
     return cells
 
