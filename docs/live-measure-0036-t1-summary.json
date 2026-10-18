@@ -1,0 +1,541 @@
+{
+ "url": "https://mutascope-api-2lvmztrsha-ew.a.run.app",
+ "started": "2026-10-18T20:43:07Z",
+ "cold_start_s": 0.15,
+ "ready": {
+  "status": "ready",
+  "schema_version": "1.0.0",
+  "bundle_revision": "3ae767217bb0a56b8f2e7c79c68b73119e308066",
+  "proteins": 217,
+  "models": [
+   "esm2_150m_onnx_fp32",
+   "esm2_35m_onnx_fp32"
+  ],
+  "score_default_model": "esm2_35m",
+  "precise_max_length": 400
+ },
+ "version": "0.4.0",
+ "metrics": {
+  "without_token": 401,
+  "with_token": 200,
+  "has_inference_gauges": true
+ },
+ "network": {
+  "n": 20,
+  "p50_s": 0.13,
+  "p95_s": 0.231,
+  "max_s": 0.304,
+  "mean_s": 0.155
+ },
+ "reads": {
+  "GET /v1/proteins/{id}": {
+   "n": 20,
+   "p50_s": 0.181,
+   "p95_s": 0.253,
+   "max_s": 0.256,
+   "mean_s": 0.186,
+   "p99_s": 0.256,
+   "no_answer": 0
+  },
+  "GET /v1/proteins/{id}/landscape": {
+   "n": 20,
+   "p50_s": 0.222,
+   "p95_s": 0.34,
+   "max_s": 0.348,
+   "mean_s": 0.233,
+   "p99_s": 0.348,
+   "no_answer": 0
+  },
+  "GET /v1/benchmarks": {
+   "n": 20,
+   "p50_s": 0.313,
+   "p95_s": 0.525,
+   "max_s": 0.557,
+   "mean_s": 0.336,
+   "p99_s": 0.557,
+   "no_answer": 0
+  }
+ },
+ "fast": {
+  "esm2_35m@300": {
+   "n": 20,
+   "p50_s": 0.546,
+   "p95_s": 0.783,
+   "max_s": 1.115,
+   "mean_s": 0.597,
+   "refused_429": 0,
+   "no_answer": 1
+  },
+  "esm2_35m@1000": {
+   "n": 20,
+   "p50_s": 2.272,
+   "p95_s": 2.35,
+   "max_s": 2.369,
+   "mean_s": 2.232,
+   "refused_429": 0,
+   "no_answer": 0
+  },
+  "esm2_150m@300": {
+   "n": 20,
+   "p50_s": 1.636,
+   "p95_s": 1.745,
+   "max_s": 1.872,
+   "mean_s": 1.647,
+   "refused_429": 0,
+   "no_answer": 0
+  },
+  "esm2_150m@1000": {
+   "n": 20,
+   "p50_s": 7.44,
+   "p95_s": 8.102,
+   "max_s": 8.185,
+   "mean_s": 7.407,
+   "refused_429": 0,
+   "no_answer": 0
+  }
+ },
+ "decision": {
+  "rule": "150M fast-mode p95 at 1,000 residues > 2.0 s -> default 35M",
+  "esm2_150m_p95_1000_s": 8.102,
+  "score_default_model": "esm2_35m"
+ },
+ "precise": {
+  "length": 400,
+  "status": "succeeded",
+  "seconds": 292.7,
+  "events": 28
+ },
+ "load": {
+  "5": {
+   "users": 5,
+   "seconds": 120,
+   "locust_exit": 0,
+   "status_counts": {
+    "200": 187,
+    "202": 2,
+    "429": 34
+   },
+   "stats": [
+    {
+     "name": "GET /v1/benchmarks",
+     "count": 22,
+     "failures": 0,
+     "median_ms": 97.0,
+     "p95_ms": 130.0,
+     "p99_ms": 150.0,
+     "max_ms": 151.40445798169822,
+     "rps": 0.1840534594140993
+    },
+    {
+     "name": "GET /v1/jobs/{id}/stream",
+     "count": 2,
+     "failures": 0,
+     "median_ms": 31000.0,
+     "p95_ms": 31000.0,
+     "p99_ms": 31000.0,
+     "max_ms": 30636.78170798812,
+     "rps": 0.016732132674009026
+    },
+    {
+     "name": "GET /v1/proteins",
+     "count": 5,
+     "failures": 0,
+     "median_ms": 220.0,
+     "p95_ms": 230.0,
+     "p99_ms": 230.0,
+     "max_ms": 234.04770903289318,
+     "rps": 0.041830331685022565
+    },
+    {
+     "name": "GET /v1/proteins/{id}",
+     "count": 94,
+     "failures": 0,
+     "median_ms": 69.0,
+     "p95_ms": 120.0,
+     "p99_ms": 140.0,
+     "max_ms": 137.40712497383356,
+     "rps": 0.7864102356784243
+    },
+    {
+     "name": "GET /v1/proteins/{id}/landscape",
+     "count": 26,
+     "failures": 0,
+     "median_ms": 160.0,
+     "p95_ms": 560.0,
+     "p99_ms": 770.0,
+     "max_ms": 769.1618329845369,
+     "rps": 0.21751772476211736
+    },
+    {
+     "name": "POST /v1/jobs",
+     "count": 2,
+     "failures": 0,
+     "median_ms": 66.0,
+     "p95_ms": 66.0,
+     "p99_ms": 66.0,
+     "max_ms": 66.46570900920779,
+     "rps": 0.016732132674009026
+    },
+    {
+     "name": "POST /v1/jobs [429]",
+     "count": 21,
+     "failures": 0,
+     "median_ms": 65.0,
+     "p95_ms": 79.0,
+     "p99_ms": 100.0,
+     "max_ms": 104.41754094790667,
+     "rps": 0.1756873930770948
+    },
+    {
+     "name": "POST /v1/score",
+     "count": 38,
+     "failures": 0,
+     "median_ms": 3400.0,
+     "p95_ms": 10000.0,
+     "p99_ms": 11000.0,
+     "max_ms": 11154.290499980561,
+     "rps": 0.3179105208061715
+    },
+    {
+     "name": "POST /v1/score [429]",
+     "count": 13,
+     "failures": 0,
+     "median_ms": 54.0,
+     "p95_ms": 150.0,
+     "p99_ms": 150.0,
+     "max_ms": 154.35745799914002,
+     "rps": 0.10875886238105868
+    },
+    {
+     "name": "Aggregated",
+     "count": 223,
+     "failures": 0,
+     "median_ms": 84.0,
+     "p95_ms": 5700.0,
+     "p99_ms": 11000.0,
+     "max_ms": 30636.78170798812,
+     "rps": 1.8656327931520065
+    }
+   ],
+   "server": {
+    "scrapes": 12,
+    "rss_mib_max": 2537.3,
+    "rss_plus_cache_mib_max": 2542.8,
+    "limit_mib": 4096,
+    "share_of_limit_max": 0.621,
+    "inference_running_max": 1.0,
+    "inference_waiting_max": 3.0,
+    "samples": [
+     {
+      "t": 0.1,
+      "mutascope_jobs_running": 0.0,
+      "mutascope_inference_running": 0.0,
+      "mutascope_inference_waiting": 0.0,
+      "mutascope_score_cache_bytes": 4424960.0,
+      "process_resident_memory_bytes": 2570203136.0
+     },
+     {
+      "t": 10.3,
+      "mutascope_jobs_running": 1.0,
+      "mutascope_inference_running": 1.0,
+      "mutascope_inference_waiting": 3.0,
+      "mutascope_score_cache_bytes": 4529456.0,
+      "process_resident_memory_bytes": 2584883200.0
+     },
+     {
+      "t": 20.5,
+      "mutascope_jobs_running": 1.0,
+      "mutascope_inference_running": 1.0,
+      "mutascope_inference_waiting": 2.0,
+      "mutascope_score_cache_bytes": 4640000.0,
+      "process_resident_memory_bytes": 2589745152.0
+     },
+     {
+      "t": 30.6,
+      "mutascope_jobs_running": 1.0,
+      "mutascope_inference_running": 1.0,
+      "mutascope_inference_waiting": 0.0,
+      "mutascope_score_cache_bytes": 4794256.0,
+      "process_resident_memory_bytes": 2589724672.0
+     },
+     {
+      "t": 40.8,
+      "mutascope_jobs_running": 0.0,
+      "mutascope_inference_running": 1.0,
+      "mutascope_inference_waiting": 2.0,
+      "mutascope_score_cache_bytes": 4900656.0,
+      "process_resident_memory_bytes": 2590109696.0
+     },
+     {
+      "t": 51.0,
+      "mutascope_jobs_running": 0.0,
+      "mutascope_inference_running": 0.0,
+      "mutascope_inference_waiting": 0.0,
+      "mutascope_score_cache_bytes": 5140112.0,
+      "process_resident_memory_bytes": 2597711872.0
+     },
+     {
+      "t": 61.1,
+      "mutascope_jobs_running": 0.0,
+      "mutascope_inference_running": 0.0,
+      "mutascope_inference_waiting": 0.0,
+      "mutascope_score_cache_bytes": 5140112.0,
+      "process_resident_memory_bytes": 2614423552.0
+     },
+     {
+      "t": 71.3,
+      "mutascope_jobs_running": 1.0,
+      "mutascope_inference_running": 1.0,
+      "mutascope_inference_waiting": 2.0,
+      "mutascope_score_cache_bytes": 5242192.0,
+      "process_resident_memory_bytes": 2617421824.0
+     },
+     {
+      "t": 81.5,
+      "mutascope_jobs_running": 0.0,
+      "mutascope_inference_running": 1.0,
+      "mutascope_inference_waiting": 0.0,
+      "mutascope_score_cache_bytes": 5406528.0,
+      "process_resident_memory_bytes": 2617421824.0
+     },
+     {
+      "t": 91.6,
+      "mutascope_jobs_running": 0.0,
+      "mutascope_inference_running": 0.0,
+      "mutascope_inference_waiting": 0.0,
+      "mutascope_score_cache_bytes": 5510912.0,
+      "process_resident_memory_bytes": 2622533632.0
+     },
+     {
+      "t": 101.8,
+      "mutascope_jobs_running": 0.0,
+      "mutascope_inference_running": 1.0,
+      "mutascope_inference_waiting": 3.0,
+      "mutascope_score_cache_bytes": 5527296.0,
+      "process_resident_memory_bytes": 2659405824.0
+     },
+     {
+      "t": 112.0,
+      "mutascope_jobs_running": 0.0,
+      "mutascope_inference_running": 1.0,
+      "mutascope_inference_waiting": 1.0,
+      "mutascope_score_cache_bytes": 5722320.0,
+      "process_resident_memory_bytes": 2660585472.0
+     }
+    ]
+   }
+  },
+  "20": {
+   "users": 20,
+   "seconds": 120,
+   "locust_exit": 0,
+   "status_counts": {
+    "200": 253,
+    "202": 2,
+    "429": 837,
+    "503": 21
+   },
+   "stats": [
+    {
+     "name": "GET /v1/benchmarks",
+     "count": 23,
+     "failures": 0,
+     "median_ms": 100.0,
+     "p95_ms": 410.0,
+     "p99_ms": 520.0,
+     "max_ms": 521.8614590121433,
+     "rps": 0.19274700217487103
+    },
+    {
+     "name": "GET /v1/benchmarks [429]",
+     "count": 69,
+     "failures": 0,
+     "median_ms": 55.0,
+     "p95_ms": 72.0,
+     "p99_ms": 100.0,
+     "max_ms": 103.01266692113131,
+     "rps": 0.5782410065246132
+    },
+    {
+     "name": "GET /v1/jobs/{id}/stream",
+     "count": 2,
+     "failures": 0,
+     "median_ms": 26000.0,
+     "p95_ms": 26000.0,
+     "p99_ms": 26000.0,
+     "max_ms": 25874.269583029673,
+     "rps": 0.016760608884771395
+    },
+    {
+     "name": "GET /v1/proteins",
+     "count": 20,
+     "failures": 0,
+     "median_ms": 500.0,
+     "p95_ms": 580.0,
+     "p99_ms": 580.0,
+     "max_ms": 580.4747500224039,
+     "rps": 0.16760608884771394
+    },
+    {
+     "name": "GET /v1/proteins/{id}",
+     "count": 143,
+     "failures": 0,
+     "median_ms": 72.0,
+     "p95_ms": 510.0,
+     "p99_ms": 560.0,
+     "max_ms": 569.5045840693638,
+     "rps": 1.1983835352611547
+    },
+    {
+     "name": "GET /v1/proteins/{id} [429]",
+     "count": 370,
+     "failures": 0,
+     "median_ms": 54.0,
+     "p95_ms": 75.0,
+     "p99_ms": 120.0,
+     "max_ms": 246.82208301965147,
+     "rps": 3.100712643682708
+    },
+    {
+     "name": "GET /v1/proteins/{id}/landscape",
+     "count": 46,
+     "failures": 0,
+     "median_ms": 140.0,
+     "p95_ms": 1300.0,
+     "p99_ms": 2000.0,
+     "max_ms": 1950.3003749996424,
+     "rps": 0.38549400434974207
+    },
+    {
+     "name": "GET /v1/proteins/{id}/landscape [429]",
+     "count": 102,
+     "failures": 0,
+     "median_ms": 51.0,
+     "p95_ms": 68.0,
+     "p99_ms": 83.0,
+     "max_ms": 176.24387494288385,
+     "rps": 0.8547910531233411
+    },
+    {
+     "name": "POST /v1/jobs",
+     "count": 2,
+     "failures": 0,
+     "median_ms": 340.0,
+     "p95_ms": 340.0,
+     "p99_ms": 340.0,
+     "max_ms": 342.7187920315191,
+     "rps": 0.016760608884771395
+    },
+    {
+     "name": "POST /v1/jobs [429]",
+     "count": 75,
+     "failures": 0,
+     "median_ms": 54.0,
+     "p95_ms": 71.0,
+     "p99_ms": 330.0,
+     "max_ms": 332.2762500029057,
+     "rps": 0.6285228331789273
+    },
+    {
+     "name": "POST /v1/score",
+     "count": 19,
+     "failures": 0,
+     "median_ms": 10000.0,
+     "p95_ms": 14000.0,
+     "p99_ms": 14000.0,
+     "max_ms": 14045.166458003223,
+     "rps": 0.15922578440532825
+    },
+    {
+     "name": "POST /v1/score [429]",
+     "count": 215,
+     "failures": 0,
+     "median_ms": 53.0,
+     "p95_ms": 70.0,
+     "p99_ms": 80.0,
+     "max_ms": 99.73416698630899,
+     "rps": 1.801765455112925
+    },
+    {
+     "name": "POST /v1/score [503]",
+     "count": 21,
+     "failures": 0,
+     "median_ms": 10000.0,
+     "p95_ms": 10000.0,
+     "p99_ms": 11000.0,
+     "max_ms": 10513.476083055139,
+     "rps": 0.17598639329009966
+    },
+    {
+     "name": "Aggregated",
+     "count": 1107,
+     "failures": 0,
+     "median_ms": 56.0,
+     "p95_ms": 550.0,
+     "p99_ms": 10000.0,
+     "max_ms": 25874.269583029673,
+     "rps": 9.276997017720968
+    }
+   ],
+   "server": {
+    "scrapes": 6,
+    "rss_mib_max": 2608.6,
+    "rss_plus_cache_mib_max": 2614.4,
+    "limit_mib": 4096,
+    "share_of_limit_max": 0.638,
+    "inference_running_max": 1.0,
+    "inference_waiting_max": 14.0,
+    "samples": [
+     {
+      "t": 0.2,
+      "mutascope_jobs_running": 0.0,
+      "mutascope_inference_running": 0.0,
+      "mutascope_inference_waiting": 0.0,
+      "mutascope_score_cache_bytes": 5858272.0,
+      "process_resident_memory_bytes": 2665213952.0
+     },
+     {
+      "t": 10.3,
+      "mutascope_jobs_running": 1.0,
+      "mutascope_inference_running": 1.0,
+      "mutascope_inference_waiting": 14.0,
+      "mutascope_score_cache_bytes": 5895136.0,
+      "process_resident_memory_bytes": 2711171072.0
+     },
+     {
+      "t": 20.5,
+      "mutascope_jobs_running": 1.0,
+      "mutascope_inference_running": 1.0,
+      "mutascope_inference_waiting": 2.0,
+      "mutascope_score_cache_bytes": 6021776.0,
+      "process_resident_memory_bytes": 2735357952.0
+     },
+     {
+      "t": 61.1,
+      "mutascope_jobs_running": 0.0,
+      "mutascope_inference_running": 1.0,
+      "mutascope_inference_waiting": 1.0,
+      "mutascope_score_cache_bytes": 6105616.0,
+      "process_resident_memory_bytes": 2711654400.0
+     },
+     {
+      "t": 71.3,
+      "mutascope_jobs_running": 1.0,
+      "mutascope_inference_running": 1.0,
+      "mutascope_inference_waiting": 14.0,
+      "mutascope_score_cache_bytes": 6201328.0,
+      "process_resident_memory_bytes": 2711523328.0
+     },
+     {
+      "t": 81.4,
+      "mutascope_jobs_running": 1.0,
+      "mutascope_inference_running": 1.0,
+      "mutascope_inference_waiting": 4.0,
+      "mutascope_score_cache_bytes": 6310288.0,
+      "process_resident_memory_bytes": 2697871360.0
+     }
+    ]
+   }
+  }
+ }
+}
