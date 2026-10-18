@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/EngAbdullahHanif/mutascope/compare/v0.5.0...v0.5.1) (2026-10-18)
+
+
+### Documentation
+
+* record the production gzip check (build log 39) ([57e124a](https://github.com/EngAbdullahHanif/mutascope/commit/57e124ab3c2cdd1a39d8746c1cf2432fc8cfb9c8))
+
 ## [0.5.0](https://github.com/EngAbdullahHanif/mutascope/compare/v0.4.3...v0.5.0) (2026-10-18)
 
 
