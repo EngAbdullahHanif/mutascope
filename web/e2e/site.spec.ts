@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 const PAGES = [
-  { href: "/explorer", label: "Explorer" },
+  { href: "/explore", label: "Explorer" },
   { href: "/benchmarks", label: "Benchmarks" },
   { href: "/how-it-works", label: "How it works" },
   { href: "/about", label: "About" },
@@ -45,7 +45,7 @@ test("dark mode toggles and survives a reload", async ({ page }) => {
   await expect(html).toHaveClass(/dark/);
 });
 
-test("the Explorer loads and validates the bundle from the site alone (API asleep)", async ({
+test("the bundle loads and validates from the site alone (API asleep)", async ({
   page,
   baseURL,
 }) => {
@@ -58,7 +58,7 @@ test("the Explorer loads and validates the bundle from the site alone (API aslee
     external.push(url);
     return route.abort();
   });
-  await page.goto("/explorer");
+  await page.goto("/about");
   const status = page.getByTestId("bundle-status");
   await expect(status.getByTestId("check-manifest.json")).toHaveAttribute("data-state", "ok");
   await expect(status.getByTestId("check-manifest.json")).toContainText("217 assays");

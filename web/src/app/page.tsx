@@ -14,7 +14,7 @@ export default function HomePage() {
         <p className="mt-4 text-lg text-muted-foreground">{SITE.tagline}</p>
         <div className="mt-6 flex gap-3">
           <Button asChild>
-            <Link href="/explorer">Open the Explorer</Link>
+            <Link href="/explore">Open the Explorer</Link>
           </Button>
           <Button asChild variant="outline">
             <Link href="/how-it-works">How it works</Link>
@@ -27,8 +27,9 @@ export default function HomePage() {
             Reading a landscape
           </h2>
           <p className="mt-2 max-w-prose text-muted-foreground">
-            Each cell is one substitution. Colour shows the predicted effect in the assay, on a
-            scale symmetric around zero. Every prediction is labelled{" "}
+            Each cell is one substitution. Colour shows its effect in the assay, on a scale
+            symmetric around neutral: the wild type for zero-shot scores, the assay&apos;s median
+            for DMS scores. Every prediction is labelled{" "}
             <span className="font-medium text-foreground">Zero-shot</span> or{" "}
             <span className="font-medium text-foreground">Supervised (n = …)</span>, with n the
             measured variants the model was trained on.

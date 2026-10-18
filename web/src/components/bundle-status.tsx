@@ -24,8 +24,8 @@ const fail = (error: unknown): Check => ({
 
 /**
  * Loads the bundle the site was built with, through the same checks every page will use
- * (schema version, Zod, the manifest's sha256), and reports each file. A placeholder for the
- * Explorer, and the end-to-end test's proof that the data path works in a real browser.
+ * (schema version, Zod, the manifest's sha256), and reports each file: the About page's
+ * provenance box, and the end-to-end test's proof that the data path works in a real browser.
  */
 export function BundleStatus() {
   const [checks, setChecks] = useState<Checks>(LOADING);
