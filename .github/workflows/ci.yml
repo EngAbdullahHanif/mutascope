@@ -1,5 +1,9 @@
-# Lint and type-check, tests with coverage, then the Nextflow smoke test on 2 assays.
-# Every Python step runs through the Makefile, so CI runs the same commands as a laptop.
+# Every pull request and every push to main: lint and type-check, tests with coverage, the API
+# types check, both Docker images built for linux/amd64, the Nextflow smoke test on 2 assays in
+# the pipeline image, and the API image's container tests. Python steps run through the
+# Makefile, so CI runs the same commands as a laptop. Branch protection requires every job here
+# (ADR 0034), so the job names are the check names: renaming one means updating the rule.
+# Actions are pinned by exact release tag (CLAUDE.md); Dependabot moves the pins.
 name: CI
 
 on:
@@ -17,16 +21,13 @@ concurrency:
 env:
   UV_VERSION: "0.12.24"
   NEXTFLOW_VERSION: "26.04.7"
-  # Foldseek 10-941cd33, linux-avx2 build (README, "Installing Foldseek"; ADR 0006).
-  FOLDSEEK_URL: https://github.com/steineggerlab/foldseek/releases/download/10-941cd33/foldseek-linux-avx2.tar.gz
-  FOLDSEEK_SHA256: e6a3e3860e76b0b7b858736f627fe680d4d7f0fc7298301d8a92b9f711d74ac7
 
 jobs:
   lint:
-    name: ruff + pyright
+    name: lint + typecheck (ruff, pyright)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - uses: astral-sh/setup-uv@v10.3.0
         with:
           version: ${{ env.UV_VERSION }}
@@ -37,19 +38,23 @@ jobs:
     name: pytest + coverage
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - uses: astral-sh/setup-uv@v10.3.0
         with:
           version: ${{ env.UV_VERSION }}
       - run: uv sync --all-extras --locked
       # Tests load esm2_t6_8M (about 30 MB) from the Hub at its pinned revision; the key changes
       # only when that pin does.
-      - uses: actions/cache@v6
+      - uses: actions/cache@v6.1.0
         with:
           path: ~/.cache/huggingface/hub
           key: hf-${{ hashFiles('conf/model/esm2_8m.yaml') }}
-      - run: make test PYTEST_ARGS="--cov=mutascope --cov-report=term-missing --cov-report=xml"
-      - uses: actions/upload-artifact@v7
+      - run: make test PYTEST_ARGS="--cov=mutascope --cov=api --cov-report=term-missing --cov-report=xml"
+      - name: Coverage summary
+        if: always()
+        run: |
+          uv run coverage report --format=markdown >> "$GITHUB_STEP_SUMMARY" || true
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: coverage
           path: coverage.xml
@@ -60,16 +65,16 @@ jobs:
     name: API types up to date
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - uses: astral-sh/setup-uv@v10.3.0
         with:
           version: ${{ env.UV_VERSION }}
       - run: uv sync --all-extras --locked
       # pnpm's version comes from "packageManager" in web/package.json.
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@v6.1.0
         with:
           package_json_file: web/package.json
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version: "26"
           cache: pnpm
@@ -80,49 +85,77 @@ jobs:
       - name: Committed types match the API
         run: git diff --exit-code web/src/lib/api-types.ts
 
+  # The smoke test runs in the pipeline image (-profile docker,test; ADR 0007, 0033), built here
+  # for the runner's architecture (linux/amd64), as `make pipeline-image` does on a laptop.
   pipeline:
-    name: Nextflow smoke test (2 assays)
-    needs: [lint, test]
+    name: Nextflow smoke test (docker,test, 2 assays)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.3.0
+      - uses: actions/checkout@v7.0.1
+      - uses: docker/setup-buildx-action@v4.4.1
+      - name: Build the pipeline image (linux/amd64)
+        uses: docker/build-push-action@v7.4.0
         with:
-          version: ${{ env.UV_VERSION }}
-      - run: uv sync --all-extras --locked
-      - uses: nf-core/setup-nextflow@v3
+          context: .
+          file: pipeline/Dockerfile
+          platforms: linux/amd64
+          build-args: VCS_REF=${{ github.sha }}
+          tags: mutascope-pipeline:dev
+          load: true
+          cache-from: type=gha,scope=pipeline-image
+          cache-to: type=gha,scope=pipeline-image,mode=max
+      - uses: nf-core/setup-nextflow@v3.0.1
         with:
           version: ${{ env.NEXTFLOW_VERSION }}
-      - name: Install Foldseek (pinned, checksum-verified)
-        run: |
-          curl -fsSL -o foldseek.tar.gz "$FOLDSEEK_URL"
-          echo "$FOLDSEEK_SHA256  foldseek.tar.gz" | sha256sum --check
-          tar xzf foldseek.tar.gz
-          sudo install -m 755 foldseek/bin/foldseek /usr/local/bin/foldseek
-          rm -rf foldseek foldseek.tar.gz
-          foldseek version
       # Only the downloaded files (~75 MB): archives are re-extracted each run, and the
       # downloader re-verifies every cached file against data/manifest.yaml anyway.
-      - uses: actions/cache@v6
+      - uses: actions/cache@v6.1.0
         with:
           path: |
             data/raw/*/*.zip
             data/raw/*/*.csv
           key: proteingym-${{ hashFiles('conf/data/proteingym.yaml', 'data/manifest.yaml') }}
-      # SCORE_ZERO_SHOT loads esm2_t6_8M; same cache as the test job.
-      - uses: actions/cache@v6
+      # SCORE_ZERO_SHOT loads esm2_t6_8M; the docker profile's HF_HOME is in the data cache.
+      - uses: actions/cache@v6.1.0
         with:
-          path: ~/.cache/huggingface/hub
-          key: hf-${{ hashFiles('conf/model/esm2_8m.yaml') }}
-      - run: make pipeline-test
+          path: data/cache/huggingface
+          key: hf-docker-${{ hashFiles('conf/model/esm2_8m.yaml') }}
+      - run: make pipeline-test-docker
       - name: Manifest unchanged
         run: git diff --exit-code data/manifest.yaml
       - if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: pipeline-test
           path: |
             pipeline/results/reports/
             .nextflow.log
           include-hidden-files: true
+
+  # The image the release workflow pushes, built the same way (linux/amd64, the Space's
+  # platform). Its last build step is the self-check (ADR 0033); then the container tests run it
+  # under the Space's limits.
+  api-image:
+    name: API image (build + container tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: docker/setup-buildx-action@v4.4.1
+      - name: Build the API image (linux/amd64)
+        uses: docker/build-push-action@v7.4.0
+        with:
+          context: .
+          file: api/Dockerfile
+          platforms: linux/amd64
+          build-args: VCS_REF=${{ github.sha }}
+          tags: mutascope-api:dev
+          load: true
+          cache-from: type=gha,scope=api-image
+          cache-to: type=gha,scope=api-image,mode=max
+      - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          version: ${{ env.UV_VERSION }}
+      - run: uv sync --all-extras --locked
+      - run: make test-container

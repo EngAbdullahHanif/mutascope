@@ -58,7 +58,7 @@ make test-slow    # pytest -m slow (real 650M models, MPS; run locally only)
 make pipeline     # nextflow run pipeline/main.nf -profile local
 make pipeline-test# nextflow run pipeline/main.nf -profile local,test
 make pipeline-test-docker # the same in the pipeline image (-profile docker,test; ADR 0033)
-make api-image    # API image (PLATFORM=linux/amd64 for the Space); make pipeline-image, make images
+make api-image    # API image (PLATFORM=linux/amd64 for Cloud Run); make pipeline-image, make images
 make test-container # pytest -m container: the API image under --cpus=2 --memory=16g
 make mlflow       # MLflow UI on http://127.0.0.1:5001 over mlruns/mlflow.db
 make api          # uvicorn api.app.main:app --reload --port 7860
@@ -73,7 +73,8 @@ Run `make lint test` before declaring any task done.
 - Dev machine: Apple M4 Pro, 24 GB RAM. Use `torch.device("mps")` when available, else CPU.
   Set `PYTORCH_ENABLE_MPS_FALLBACK=1`. Use float32 (no fp16/bf16 on MPS).
 - Docker on macOS cannot access MPS. GPU/MPS work runs in `-profile local` (uv env); Docker is CPU-only.
-- Deployment target (Hugging Face Spaces) is linux/amd64. Build images with
+- Deployment target (Google Cloud Run, 2 vCPU / 4 GiB, ADR 0034; earlier ADRs say "the Space")
+  is linux/amd64. Build images with
   `docker buildx build --platform linux/amd64` or in CI. Never assume arm64 in deployment.
 - Optional GPU (LoRA fine-tuning only): Kaggle T4. Code must not require CUDA anywhere else.
 
@@ -160,9 +161,9 @@ Run `make lint test` before declaring any task done.
   quantization recipe (`onnx.quantization`) was fixed before any result. Never change it, or
   the thresholds, to make a check pass. The int8 files fail `check-scores` on 3 + 1 assays and
   are rejected. The API serves fp32 ONNX (`esm2_*_onnx_fp32`, Hub `82e1528`). If 150M's
-  fast-mode p95 on the Space for 1,000 residues exceeds 2 s, the live default becomes 35M fp32.
+  fast-mode p95 on the deployed service for 1,000 residues exceeds 2 s, the live default becomes 35M fp32.
   Precise mode is a background job with 35M only, with a length limit of about 3 min on the
-  Space (ADR 0029, section 6).
+  deployed service (ADR 0029, section 6).
 
 ## Evaluation rules (non-negotiable)
 
@@ -300,8 +301,8 @@ Run `make lint test` before declaring any task done.
 - Input validation: only canonical 20 amino acids, length 1–1022, max 50 mutations per `score` request.
 - Live scoring (ADR 0031): `POST /v1/score` is fast mode (wild-type marginal, `esm2_35m` |
   `esm2_150m`, default `score_default_model`); `POST /v1/jobs` is precise mode (masked marginal,
-  35M only, at most `precise_max_length` residues: 600, provisional until the Space is
-  measured). One job runs at a time (`api.app.jobs`, in-process worker); `job_queue_size` wait,
+  35M only, at most `precise_max_length` residues: 600, provisional until the deployed service
+  is measured). One job runs at a time (`api.app.jobs`, in-process worker); `job_queue_size` wait,
   then 429; finished jobs expire after `job_ttl_seconds`. SSE events are a replayable log per
   job: `queued`, `running`, one `progress` per forward batch (its rows), then `succeeded` |
   `failed` | `cancelled`; `id` = index, `Last-Event-ID` resumes. Every live response is
@@ -372,8 +373,32 @@ Run `make lint test` before declaring any task done.
 
 ## CI (GitHub Actions)
 
-lint → typecheck → tests (+ coverage) → Nextflow `-profile local,test` smoke run (`docker,test` from Phase 4, ADR 0007) → build & push image to GHCR
-(amd64) → deploy to Hugging Face Space on version tags. CI must stay green on `main`.
+ADR 0034. `ci.yml` on every PR and push to main, five parallel jobs whose names are the required
+checks of the `main` ruleset (rename a job → update the rule): `lint + typecheck (ruff, pyright)`,
+`pytest + coverage`, `API types up to date`, `Nextflow smoke test (docker,test, 2 assays)`,
+`API image (build + container tests)`. Branches must be up to date with main to merge. CI must
+stay green on `main`.
+
+- Every action is pinned by exact release tag (never `@v7`); Dependabot (`uv`, Actions, Docker)
+  moves the pins. Dockerfile `FROM` lines stay literal so Dependabot can read them.
+- Versions: release-please (`RELEASE_PLEASE_TOKEN`, not `GITHUB_TOKEN`, or its PR gets no CI and
+  its tag starts nothing) bumps `pyproject.toml` and `uv.lock` and writes `CHANGELOG.md`. Never
+  edit the version by hand.
+- `release.yml` on a tag `vX.Y.Z`: tag must equal the package version → API image (amd64),
+  built once, pushed to Artifact Registry (what Cloud Run pulls) and GHCR → `python -m
+  api.deploy.cloudrun render` → `gcloud run services replace` (image by digest, startup probe on
+  `/ready`, max 1 instance) → `wait` (`/health` version = tag, `/ready` 200 on the public URL)
+  or the workflow fails. `workflow_dispatch` (from main) redeploys a tag without rebuilding.
+- Google Cloud access is keyless (Workload Identity Federation: only `release.yml`, on a `v` tag
+  or main, may act as the deployer; `tools/deploy/setup-gcp.sh`). Never add a service-account
+  key to GitHub.
+- The service is defined only by `conf/deploy/cloudrun.yaml` (`env`: exactly the container's
+  environment); never change it in the console, the next deploy undoes it. `max_instances` stays
+  1 (ADR 0032). The only GitHub secret is `RELEASE_PLEASE_TOKEN`.
+- Request-based billing: an instance has CPU only during a request, so a precise job advances
+  while its SSE stream is open. Scale-to-zero: the site must work with the API asleep.
+- Live measurement: `tools/loadtest/live.py --url <service url>` (short: free tier). ADR 0031's
+  rule is applied in `conf/deploy/cloudrun.yaml` from its result.
 
 ## How to work in this repo
 
