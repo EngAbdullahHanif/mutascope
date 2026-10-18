@@ -1,0 +1,7 @@
+{
+  "$comment": "The website bundle the site is built with (ADR 0028, 0037). Same pins as conf/export/default.yaml (export.publish) and conf/publish/hub.yaml; tests/test_web_pins.py fails if they differ.",
+  "repo": "engAbdullahHanif/mutascope-proteingym-v1.3",
+  "path": "bundle",
+  "tag": "bundle-v1.0.0",
+  "revision": "3ae767217bb0a56b8f2e7c79c68b73119e308066"
+}
