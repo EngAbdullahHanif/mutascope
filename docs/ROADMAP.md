@@ -41,8 +41,8 @@ Goal: one command turns the raw ProteinGym download into clean, validated, versi
 ### Pipeline
 - [x] Nextflow DSL2 modules: `DOWNLOAD → VALIDATE → CLEAN → STRUCT_FEATURES → FOLDSEEK_3DI`
       (+ `SUBSET` for the test profile, `STRUCTURE_REPORT` as the final cross-check; ADR 0007)
-- [ ] Profiles: `local` (uv env, MPS), `docker` (CPU, amd64), `test` (2 small assays).
-      `local` and `test` done; `docker` waits for the Phase 4 image
+- [x] Profiles: `local` (uv env, MPS), `docker` (CPU, amd64), `test` (2 small assays).
+      `docker` done with the Phase 4 pipeline image (ADR 0033); CI runs `docker,test` on every PR
 
 ### Outputs
 - [x] marimo EDA notebook (assay sizes, function types, score distributions, sequence lengths)
@@ -278,9 +278,29 @@ Goal: a tested, observable service deployed automatically.
 
 Done when: CI green on every push, tags deploy automatically, `/docs` live, fast-mode response < 2 s.
 
+Closed 2026-10-18 (ADR 0035): tags deploy automatically (`v0.2.0`, and a manual redeploy) and
+`/docs` is live at https://mutascope-api-2lvmztrsha-ew.a.run.app. CI on main has been green since
+`9533655`, after one red merge (`9de9434`, a test-order bug fixed by #39). Fast mode meets 2 s at
+300 residues (35M p95 0.92 s) but not at 1,000 (2.09 s) or under 5 users (10 s). Open: bounding
+concurrent forward passes. Weak points carried forward: no metrics token or Sentry DSN on the
+live service, GHCR image probably private, trusted proxy not yet checked in the logs, memory not
+measured at 20 users on 4 GiB.
+
 ---
 
 ## Phase 5 — Weeks 8–10: Frontend, launch
+
+### Carried from Phase 4 (ADR 0035)
+- [ ] Bound concurrent forward passes (ADR 0033 section on 20 users, ADR 0034 section 6); measure
+      5 users live again
+- [ ] Live observability: create the `metrics_token` (and, if wanted, `sentry_dsn`) secrets and
+      list them under `secrets` in `conf/deploy/cloudrun.yaml`
+- [ ] Make `ghcr.io/engabdullahhanif/mutascope-api` public (package settings), or stop calling it
+      the public copy
+- [ ] Check in Cloud Logging that access lines show visitors' addresses (trusted proxy, ADR 0034)
+- [ ] Add the frontend's origin to `MUTASCOPE_API_CORS_ORIGINS` in `conf/deploy/cloudrun.yaml`
+
+### Frontend
 
 - [ ] Next.js (App Router) + TypeScript + Tailwind + shadcn/ui; Explorer page first
 - [ ] Heatmap (D3/visx, colourblind-safe diverging) linked to 3D structure (3Dmol.js); label the
