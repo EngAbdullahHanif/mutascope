@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.4.0](https://github.com/EngAbdullahHanif/mutascope/compare/v0.3.0...v0.4.0) (2026-10-18)
+
+
+### Features
+
+* **deploy:** metrics token and Sentry DSN from Secret Manager ([ef26bbd](https://github.com/EngAbdullahHanif/mutascope/commit/ef26bbd2fda7e836ef15098690c0cb73c80d621b))
+
+
+### Bug Fixes
+
+* **api:** bound concurrent forward passes; secrets from Secret Manager ([748fe32](https://github.com/EngAbdullahHanif/mutascope/commit/748fe3257cb94b2b16c0e6952fcfded6c03bb532))
+* **api:** run every live forward pass through one bounded inference pool ([0998b27](https://github.com/EngAbdullahHanif/mutascope/commit/0998b27d6644a431a02ab7cca898a5474e1135c4))
+
+
+### Documentation
+
+* ADR 0036 (bounded inference, Secret Manager secrets), CLAUDE.md rules ([45f8db7](https://github.com/EngAbdullahHanif/mutascope/commit/45f8db7eaf460f739fe124650a9c25e27a7b0484))
+
 ## [0.3.0](https://github.com/EngAbdullahHanif/mutascope/compare/v0.2.0...v0.3.0) (2026-10-18)
 
 
