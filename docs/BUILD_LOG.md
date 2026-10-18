@@ -3024,3 +3024,167 @@ author's one-time Google Cloud setup.
   `trusted_proxies` from the API's access lines in Cloud Logging; ADR 0033's 20-user CPU
   saturation is still open (bounding concurrent forward passes), to be judged on the live
   numbers.
+
+---
+
+## Entry 35 — First deploy to Cloud Run, measured live (Phase 4 Task 7, 2026-10-18)
+
+**Plain-language summary.** Merging the release PR tagged `v0.2.0`, and the release workflow
+built the API image, pushed it, deployed it to Google Cloud Run and confirmed the public URL
+served version 0.2.0 with `/ready` passing. The live service was then measured from a laptop in
+Germany. At 1,000 residues the larger model (150M) takes 5.72 s at the 95th percentile, well over
+the 2-second rule, so the default became the smaller model (35M, 2.09 s). A 600-residue precise
+job took almost 7 minutes, so the length limit dropped to 400 residues (163 s, measured). The
+service needs 20.5 s to wake from zero. Cloud Run's front end turned out to be one fixed address,
+which now becomes the trusted proxy, so each visitor gets their own rate limits. All three
+settings are in `conf/deploy/cloudrun.yaml` and reach the service by a redeploy. Numbers in
+`docs/load-test.md`, section 6; decisions in ADR 0034, section 6.
+
+**The 3 most important design choices.**
+
+1. **Change behaviour by configuration, from measurements.** ADR 0031 made the default model a
+   setting so that the Space measurement could switch it without a code change. That is what
+   happened, on a different host: one line in `conf/deploy/cloudrun.yaml`, with the measurement
+   beside it. *Evidence:* 150M p95 5.72 s at 1,000 residues (20 cache misses), against the 2 s
+   rule.
+2. **Measure the limit, do not extrapolate it.** The 600-residue job (406 s) showed the limit was
+   wrong, but not what it should be. Rather than divide by the slowdown, a second job at 400
+   residues was timed: 163 s. Fitted through both, time grows as length^2.24, so 450 would be
+   about 210 s, over the target. *Evidence:* both jobs followed on their SSE stream, as the
+   website does, because on Cloud Run an instance has CPU only while a request is open.
+3. **Find the proxy from the logs before trusting it.** `trusted_proxies` was left empty for the
+   first deploy, so every request was logged with the address it really came from. The logs
+   showed one address, `169.254.169.126`, on all 413 requests. Only that /32 is trusted: anyone
+   could otherwise fake their address in `X-Forwarded-For`. *Evidence:* Cloud Logging query on
+   `jsonPayload.client`. The settings accept the value, and a spoofed address left of the real
+   one is ignored (`client_address`).
+
+**Problems encountered and how they were solved.**
+
+1. **A container test passed or failed depending on test order.** *Found:* CI on main after
+   merging #35, and on Dependabot's #38: `test_no_sequence_in_the_container_logs` failed with
+   `'sequence_sha256'` missing from the logs. *Cause:* it checked the logs for a hashed sequence
+   but relied on another test having scored one in the shared container; pytest-randomly
+   shuffles the order. *Fix:* the test sends its own score request first (#39). *Verified:* run
+   alone it failed every time before the fix and passed after; it also passed under three
+   random orders (seeds 11, 22, 33).
+2. **Two load-test failures were not the API's.** *Found:* Locust reported 2 failures, "429
+   without a problem body", among job submissions. The API's 429s always carry one. *Cause:*
+   Cloud Logging showed both at 14:10:36 UTC with the text "The request was aborted because there
+   was no available instance": Cloud Run itself, with its one instance busy. *Fix:* none to the
+   API. The count is reported as the platform's (2 of 226), and bounding concurrent forward
+   passes is listed as the next step. *Verified:* the other 29 429s match the API's limits
+   (17 jobs + 12 scores), and 191 + 4 + 31 = 226 requests.
+3. **A redeploy would have used the release's old configuration.** *Found:* before the first
+   redeploy, reading `release.yml`. The deploy job checked out the tag, so a manual redeploy of
+   `v0.2.0` would have read `v0.2.0`'s `cloudrun.yaml`, without the new settings, and passed,
+   because `/health` and `/ready` do not show them. *Fix:* the deploy job checks out the commit
+   of the run (the tag's on a tag, main's on a manual run); the image still comes from the tag by
+   digest. *Verified:* actionlint. The redeploy itself, and `/ready` reporting `esm2_35m` and 400,
+   is the check after this merges.
+
+**Supporting details.**
+
+- **Live numbers** (p50 / p95, network included; round trip 0.20 / 0.28 s): 35M 0.59 / 0.92 s at
+  300 residues, 1.83 / 2.09 s at 1,000; 150M 1.56 / 1.85 s and 4.80 / 5.72 s. The M4 Pro did
+  150M at 1,000 residues in 0.53 s; the deployed vCPUs are much slower.
+- **5 users, 2 minutes:** 226 requests, no 5xx. Scores p50 1.4 s, p95 10 s; protein detail p99
+  9.9 s: reads wait behind scoring.
+- **Where earlier documents say "the Space"**, they mean the deployed service (ADR 0034).
+- **Loose ends:** bounding concurrent forward passes; checking, after the redeploy, that the
+  access lines show visitors' addresses instead of the front end's.
+
+---
+
+## Entry 36 — Phase 4 close-out (2026-10-18)
+
+**Plain-language summary.** Phase 4 is closed. Its goal was a tested, observable service that
+deploys itself, and most of that is true. Every pull request runs five required checks. A
+version tag builds the API image, pushes it and deploys it to Google Cloud Run, which serves
+version 0.2.0 at https://mutascope-api-2lvmztrsha-ew.a.run.app with its interactive docs at
+`/docs`. Two parts fall short and are written down. The 2-second rule for fast scoring holds at
+300 residues (0.92 s) but not at 1,000 (2.09 s) or with five users at once (10 s). And
+"observable" is weaker live than in the code: the metrics endpoint and error reporting exist and
+are tested, but the deployed service has neither switched on. This task wrote no code. It
+checked every Phase 4 item against the repository, GitHub and the live service, rebuilt the
+released image to measure it, recomputed the int8 and bundle numbers from their files, wrote
+ADR 0035, and pointed the project at Phase 5.
+
+**The 3 most important design choices.**
+
+1. **Judge the done-when line part by part, and close with the miss stated.** All but one
+   checklist item are ticked, but the done-when line is what the phase promised. Three of its
+   four parts are met. The fourth, fast mode under 2 s, is met at 300 residues and missed at
+   1,000 and under load, so ADR 0035 and the roadmap's close note say exactly that, with the
+   numbers, instead of a tick.
+2. **Measure the image again rather than copy the old figure.** ADR 0033's 600 MB was measured
+   before the base images were pinned to literal `FROM` lines, and the registry could not be read
+   from this machine. The `v0.2.0` commit was rebuilt for linux/amd64 into an OCI archive: 12
+   layers, 600,190,175 bytes compressed, 1,124 MiB unpacked (`du -sxm /`, as ADR 0033). The
+   number held, and the ADR says it is a rebuild, not the pushed bytes.
+3. **Turn every weak point into an owned next step.** The open item and four follow-ups
+   (forward-pass bound, live metrics and Sentry secrets, GHCR visibility, the trusted-proxy log
+   check) and the frontend's CORS origin are now Phase 5 roadmap items, and CLAUDE.md's current
+   phase names them. A weak point with no owner stays weak.
+
+**Problems encountered and how they were solved.**
+
+1. **The live service is not observable through the API's own metrics.** *Found:* reading
+   `conf/deploy/cloudrun.yaml` (`secrets: {}`), then `GET /metrics` on the live URL: 404, which
+   is the designed answer when no `metrics_token` is set. No `sentry_dsn` either. *Cause:* ADR
+   0034 wired Secret Manager into the deploy, but no secret was created. *Fix:* none in this task
+   (it needs a secret created in Google Cloud by the author). Recorded as ADR 0035 weak point 3
+   and a Phase 5 roadmap item. *Verified:* the 404 above; `/health` and `/ready` answer 200.
+2. **The "public" GHCR image could not be pulled anonymously.** *Found:* `docker buildx
+   imagetools inspect ghcr.io/engabdullahhanif/mutascope-api:v0.2.0` failed: GHCR refused an
+   anonymous pull token (401). The release log shows the push itself succeeded (manifest
+   `sha256:4692a941…` to both registries). *Cause (likely, not confirmed):* new GHCR packages are
+   private by default; the `gh` token here lacks `read:packages`, so the visibility could not be
+   read. *Fix:* none here. ADR 0035 weak point 4 says "probably not public", and the roadmap asks
+   the author to set it or drop the claim.
+3. **The frontend could not call the live API.** *Found:* a request with `Origin:
+   https://mutascope.abdullahhanif.me` got no `Access-Control-Allow-Origin` header back.
+   `cors_origins` defaults to `http://localhost:3000` and the deploy config does not set it.
+   *Fix:* none yet, because the frontend's domain does not exist. It is a Phase 5 roadmap item and
+   is listed under "What Phase 5 inherits".
+4. **A Phase 1 item was still open although done.** *Found:* the roadmap audit. "Profiles:
+   `local`, `docker`, `test`" waited for "the Phase 4 image". ADR 0033 built it, and CI's
+   `Nextflow smoke test (docker,test, 2 assays)` passes on main (`24d5adf`). *Fix:* ticked, with
+   the evidence on the item.
+5. **ADR 0029 gives only the aggregate int8 change.** *Found:* recomputing it from
+   `results/zero_shot/comparisons.parquet`. The aggregate matched (−0.000534 [−0.001349,
+   +0.000158] for 35M, −0.000615 [−0.001223, +0.000153] for 150M), but within function types
+   int8 is lower with intervals that exclude 0 for Organismal Fitness (35M −0.0014, 150M
+   −0.0015, 77 assays), Stability (35M, −0.0022, 66) and Activity (150M, −0.0011, 43). *Fix:*
+   recorded in ADR 0035. int8 was rejected on the per-assay gate, so the serving decision does
+   not change.
+
+**Supporting details.**
+
+- **Reported numbers** (all rechecked 2026-10-18):
+  - Live URL: https://mutascope-api-2lvmztrsha-ew.a.run.app; `/health` 0.2.0; `/ready`
+    `esm2_35m`, limit 400, bundle `3ae76721…`, 217 proteins. The redeploy check left open in
+    entry 35 passed.
+  - Image (linux/amd64, rebuild of `v0.2.0`): 600 MB compressed, 1,124 MiB unpacked.
+  - Fast-mode p95, network included: 35M 0.92 s (300 aa) / 2.09 s (1,000 aa); 150M 1.85 s /
+    5.72 s. Precise 400 aa 163 s. Cold start 20.5 s.
+  - int8: aggregate Spearman −0.0005 (35M) and −0.0006 (150M), both CIs include 0; per-assay
+    agreement below 0.99 on 3 and 1 assays → rejected; fp32 served.
+  - Bundle: 217 protein files, 29,218,051 bytes (29.2 MB); 29.7 MB in all; largest 1,153,890
+    bytes under the 2 MB budget; `shasum -c SHA256SUMS` all OK.
+- **CI on main in Phase 4:** one red run (`9de9434`, the merge of #35), fixed by #39 (entry 35,
+  problem 1); green since `9533655`. Open PRs #37, #38 (Dependabot) and #41 (release 0.3.0) pass
+  all five checks. The running image's code equals main's.
+- **Unchecked:** bounding concurrent forward passes (moved to Phase 5); stretch items from
+  Phases 2 and 3 (ESM-1v / ESM C, LoRA, leave-protein-out).
+- **Weak (ADR 0035, items 2–10):** 2 s missed at 1,000 residues and under load; no live metrics
+  or Sentry; GHCR visibility; trusted proxy unchecked in logs; memory at 20 users on 4 GiB not
+  measured; scale-to-zero costs; thin live sample; image size from a rebuild; "the Space" in
+  older ADRs.
+- **Tests:** `make lint` clean (ruff, format: 260 files, pyright 0 errors). `make test`: 650
+  passed, 1 skipped, then 15 LightGBM tests passed in their own process. No code changed, so
+  `make test-slow` and `make test-container` were not rerun here; CI's API image job ran the
+  container tests on main (`24d5adf`).
+- **Docs changed:** ADR 0035; CLAUDE.md (current phase → Phase 5); ROADMAP (Phase 1 profile
+  item ticked, Phase 4 close note, Phase 5 "Carried from Phase 4"); README (status line, live API
+  link, two "Space" comments); PROJECT_MAP (steps 28–36, the Phase 4 index and retrospective).

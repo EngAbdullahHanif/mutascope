@@ -210,9 +210,88 @@ options are to bound concurrent forward passes (a semaphore before the scorer), 
 is 150–560 ms, and the p95 (2.9–5.2 s) is already above ADR 0029's 2 s rule. That rule is for
 a single 1,000-residue request, but under load the Space will likely miss it.
 
+## 6. The deployed service: Google Cloud Run (Task 7, ADR 0034)
+
+> **These are live numbers**, measured on 2026-10-18 against `v0.2.0` on Cloud Run
+> (`europe-west1`, 2 vCPU, 4 GiB, one instance) from a laptop in Germany with
+> `tools/loadtest/live.py`. Latency is the client's wall time for the whole request, network
+> included (round trip to the service: `/health` p50 0.20 s, p95 0.28 s, n = 20). Raw results:
+> `docs/live-measure-summary.json`.
+
+### 6.1 Fast mode, one request at a time
+
+Twenty requests per cell, each a new random sequence (every one a cache miss, checked by the
+`X-MutaScope-Cache: miss` header), 3.5 s apart, after one uncounted warm-up per model.
+
+| model | residues | p50 (s) | p95 (s) | max (s) |
+|---|---|---|---|---|
+| ESM-2 35M | 300 | 0.59 | 0.92 | 1.08 |
+| ESM-2 35M | 1,000 | 1.83 | 2.09 | 2.25 |
+| ESM-2 150M | 300 | 1.56 | 1.85 | 1.89 |
+| ESM-2 150M | 1,000 | 4.80 | 5.72 | 5.74 |
+
+**ADR 0031's rule applies: the default model is now 35M.** 150M's p95 at 1,000 residues is
+5.72 s, above 2 s. The live server is slower than the M4 Pro at the same 2 threads, where 150M
+took 0.53 s at 1,000 residues (ADR 0031). 35M itself is just over 2 s at 1,000 residues (p95 2.09
+s, of which ~0.2 s is the network), so the rule's choice is the faster model, not one that meets
+2 s at every length. 150M stays available with `"model": "esm2_150m"`.
+
+### 6.2 Precise mode and the length limit
+
+One job at a time, followed on its SSE stream (as the website does; on Cloud Run an instance
+has CPU only while a request is open):
+
+| residues | time to `succeeded` |
+|---|---|
+| 600 (the provisional limit) | 406 s |
+| 400 | 163 s |
+
+600 residues took 6.3× the M4 Pro's 64 s, more than twice ADR 0029's target of about 3
+minutes. **The limit is now 400** (`MUTASCOPE_API_PRECISE_MAX_LENGTH`). Between the two
+measurements time grows as about length^2.24, so 450 residues would take about 210 s, over the
+target. 400 was measured, not extrapolated.
+
+### 6.3 Cold start
+
+After 21 idle minutes (the service scales to zero), the first `GET /ready` took **20.5 s**; the
+next took 0.22 s. That is what the first visitor after a quiet period waits. The website must
+work with the API asleep (CLAUDE.md), so only live scoring waits for it.
+
+### 6.4 Five users for two minutes
+
+Locust's `Visitor` mix, 5 users, 120 s. Through Cloud Run's front end the five are one client
+(this laptop's address), so they share one client's limits.
+
+- **Statuses:** 191 × 200, 4 × 202, 31 × 429 (226 requests). 29 of the 429s are the API's own
+  limits (17 job submissions, refused by the job rate limit or the one-active-job rule, and 12
+  scores over 20 a minute), each a problem body.
+- **Two 429s were Cloud Run's, not the API's:** "The request was aborted because there was no
+  available instance" (14:10:36 UTC, Cloud Logging), both job submissions. With at most one
+  instance, the platform turned two requests away while that instance was busy scoring. Locust
+  counted them as failures because they carry no problem body; the client waited up to 11 s.
+- **Latency of the 200s** (p50 / p95 / p99, ms): `POST /v1/score` 1,400 / 10,000 / 11,000;
+  `GET /v1/proteins/{id}` 98 / 2,500 / 9,900; landscapes 210 / 1,300 / 1,900; benchmarks
+  120 / 200 / 200. Reads wait behind CPU-bound scoring: the same saturation as the 20-user
+  container run (section 5.4), reached here at 5 users because the CPUs are slower.
+
+### 6.5 What changed from this
+
+In `conf/deploy/cloudrun.yaml` (`env`), applied by the next deploy:
+
+- `MUTASCOPE_API_SCORE_DEFAULT_MODEL=esm2_35m` (6.1);
+- `MUTASCOPE_API_PRECISE_MAX_LENGTH=400` (6.2);
+- `MUTASCOPE_API_TRUSTED_PROXIES=169.254.169.126/32`: all 413 requests of the first deploy came
+  from this address (Cloud Logging, `jsonPayload.client`), so until now every visitor shared one
+  quota. With it, the client is read from `X-Forwarded-For` from the right, as ADR 0032 says.
+  To check after the redeploy: the access lines show visitors' addresses, not this one.
+
+Not changed: the rate limits, and the open question of bounding concurrent forward passes
+(ADR 0033). At 5 users the platform, not the API, refused 2 of 226 requests.
+
 ## What this does not show
 
-- Throughput or latency on 2 vCPUs (Task 7).
+- Latency from other places than a laptop in Germany, or with more than one client address
+  (section 6 is one address, so the per-client limits shape the 5-user run).
 - Many-address abuse beyond the global limits (see `docs/threat-model.md`).
 - Memory over hours (the soak was 20 minutes, on Linux in a container), and a 16 GB limit
   (the Docker VM had 7.75 GiB).
