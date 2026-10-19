@@ -6,7 +6,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { EffectLegend } from "@/components/charts/effect-legend";
 import { Button } from "@/components/ui/button";
-import { loadManifest, loadProtein } from "@/lib/bundle/load";
+import { StaleDataAlert } from "@/components/stale-data";
+import { loadManifest, loadProtein, StaleDataError } from "@/lib/bundle/load";
 import type { ProteinFile } from "@/lib/bundle/schemas.generated";
 import {
   buildView,
@@ -31,7 +32,7 @@ type Linked = { position: number; from: "heatmap" | "structure" };
 
 type State =
   | { state: "loading" }
-  | { state: "error"; message: string }
+  | { state: "error"; message: string; stale: boolean }
   | { state: "ready"; protein: ProteinFile; loadedAt: number };
 
 /**
@@ -62,6 +63,7 @@ export function ProteinExplorer({ summary }: { summary: ProteinSummary }) {
           setState({
             state: "error",
             message: error instanceof Error ? error.message : String(error),
+            stale: error instanceof StaleDataError,
           });
         }
       });
@@ -92,10 +94,14 @@ export function ProteinExplorer({ summary }: { summary: ProteinSummary }) {
     return (
       <div className="flex flex-col gap-6">
         <ProteinHeader summary={summary} />
-        <p className="flex items-center gap-2 text-sm text-destructive" role="alert">
-          <CircleAlert aria-hidden className="size-4" />
-          Could not load this protein: {state.message}
-        </p>
+        {state.stale ? (
+          <StaleDataAlert />
+        ) : (
+          <p className="flex items-center gap-2 text-sm text-destructive" role="alert">
+            <CircleAlert aria-hidden className="size-4" />
+            Could not load this protein: {state.message}
+          </p>
+        )}
       </div>
     );
   }

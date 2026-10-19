@@ -9,8 +9,15 @@
  * - a structure file's bytes have the sha256 its protein file lists, and it models exactly the
  *   target residues the protein file says it does (ADR 0039).
  * A file that fails is an error shown to the reader, never data shown with a warning.
+ *
+ * URLs name their content, so a new bundle never reuses a cached file from an old one: a protein
+ * or structure file carries its own sha256 (`?v=<sha256>`), the manifest and benchmarks the
+ * pinned bundle revision. A digest that still differs (a copy cached under the same URL) is
+ * fetched once more past the browser cache before it becomes a `StaleDataError`.
  */
 import type { z } from "zod";
+
+import pin from "../../../bundle.json";
 
 import {
   BUNDLE_SCHEMA_VERSION,
@@ -27,7 +34,12 @@ import {
 
 export const DATA_BASE = "/data";
 
-export type Fetch = (url: string) => Promise<Response>;
+export type Fetch = (url: string, init?: RequestInit) => Promise<Response>;
+
+/** A bundle file's URL, with `version` naming its content so a new bundle means a new URL. */
+export function dataUrl(file: string, version: string): string {
+  return `${DATA_BASE}/${file}?v=${encodeURIComponent(version)}`;
+}
 
 export class BundleLoadError extends Error {
   readonly file: string;
@@ -36,6 +48,17 @@ export class BundleLoadError extends Error {
     super(`${file}: ${message}`);
     this.name = "BundleLoadError";
     this.file = file;
+  }
+}
+
+/**
+ * A file whose digest differed even when fetched past the browser cache. Pages show it as "This
+ * data is out of date" with a reload button: the page and its data come from different bundles.
+ */
+export class StaleDataError extends BundleLoadError {
+  constructor(file: string, message: string) {
+    super(file, message);
+    this.name = "StaleDataError";
   }
 }
 
@@ -55,15 +78,40 @@ export async function sha256Hex(bytes: Uint8Array): Promise<string> {
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-async function fetchBytes(file: string, fetchFn: Fetch): Promise<Uint8Array> {
+async function fetchBytes(
+  file: string,
+  url: string,
+  fetchFn: Fetch,
+  init?: RequestInit,
+): Promise<Uint8Array> {
   let res: Response;
   try {
-    res = await fetchFn(`${DATA_BASE}/${file}`);
+    res = await (init ? fetchFn(url, init) : fetchFn(url));
   } catch (error) {
     throw new BundleLoadError(file, `could not be fetched (${String(error)})`);
   }
   if (!res.ok) throw new BundleLoadError(file, `HTTP ${res.status}`);
   return new Uint8Array(await res.arrayBuffer());
+}
+
+/**
+ * Gzip bytes with the expected sha256. On a mismatch, one more request with `cache: "reload"`
+ * (past the browser cache, and replacing the stale copy in it); if that differs too, the bytes
+ * really are not the ones listed, and the error says the page's data is out of date.
+ */
+async function fetchVerified(
+  file: string,
+  sha256: string,
+  fetchFn: Fetch,
+  mismatch: string,
+): Promise<Uint8Array> {
+  const url = dataUrl(file, sha256);
+  for (const init of [undefined, { cache: "reload" } as const]) {
+    const bytes = await fetchBytes(file, url, fetchFn, init);
+    if (!isGzip(bytes)) throw new BundleLoadError(file, "was not served as gzip bytes");
+    if ((await sha256Hex(bytes)) === sha256) return bytes;
+  }
+  throw new StaleDataError(file, `${mismatch}, also when fetched past the cache`);
 }
 
 /** Version check, then the full validator; `data` is parsed JSON. */
@@ -94,12 +142,14 @@ function parseJson(file: string, bytes: Uint8Array): unknown {
 
 export async function loadManifest(fetchFn: Fetch = fetch): Promise<Manifest> {
   const file = "manifest.json";
-  return validate(file, parseJson(file, await fetchBytes(file, fetchFn)), ManifestSchema);
+  const bytes = await fetchBytes(file, dataUrl(file, pin.revision), fetchFn);
+  return validate(file, parseJson(file, bytes), ManifestSchema);
 }
 
 export async function loadBenchmarks(fetchFn: Fetch = fetch): Promise<Benchmarks> {
   const file = "benchmarks.json";
-  return validate(file, parseJson(file, await fetchBytes(file, fetchFn)), BenchmarksSchema);
+  const bytes = await fetchBytes(file, dataUrl(file, pin.revision), fetchFn);
+  return validate(file, parseJson(file, bytes), BenchmarksSchema);
 }
 
 /**
@@ -112,11 +162,12 @@ export async function loadProtein(
   entry: ManifestEntry,
   fetchFn: Fetch = fetch,
 ): Promise<ProteinFile> {
-  const bytes = await fetchBytes(entry.file, fetchFn);
-  if (!isGzip(bytes)) throw new BundleLoadError(entry.file, "was not served as gzip bytes");
-  if ((await sha256Hex(bytes)) !== entry.sha256) {
-    throw new BundleLoadError(entry.file, "sha256 differs from the manifest");
-  }
+  const bytes = await fetchVerified(
+    entry.file,
+    entry.sha256,
+    fetchFn,
+    "sha256 differs from the manifest",
+  );
   const protein = validate(
     entry.file,
     parseJson(entry.file, await gunzip(bytes)),
@@ -141,11 +192,12 @@ export async function loadStructure(
 ): Promise<StructureFile> {
   const ref = protein.structure_file;
   if (!ref) throw new BundleLoadError(protein.assay.assay_id, "has no structure");
-  const bytes = await fetchBytes(ref.file, fetchFn);
-  if (!isGzip(bytes)) throw new BundleLoadError(ref.file, "was not served as gzip bytes");
-  if ((await sha256Hex(bytes)) !== ref.sha256) {
-    throw new BundleLoadError(ref.file, "sha256 differs from the protein file");
-  }
+  const bytes = await fetchVerified(
+    ref.file,
+    ref.sha256,
+    fetchFn,
+    "sha256 differs from the protein file",
+  );
   const structure = validate(
     ref.file,
     parseJson(ref.file, await gunzip(bytes)),

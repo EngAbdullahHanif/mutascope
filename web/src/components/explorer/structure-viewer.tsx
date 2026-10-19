@@ -5,7 +5,8 @@ import { CircleAlert, LoaderCircle } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { loadStructure } from "@/lib/bundle/load";
+import { StaleDataAlert } from "@/components/stale-data";
+import { loadStructure, StaleDataError } from "@/lib/bundle/load";
 import type { ProteinFile } from "@/lib/bundle/schemas.generated";
 import { EFFECT_MISSING } from "@/lib/color/diverging";
 import { formatValue, mutationCode, type View } from "@/lib/explorer/landscape";
@@ -26,7 +27,7 @@ import { CoverageStrip } from "./coverage-strip";
 
 type State =
   | { state: "loading" }
-  | { state: "error"; message: string }
+  | { state: "error"; message: string; stale: boolean }
   | { state: "ready"; structure: Structure };
 
 export type StructureViewerProps = {
@@ -134,6 +135,7 @@ export default function StructureViewer({
           setState({
             state: "error",
             message: error instanceof Error ? error.message : String(error),
+            stale: error instanceof StaleDataError,
           });
         }
       });
@@ -238,7 +240,10 @@ export default function StructureViewer({
             Loading the structure…
           </p>
         ) : null}
-        {state.state === "error" ? (
+        {state.state === "error" && state.stale ? (
+          <StaleDataAlert className="absolute inset-0 justify-center p-4" />
+        ) : null}
+        {state.state === "error" && !state.stale ? (
           <p
             className="absolute inset-0 flex items-center justify-center gap-2 p-4 text-sm text-destructive"
             role="alert"
