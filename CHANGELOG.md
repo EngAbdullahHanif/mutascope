@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.9.1](https://github.com/EngAbdullahHanif/mutascope/compare/v0.9.0...v0.9.1) (2026-10-19)
+
+
+### Bug Fixes
+
+* **web:** About links on two lines, email behind an Email link ([f345c94](https://github.com/EngAbdullahHanif/mutascope/commit/f345c9462f21e299115d8616e286a4edff183706))
+* **web:** About links on two lines, email behind an Email link ([58346a4](https://github.com/EngAbdullahHanif/mutascope/commit/58346a43dce415e8f382901fe2cb4eb87d702215))
+
+
+### Documentation
+
+* add Explorer hero image ([eee2769](https://github.com/EngAbdullahHanif/mutascope/commit/eee276940e7962a0a68ca7ed918ab514fbfc1583))
+* add hero image, keep launch drafts local ([89e9955](https://github.com/EngAbdullahHanif/mutascope/commit/89e9955fda6c403a0863b3c15209bd479f7ebd28))
+* build log entry 46 (README and launch drafts) ([43d29f1](https://github.com/EngAbdullahHanif/mutascope/commit/43d29f189944a93314293b125e8666f236028b36))
+* launch drafts — reproduction-test wording, +0.092 as cross-validation, author's opening and closing ([c6cf09f](https://github.com/EngAbdullahHanif/mutascope/commit/c6cf09f28139852e0f74569c58d7b56464684547))
+* launch drafts (hero image spec, demo script, LinkedIn post, portfolio) ([454c83d](https://github.com/EngAbdullahHanif/mutascope/commit/454c83d308eabf682b686e2f1dbaad500a6f7a39))
+* move the README's operational sections to docs/OPERATIONS.md ([0e6e548](https://github.com/EngAbdullahHanif/mutascope/commit/0e6e548db6fc913cc3cc910e3c407d584cfcd8a6))
+* README for first-time visitors ([96dc080](https://github.com/EngAbdullahHanif/mutascope/commit/96dc08059fbf3aa4d04abb705e08d05b08849c94))
+* README for first-time visitors and launch drafts (Phase 5 Task 8) ([9a1ceeb](https://github.com/EngAbdullahHanif/mutascope/commit/9a1ceebbfbe3d18bb1740b761e7945d9d37f0c45))
+
 ## [0.9.0](https://github.com/EngAbdullahHanif/mutascope/compare/v0.8.0...v0.9.0) (2026-10-19)
 
 
