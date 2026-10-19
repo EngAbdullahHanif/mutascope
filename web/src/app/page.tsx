@@ -40,9 +40,12 @@ export default function HomePage() {
       <section className="grid items-center gap-8 pt-2 md:grid-cols-[minmax(0,1fr)_minmax(0,22rem)]">
         <div>
           <h1 className="max-w-2xl text-4xl font-semibold tracking-tight">
-            Predicted effects of every single amino-acid substitution in {nAssays} ProteinGym DMS
-            assays, benchmarked honestly against the measurements.
+            See what every mutation does to a protein, and how well models predict it.
           </h1>
+          <p className="mt-3 max-w-2xl text-lg text-muted-foreground" data-testid="landing-subline">
+            Predicted effects of every single amino-acid substitution in {nAssays} ProteinGym
+            assays, tested against real measurements.
+          </p>
           <div className="mt-6 flex flex-wrap gap-3">
             <Button asChild>
               <Link href="/explore">Open the Explorer</Link>
