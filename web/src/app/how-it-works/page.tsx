@@ -37,7 +37,7 @@ const OUTPUTS: { name: string; detail: string }[] = [
 
 function A({ href, children }: { href: string; children: ReactNode }) {
   return (
-    <a className="text-primary underline-offset-4 hover:underline" href={href}>
+    <a className="text-primary underline underline-offset-4 hover:decoration-2" href={href}>
       {children}
     </a>
   );
@@ -180,7 +180,10 @@ export default function HowItWorksPage() {
             model is compared with zero-shot on exactly the same test folds.
           </p>
           <p>
-            <Link className="text-primary underline-offset-4 hover:underline" href="/benchmarks">
+            <Link
+              className="text-primary underline underline-offset-4 hover:decoration-2"
+              href="/benchmarks"
+            >
               The results are on the Benchmarks page.
             </Link>
           </p>

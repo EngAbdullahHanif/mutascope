@@ -143,7 +143,10 @@ export default function BenchmarksPage() {
           compared only by a <strong className="text-foreground">paired</strong> bootstrap of their
           difference on the same assays, so the charts show differences with their intervals, never
           two bars side by side (
-          <a className="text-primary underline-offset-4 hover:underline" href={adrUrl(14)}>
+          <a
+            className="text-primary underline underline-offset-4 hover:decoration-2"
+            href={adrUrl(14)}
+          >
             ADR 0014
           </a>
           ). A hollow marker is a difference whose interval includes 0: the data do not show which
@@ -171,7 +174,10 @@ export default function BenchmarksPage() {
                 Each row is model A − model B on the assays both have. The int8 ONNX exports,
                 compared with their fp32 source in the same file, are a deployment check and were
                 rejected (
-                <a className="text-primary underline-offset-4 hover:underline" href={adrUrl(29)}>
+                <a
+                  className="text-primary underline underline-offset-4 hover:decoration-2"
+                  href={adrUrl(29)}
+                >
                   ADR 0029
                 </a>
                 ); they are not shown.
@@ -226,7 +232,10 @@ export default function BenchmarksPage() {
                 The MLP runs cover the assays with at least 300 variants (with a structure); the
                 others cover every assay their features allow. One-hot ridge has no features that
                 describe a residue, so it cannot rank a position it never saw (
-                <a className="text-primary underline-offset-4 hover:underline" href={adrUrl(21)}>
+                <a
+                  className="text-primary underline underline-offset-4 hover:decoration-2"
+                  href={adrUrl(21)}
+                >
                   ADR 0021
                 </a>
                 ).
@@ -275,7 +284,10 @@ export default function BenchmarksPage() {
               <>
                 Size bins are the assay&apos;s number of measured variants. Within a bin the value
                 is a plain mean over its assays, not the ProteinGym aggregate (
-                <a className="text-primary underline-offset-4 hover:underline" href={adrUrl(25)}>
+                <a
+                  className="text-primary underline underline-offset-4 hover:decoration-2"
+                  href={adrUrl(25)}
+                >
                   ADR 0025
                 </a>
                 ). The two smallest bins hold few assays, so their intervals are wide. This is the
@@ -342,11 +354,17 @@ export default function BenchmarksPage() {
               <p className="mt-1">{c.text}</p>
               <p className="mt-2 text-muted-foreground">
                 Documented in{" "}
-                <a className="text-primary underline-offset-4 hover:underline" href={adrUrl(26)}>
+                <a
+                  className="text-primary underline underline-offset-4 hover:decoration-2"
+                  href={adrUrl(26)}
+                >
                   ADR 0026
                 </a>{" "}
                 (weak point 7); the rule that writes this caveat from the paired comparisons is in{" "}
-                <a className="text-primary underline-offset-4 hover:underline" href={adrUrl(28)}>
+                <a
+                  className="text-primary underline underline-offset-4 hover:decoration-2"
+                  href={adrUrl(28)}
+                >
                   ADR 0028
                 </a>{" "}
                 (section 8).
@@ -367,7 +385,10 @@ export default function BenchmarksPage() {
             positions held out under modulo and contiguous) or{" "}
             <strong className="text-foreground">random</strong>. The design was fixed before any
             coverage was computed (
-            <a className="text-primary underline-offset-4 hover:underline" href={adrUrl(24)}>
+            <a
+              className="text-primary underline underline-offset-4 hover:decoration-2"
+              href={adrUrl(24)}
+            >
               ADR 0024
             </a>
             ). The deployed intervals are split-matched.
@@ -438,7 +459,10 @@ export default function BenchmarksPage() {
             {b.final_coverage.map((f) => `${plain(f.mean)} at ${percent(f.level, 0)}`).join(", ")}{" "}
             over {b.final_coverage[0]?.n_assays} assays). That holds by construction and is not
             evidence; the test-fold coverage above is (
-            <a className="text-primary underline-offset-4 hover:underline" href={adrUrl(26)}>
+            <a
+              className="text-primary underline underline-offset-4 hover:decoration-2"
+              href={adrUrl(26)}
+            >
               ADR 0026
             </a>
             , weak point 11).
@@ -448,7 +472,10 @@ export default function BenchmarksPage() {
         <p className="max-w-prose text-sm text-muted-foreground">
           These are functional effects measured in laboratory DMS assays, not clinical
           pathogenicity. How the numbers were made, and their limits:{" "}
-          <Link className="text-primary underline-offset-4 hover:underline" href="/how-it-works">
+          <Link
+            className="text-primary underline underline-offset-4 hover:decoration-2"
+            href="/how-it-works"
+          >
             How it works
           </Link>
           .

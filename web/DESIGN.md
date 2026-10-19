@@ -52,6 +52,11 @@ is never confused with data. It never appears inside a chart.
 
 Re-check this table when you change a token.
 
+**Links in running text are underlined** (`text-primary underline underline-offset-4`, thicker on
+hover). Teal against body text is about 1.2:1, so colour alone does not mark a link (WCAG 1.4.1;
+axe's `link-in-text-block`, checked in `e2e/quality.spec.ts`). Links that stand alone, such as
+navigation, table cells and the footer, need no underline.
+
 ## Effect colours (the data scale)
 
 A diverging scale, symmetric around the quantity's neutral point:

@@ -13,7 +13,7 @@ export const metadata: Metadata = pageMetadata({
   path: "/about",
 });
 
-const link = "text-primary underline-offset-4 hover:underline";
+const link = "text-primary underline underline-offset-4 hover:decoration-2";
 
 export default function AboutPage() {
   return (
