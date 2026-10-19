@@ -18,8 +18,12 @@ const mono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
+  // Canonical URLs, Open Graph and the sitemap resolve against the production origin.
+  metadataBase: new URL(SITE.url),
   title: { default: SITE.name, template: `%s · ${SITE.name}` },
   description: SITE.tagline,
+  openGraph: { type: "website", siteName: SITE.name, locale: "en_GB" },
+  twitter: { card: "summary_large_image" },
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
