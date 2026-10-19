@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.9.0](https://github.com/EngAbdullahHanif/mutascope/compare/v0.8.0...v0.9.0) (2026-10-19)
+
+
+### Features
+
+* **web:** About page in the author's words; AI statement removed ([5b08c7c](https://github.com/EngAbdullahHanif/mutascope/commit/5b08c7c708b0aa27dbaa30761dcc7ecc56105086))
+* **web:** About page in the author's words; AI statement removed ([f9a9463](https://github.com/EngAbdullahHanif/mutascope/commit/f9a94637f10813c3d360bceb61c90195af682337))
+
+
+### Bug Fixes
+
+* **web:** no race when the Landing structure replaces its placeholder ([6f538ea](https://github.com/EngAbdullahHanif/mutascope/commit/6f538ea13214c3629a2ecea0d998ef7a4961f60d))
+* **web:** race in the Landing structure test (CI [#154](https://github.com/EngAbdullahHanif/mutascope/issues/154) on main) ([d8d0ac0](https://github.com/EngAbdullahHanif/mutascope/commit/d8d0ac0f8074b14c0ab6bafcf15120191e2a9b9a))
+
 ## [0.8.0](https://github.com/EngAbdullahHanif/mutascope/compare/v0.7.0...v0.8.0) (2026-10-19)
 
 
