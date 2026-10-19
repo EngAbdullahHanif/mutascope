@@ -68,6 +68,22 @@ test("the Landing headlines are the numbers in benchmarks.json", async ({ page, 
   );
 });
 
+test("the Landing headline, and a subline whose assay count is the manifest's", async ({
+  page,
+  request,
+}) => {
+  const manifest = (await (await request.get("/data/manifest.json")).json()) as {
+    proteins: unknown[];
+  };
+  await page.goto("/");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(
+    "See what every mutation does to a protein, and how well models predict it.",
+  );
+  await expect(page.getByTestId("landing-subline")).toHaveText(
+    `Predicted effects of every single amino-acid substitution in ${manifest.proteins.length} ProteinGym assays, tested against real measurements.`,
+  );
+});
+
 test("the Landing links to the examples and to live scoring", async ({ page }) => {
   await page.goto("/");
   const examples = page.getByTestId("examples").getByRole("link");
@@ -214,12 +230,17 @@ test("About has the author's text, with bold lead-ins, and links", async ({ page
   // Two lines: the site, then Email · GitHub · LinkedIn.
   await expect(block.locator("div")).toHaveText("abdullahhanif.me");
   await expect(block.locator("ul")).toHaveText(/^Email\s*·\s*GitHub\s*·\s*LinkedIn$/);
-  // 32–40 px between the "Let's talk" paragraph and the links.
+  // About 56 px between the "Let's talk" paragraph and the links, about 14 px between the lines.
   const above = (await paragraphs.last().boundingBox())!;
   const below = (await block.boundingBox())!;
   const gap = below.y - (above.y + above.height);
-  expect(gap).toBeGreaterThanOrEqual(32);
-  expect(gap).toBeLessThanOrEqual(40);
+  expect(gap).toBeGreaterThanOrEqual(52);
+  expect(gap).toBeLessThanOrEqual(60);
+  const line1 = (await block.locator("div").boundingBox())!;
+  const line2 = (await block.locator("ul").boundingBox())!;
+  const lineGap = line2.y - (line1.y + line1.height);
+  expect(lineGap).toBeGreaterThanOrEqual(12);
+  expect(lineGap).toBeLessThanOrEqual(16);
 });
 
 test("every page has a canonical URL and an Open Graph image on the production origin", async ({
