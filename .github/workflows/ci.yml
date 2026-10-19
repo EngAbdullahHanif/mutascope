@@ -136,10 +136,13 @@ jobs:
 
   # Website quality (Phase 5 Task 6, build log 44): the JavaScript size budget and no 3Dmol in
   # the Landing page's initial JavaScript, every Playwright test (axe in light and dark, no
-  # sideways scroll at 375 px, the rest of the end-to-end suite), then Lighthouse against
-  # `next start` (median of 3, mobile and desktop; performance >= 0.90, accessibility >= 0.95).
-  # Not a required check yet. Lighthouse runs from the pinned @lhci/cli with the runner's Chrome:
-  # no Lighthouse action and no upload anywhere, only this run's artifacts.
+  # sideways scroll at 375 px, the rest of the end-to-end suite): these fail the job. Then
+  # Lighthouse against `next start` (median of 3, mobile and desktop), recorded and reported but
+  # not asserted: the runners have no GPU, so Chrome paints and runs WebGL in software and the
+  # scores say more about the runner than the site (ADR 0042, follow-up). The budgets are
+  # asserted by `make web-quality` on a machine with GPU rendering. Not a required check yet.
+  # Lighthouse runs from the pinned @lhci/cli with the runner's Chrome: no Lighthouse action and
+  # no upload anywhere, only this run's artifacts.
   web-quality:
     name: web quality (Lighthouse, axe, bundle size)
     runs-on: ubuntu-latest
@@ -175,15 +178,18 @@ jobs:
         run: pnpm exec playwright install --with-deps chromium
       - name: Playwright (axe, 375 px, end-to-end)
         run: pnpm test:e2e
-      - name: Lighthouse, mobile
-        id: lh-mobile
-        run: pnpm lighthouse
-      - name: Lighthouse, desktop
-        if: ${{ !cancelled() && steps.lh-mobile.conclusion != 'skipped' }}
-        run: pnpm lighthouse --collect.settings.preset=desktop --upload.outputDir=.lighthouseci/desktop
-      - name: Lighthouse scores
-        if: ${{ !cancelled() }}
-        run: node scripts/lighthouse-summary.ts
+      # collect + upload (to .lighthouseci/<form factor>) without assert: the same runs as
+      # `pnpm lighthouse`, minus the budget check.
+      - name: Lighthouse, mobile (no-GPU runner, recorded, not asserted)
+        run: |
+          pnpm exec lhci collect --config=lighthouserc.json
+          pnpm exec lhci upload --config=lighthouserc.json
+      - name: Lighthouse, desktop (no-GPU runner, recorded, not asserted)
+        run: |
+          pnpm exec lhci collect --config=lighthouserc.json --settings.preset=desktop
+          pnpm exec lhci upload --config=lighthouserc.json --outputDir=.lighthouseci/desktop
+      - name: Lighthouse scores (no-GPU runner)
+        run: node scripts/lighthouse-summary.ts --machine "no-GPU runner"
       - uses: actions/upload-artifact@v7.0.2
         if: ${{ !cancelled() }}
         with:
