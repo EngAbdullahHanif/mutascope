@@ -14,9 +14,12 @@ async function open(page: Page, assayId: string) {
   await expect(page.getByTestId("render-timing")).toHaveAttribute("data-render-ms", /\d/);
 }
 
-/** The viewer mounts only once its box scrolls into view (ADR 0039 addendum). */
+/**
+ * The viewer mounts only once its box scrolls into view (ADR 0039 addendum). Scrolls the
+ * section, which stays, not the placeholder, which is replaced as it comes into view.
+ */
 async function revealStructure(page: Page) {
-  await page.getByTestId("structure-placeholder").scrollIntoViewIfNeeded();
+  await page.getByRole("region", { name: "Structure" }).scrollIntoViewIfNeeded();
   await expect(page.getByTestId("structure-viewer")).toHaveAttribute("data-state", "ready");
 }
 

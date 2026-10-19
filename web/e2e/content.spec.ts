@@ -4,7 +4,7 @@
  * point at the production origin. Expected values are read from the served file here, never
  * written into the test.
  */
-import { expect, test, type APIRequestContext } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 
 const ORIGIN = "https://mutascope.abdullahhanif.me";
 
@@ -79,6 +79,17 @@ test("the Landing links to the examples and to live scoring", async ({ page }) =
   await expect(page).toHaveURL("/score");
 });
 
+/**
+ * Scrolls the Landing figure into view. The figure, not the structure inside it: that element is
+ * replaced as it goes from placeholder to loading to viewer, and scrolling an element that is
+ * replaced mid-scroll fails ("not attached to the DOM").
+ */
+async function scrollToFigure(page: Page) {
+  await page
+    .locator("figure", { has: page.getByTestId("landing-structure") })
+    .scrollIntoViewIfNeeded();
+}
+
 test("the Landing structure loads after first paint and turns", async ({ page }) => {
   const structureRequests: number[] = [];
   page.on("request", (r) => {
@@ -87,7 +98,7 @@ test("the Landing structure loads after first paint and turns", async ({ page })
   await page.goto("/", { waitUntil: "load" });
   const loadedAt = Date.now();
   const viewer = page.getByTestId("landing-structure");
-  await viewer.scrollIntoViewIfNeeded();
+  await scrollToFigure(page);
   await expect(viewer).toHaveAttribute("data-state", "ready", { timeout: 15_000 });
   await expect(viewer).toHaveAttribute("data-spinning", "true");
   expect(structureRequests.length).toBe(1);
@@ -110,7 +121,7 @@ test("on a phone the Landing structure loads only when scrolled to", async ({ pa
   await page.waitForTimeout(2500);
   await expect(viewer).toHaveAttribute("data-state", "waiting");
   expect(structureRequests).toEqual([]);
-  await viewer.scrollIntoViewIfNeeded();
+  await scrollToFigure(page);
   await expect(viewer).toHaveAttribute("data-state", "ready", { timeout: 15_000 });
   await expect(viewer).toHaveAttribute("data-spinning", "true");
   expect(structureRequests).toHaveLength(1);
@@ -122,7 +133,7 @@ test("with reduced motion the structure never turns, and stops when the setting 
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/");
   const viewer = page.getByTestId("landing-structure");
-  await viewer.scrollIntoViewIfNeeded();
+  await scrollToFigure(page);
   await expect(viewer).toHaveAttribute("data-state", "ready", { timeout: 15_000 });
   await expect(viewer).toHaveAttribute("data-spinning", "false");
   await page.emulateMedia({ reducedMotion: "no-preference" });
