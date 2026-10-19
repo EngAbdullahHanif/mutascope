@@ -26,15 +26,27 @@ export default function AboutPage() {
               <strong className="font-semibold">{lead}</strong> {text}
             </p>
           ))}
-          <ul className="flex flex-wrap gap-x-4 gap-y-1" data-testid="about-links">
-            {ABOUT.links.map(({ label, href }) => (
-              <li key={href}>
-                <a className={link} href={href}>
-                  {label}
-                </a>
-              </li>
-            ))}
-          </ul>
+          <div className="mt-5 flex flex-col gap-1" data-testid="about-links">
+            <div>
+              <a className={link} href={ABOUT.site.href}>
+                {ABOUT.site.label}
+              </a>
+            </div>
+            <ul className="flex flex-wrap">
+              {ABOUT.contacts.map((c, i) => (
+                <li key={c.href}>
+                  {i > 0 ? (
+                    <span aria-hidden className="mx-2 text-muted-foreground">
+                      ·
+                    </span>
+                  ) : null}
+                  <a className={link} href={c.href} title={"title" in c ? c.title : undefined}>
+                    {c.label}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </div>
         </div>
         <BundleStatus />
       </div>
