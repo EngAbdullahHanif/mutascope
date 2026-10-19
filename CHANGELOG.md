@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.11.0](https://github.com/EngAbdullahHanif/mutascope/compare/v0.10.0...v0.11.0) (2026-10-19)
+
+
+### Features
+
+* **web:** Landing headline and subline; About link spacing ([8d1b581](https://github.com/EngAbdullahHanif/mutascope/commit/8d1b58135cdb3b329131ec342acf050e796af167))
+
+
+### Bug Fixes
+
+* **web:** bundle file URLs name their content; retry a stale copy once ([0b20756](https://github.com/EngAbdullahHanif/mutascope/commit/0b207569ff2a51bf2357d49e6a76fb86ac67d63f))
+* **web:** bundle file URLs name their content; retry a stale copy once ([6c6d538](https://github.com/EngAbdullahHanif/mutascope/commit/6c6d53878fa579146b8cc25b10f1fe61dd349fa7))
+
 ## [0.10.0](https://github.com/EngAbdullahHanif/mutascope/compare/v0.9.1...v0.10.0) (2026-10-19)
 
 
