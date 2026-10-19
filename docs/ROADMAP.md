@@ -336,6 +336,24 @@ measured at 20 users on 4 GiB.
       per function type with the Binding caveat, test-fold coverage), How it works (pipeline,
       decisions, deployment rule, limitations, upstream errors, links), About; SEO (metadata,
       Open Graph images, sitemap, robots.txt)
-- [ ] Header navigation is 13 px wider than a 390 px phone (Task 1 header)
+- [x] Header navigation is 13 px wider than a 390 px phone (Task 1 header): folds behind a Menu
+      button below 640 px (Task 6, ADR 0042)
+- [x] Quality (Task 6, ADR 0042): Lighthouse CI against `next start` (median of 3, mobile and
+      desktop, Landing and Explorer GFP; performance ≥ 0.90, accessibility ≥ 0.95, met without
+      lowering), axe on 8 pages in light and dark, no sideways scroll at 375 px, error
+      boundaries, JavaScript budget per page and no 3Dmol on Landing, no analytics; protein
+      pages prerender their text (ADR 0038 addendum); CI job `web quality (Lighthouse, axe,
+      bundle size)`
+- [ ] Make `web quality (Lighthouse, axe, bundle size)` a required check after a few green PRs;
+      mobile Explorer performance has little headroom (0.91–0.92 against 0.90 locally)
+- [ ] No favicon: `/favicon.ico` is a 404 on every page (Lighthouse best practices 0.96, "errors
+      in console")
+- [ ] 3Dmol's chunk has no source map (Lighthouse `valid-source-maps`); harmless, but noise in
+      the report
+- [ ] `global-error.tsx` always renders light: the theme provider is part of the layout it
+      replaces
+- [ ] Lighthouse reports ~130 kB of unused JavaScript (mostly 3Dmol's chunk, fetched once the
+      page is idle) and ~13 kB of legacy polyfills in a framework chunk (`browserslist` could
+      drop them); not needed for the budgets
 - [ ] Deploy frontend (Vercel / Cloudflare Pages) on a subdomain
 - [ ] README, 2-minute demo video, write-up
