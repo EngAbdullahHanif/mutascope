@@ -436,11 +436,15 @@ Run `make lint test` before declaring any task done.
   `pageMetadata`, base `SITE.url`; one `opengraph-image.tsx` per top-level route.
 - Always label results as "Supervised (n = …)" or "Zero-shot".
 - Quality (ADR 0042): Lighthouse median of 3, mobile and desktop, performance ≥ 0.90 and
-  accessibility ≥ 0.95 on Landing and `/explore/GFP_AEQVI_Sarkisyan_2016`; axe (WCAG 2.2 AA +
+  accessibility ≥ 0.95 on Landing and `/explore/GFP_AEQVI_Sarkisyan_2016`, asserted by
+  `make web-quality` on a machine with GPU rendering (CI has no GPU: it records and reports
+  its scores, labelled "no-GPU runner", and does not fail on them); axe (WCAG 2.2 AA +
   best practices) with no violations on every page in light and dark; no sideways scroll at
   375 px; initial JavaScript per page within `web/bundle-budget.json` and no 3Dmol on Landing.
   Never lower a budget or add a measurement trick to pass: change the site. A new page goes
   into `e2e/quality.spec.ts`. In-text links are underlined (DESIGN.md). No analytics.
+- 3D views (3Dmol) mount only when on screen (`useInView`; ADR 0039 and 0041 addenda); never
+  before the heatmap's first frame.
 - Protein pages prerender their static text (header, facts, options, default label) from the
   bundle at build time; the grids load in the browser (ADR 0038 addendum).
 
@@ -452,7 +456,8 @@ checks of the `main` ruleset (rename a job → update the rule): `lint + typeche
 add it to the ruleset), `Nextflow smoke test (docker,test, 2 assays)`,
 `API image (build + container tests)`. Branches must be up to date with main to merge. CI must
 stay green on `main`. A seventh job, `web quality (Lighthouse, axe, bundle size)` (ADR 0042), is
-not required yet.
+not required yet; it fails on axe, 375 px, end-to-end and the JS budget, and only records
+Lighthouse.
 
 - Every action is pinned by exact release tag (never `@v7`); Dependabot (`uv`, npm, Actions, Docker)
   moves the pins. Dockerfile `FROM` lines stay literal so Dependabot can read them.

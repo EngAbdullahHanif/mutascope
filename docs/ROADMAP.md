@@ -342,10 +342,13 @@ measured at 20 users on 4 GiB.
       desktop, Landing and Explorer GFP; performance ≥ 0.90, accessibility ≥ 0.95, met without
       lowering), axe on 8 pages in light and dark, no sideways scroll at 375 px, error
       boundaries, JavaScript budget per page and no 3Dmol on Landing, no analytics; protein
-      pages prerender their text (ADR 0038 addendum); CI job `web quality (Lighthouse, axe,
-      bundle size)`
-- [ ] Make `web quality (Lighthouse, axe, bundle size)` a required check after a few green PRs;
-      mobile Explorer performance has little headroom (0.91–0.92 against 0.90 locally)
+      pages prerender their text (ADR 0038 addendum); 3D views load when on screen (ADR 0039,
+      0041 addenda); CI job `web quality (Lighthouse, axe, bundle size)`. Lighthouse budgets
+      are met and asserted with GPU rendering (`make web-quality`); CI records no-GPU scores
+- [ ] Make `web quality (Lighthouse, axe, bundle size)` a required check after a few green PRs
+      (it fails on axe, 375 px, end-to-end and the JS budget; Lighthouse is recorded only, as CI
+      has no GPU: ADR 0042, follow-up)
+- [ ] Run `make web-quality` (Lighthouse budgets asserted, GPU rendering) before each release
 - [ ] No favicon: `/favicon.ico` is a 404 on every page (Lighthouse best practices 0.96, "errors
       in console")
 - [ ] 3Dmol's chunk has no source map (Lighthouse `valid-source-maps`); harmless, but noise in
