@@ -42,8 +42,8 @@ RUN_FILE = "foldseek_run.json"
 """Written next to the partitions: which Foldseek binary produced them."""
 
 INSTALL_HINT = (
-    "Install Foldseek release 10-941cd33 (see README, 'Installing Foldseek') and put `foldseek` "
-    "on PATH, or set FOLDSEEK_BIN to the binary."
+    "Install Foldseek release 10-941cd33 (docs/OPERATIONS.md, 'Installing Foldseek') and put "
+    "`foldseek` on PATH, or set FOLDSEEK_BIN to the binary."
 )
 
 CHAIN = "A"
