@@ -96,6 +96,22 @@ measured score** for anything in DMS units (measured scores, supervised predicti
   `showMissing`, plus `center`, `ends`, `clamped` and `showWildType` where they apply. Its ticks
   use a true minus sign and the mono face.
 
+## Charts (Benchmarks, ADR 0041)
+
+- **Built from the bundle only.** Every number is a row of `benchmarks.json`, looked up by its
+  keys in `src/lib/benchmarks/select.ts`; a missing row fails the build. Chart code computes
+  nothing.
+- **Differences, not side-by-side bars.** Two models are compared by their paired difference
+  (`A − B`) with its 95% interval and a dashed line at 0. A model's own value and CI go in a
+  table, captioned that it is not a comparison. Coverage is drawn against its nominal level.
+- **Ink only.** Marks `foreground`, gridlines `border`, reference lines dashed
+  `muted-foreground`. No accent and no effect colours inside a chart. A second series, or an
+  interval that includes 0, is a hollow marker, and the row says so in words.
+- **Every chart states its assay count** in its header (`ChartFigure`), and every value is also
+  written beside its row (mono, tabular, true minus sign), so nothing depends on hover or colour.
+- `DotPlot` (`src/components/charts/dot-plot.tsx`) is server-rendered HTML: marks positioned in
+  percent, small multiples on one shared axis (`niceAxis`).
+
 ## Typography
 
 | Role                                  | Face                             | Notes                                        |
