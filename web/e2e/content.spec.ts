@@ -163,7 +163,9 @@ test("About has the author's links and the AI statement", async ({ page }) => {
     "https://www.linkedin.com/in/engabdullahhanif/",
   );
   await expect(page.getByRole("link", { name: "http://abdullahhanif.me/" })).toBeVisible();
-  await expect(page.getByTestId("ai-statement")).toContainText("Claude Code");
+  await expect(page.getByTestId("ai-statement")).toHaveText(
+    "MutaScope is my own project: the idea, the scientific design, the evaluation rules and every decision recorded in the ADRs are mine. I used Claude as an AI assistant for writing code and for reviewing my plans, and I review and test everything before it is merged.",
+  );
 });
 
 test("every page has a canonical URL and an Open Graph image on the production origin", async ({

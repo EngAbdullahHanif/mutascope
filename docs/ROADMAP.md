@@ -336,7 +336,6 @@ measured at 20 users on 4 GiB.
       per function type with the Binding caveat, test-fold coverage), How it works (pipeline,
       decisions, deployment rule, limitations, upstream errors, links), About; SEO (metadata,
       Open Graph images, sitemap, robots.txt)
-- [ ] About: add the CV link (no URL yet)
 - [ ] Header navigation is 13 px wider than a 390 px phone (Task 1 header)
 - [ ] Deploy frontend (Vercel / Cloudflare Pages) on a subdomain
 - [ ] README, 2-minute demo video, write-up
