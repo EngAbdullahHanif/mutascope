@@ -14,7 +14,9 @@ const PAGES: { path: string; ready: (page: Page) => Promise<void> }[] = [
     path: `/explore/${PROTEIN}`,
     ready: async (page) => {
       await expect(page.getByTestId("render-timing")).toHaveAttribute("data-render-ms", /\d/);
-      await expect(page.getByRole("heading", { name: "Structure", exact: true })).toBeVisible();
+      // The viewer mounts when scrolled to (ADR 0039 addendum); axe checks it mounted.
+      await page.getByTestId("structure-placeholder").scrollIntoViewIfNeeded();
+      await expect(page.getByTestId("structure-viewer")).toHaveAttribute("data-state", "ready");
     },
   },
   {

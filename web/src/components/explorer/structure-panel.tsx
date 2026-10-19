@@ -2,16 +2,17 @@
 
 import { Info, LoaderCircle } from "lucide-react";
 import dynamic from "next/dynamic";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { EffectLegend } from "@/components/charts/effect-legend";
 import type { ProteinFile } from "@/lib/bundle/schemas.generated";
 import { PLDDT_MIN, PLDDT_STOPS } from "@/lib/color/sequential";
 import type { View } from "@/lib/explorer/landscape";
 import type { ColourBy } from "@/lib/explorer/structure";
+import { useInView } from "@/lib/use-in-view";
 
-// The viewer and 3Dmol.js (~540 kB) are their own chunks, fetched only once this renders, which
-// the page does after the heatmap's first frame (ADR 0039).
+// The viewer and 3Dmol.js (~570 kB) are their own chunks, fetched only once the viewer's box
+// scrolls into view, and never before the heatmap's first frame (ADR 0039 and its addendum).
 const StructureViewer = dynamic(() => import("./structure-viewer"), {
   ssr: false,
   loading: () => (
@@ -39,6 +40,8 @@ export function StructurePanel(props: StructurePanelProps) {
   const { protein, view } = props;
   const [colourBy, setColourBy] = useState<ColourBy>("effect");
   const ref = protein.structure_file;
+  const box = useRef<HTMLDivElement>(null);
+  const visible = useInView(box);
 
   return (
     <section aria-labelledby="structure-heading" className="flex flex-col gap-3">
@@ -59,7 +62,15 @@ export function StructurePanel(props: StructurePanelProps) {
         </p>
       ) : (
         <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]">
-          <StructureViewer {...props} colourBy={colourBy} />
+          {visible ? (
+            <StructureViewer {...props} colourBy={colourBy} />
+          ) : (
+            // The viewer's box and caption line, so nothing moves when it mounts.
+            <div ref={box} className="flex flex-col gap-2" data-testid="structure-placeholder">
+              <div aria-hidden className="h-80 rounded-md border sm:h-96" />
+              <p aria-hidden className="min-h-5" />
+            </div>
+          )}
           <div className="flex flex-col gap-4 text-sm">
             <fieldset className="flex flex-col gap-1">
               <legend className="mb-1 text-muted-foreground">Colour residues by</legend>
