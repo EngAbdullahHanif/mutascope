@@ -92,8 +92,7 @@ flowchart LR
   scales to zero; the first request after idle takes about 20 s.
 - Every pipeline step is a CLI command that reads and writes paths; Nextflow only calls them.
   Inputs are pinned and checksummed, and published files are pinned by Hub commit.
-- Design decisions are recorded as ADRs in [docs/adr/](docs/adr/); the build log is in
-  [docs/BUILD_LOG.md](docs/BUILD_LOG.md).
+- Design decisions are recorded as ADRs in [docs/adr/](docs/adr/).
 
 ## Run it yourself
 
@@ -135,7 +134,6 @@ the benchmark harness, figures, publishing, Docker, Foldseek) is in
 | Supervised model | [`engAbdullahHanif/mutascope-ridge-seq-struct`](https://huggingface.co/engAbdullahHanif/mutascope-ridge-seq-struct) ([model card](docs/MODEL_CARD.md)) |
 | ONNX ESM-2 (live scoring) | [`engAbdullahHanif/mutascope-esm2-onnx`](https://huggingface.co/engAbdullahHanif/mutascope-esm2-onnx) ([model card](docs/ONNX_MODEL_CARD.md)) |
 | ProteinGym | https://proteingym.org |
-| Roadmap | [docs/ROADMAP.md](docs/ROADMAP.md) |
 
 Built with AI assistance (Claude); the design and decisions are my own.
 
