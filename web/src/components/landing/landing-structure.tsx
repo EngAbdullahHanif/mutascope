@@ -8,9 +8,19 @@ import { useInView } from "@/lib/use-in-view";
 // The viewer, 3Dmol.js and the structure are fetched only once the figure is on screen (and
 // then when the browser is idle), so the Landing page's first paint carries none of them, and a
 // reader who never scrolls to it never downloads them (ADR 0041 addendum).
+// Each stage (placeholder, module loading, viewer) carries the same test id and its own
+// `data-state` (waiting, loading, then the viewer's), so there is always exactly one.
 const RotatingStructure = dynamic(() => import("./rotating-structure"), {
   ssr: false,
-  loading: () => <div className="h-64 w-full sm:h-80" aria-hidden />,
+  loading: () => (
+    <div
+      className="h-64 w-full sm:h-80"
+      data-testid="landing-structure"
+      data-state="loading"
+      data-spinning="false"
+      aria-hidden
+    />
+  ),
 });
 
 export function LandingStructure({ assayId, name }: { assayId: string; name: string }) {
