@@ -3700,3 +3700,71 @@ no structures and never downloads or reads these files. Decision record: ADR 003
   API started on it (`/ready`: schema 1.1.0, revision `1bfc294`, 217 proteins; 224 files checked,
   no `structures/` in its snapshot). `make web-check` downloaded and verified 409 files, and
   Playwright passed 18 of 18 on them.
+
+---
+
+## Entry 42 — Live scoring page (Phase 5 Task 4, 2026-10-19)
+
+**Plain-language summary.** The website gets a page, `/score`, where anyone can paste a protein
+sequence and get a predicted effect for every single substitution, computed live by the API.
+Fast mode is one request and returns the whole landscape in seconds. Precise mode starts a job
+on the server and fills the heatmap batch by batch as results stream back, with a progress bar
+and a cancel button. The API sleeps when nobody uses it, so the page pings it as soon as it
+loads and says "Waking up the server…" for the ~20 s a cold start takes, rather than showing
+an error. Mistakes in the sequence are caught in the browser with the API's own rules and shown
+under the input, naming the first bad residue. Busy or rate-limited answers say when to try again.
+Every result is labelled "Zero-shot, ESM-2 35M" and drawn with the Explorer's heatmap. The
+sequence is only ever sent in a request body. Decision record: ADR 0040.
+
+**The 3 most important design choices.**
+
+1. **Job streams over `fetch`, not `EventSource`.** On Cloud Run a precise job advances only
+   while its stream is open, so a dropped connection must be reopened. `EventSource` cannot send
+   `Last-Event-ID` on a first connection, hides the status code and `Retry-After` of a refused
+   stream, and retries on its own schedule. `followJob` reads the stream with `fetch` and a small
+   SSE parser, reconnects after 1, 2, 4, 8 s (or `Retry-After`) sending the last event id, and
+   relies on the server's replayable event log (ADR 0031) so no row is lost or applied twice. It
+   stops on a 404 (a restarted instance has forgotten the job) or after 8 failed reconnects.
+2. **Nothing about the server is assumed.** The precise limit comes from `/ready`
+   (`precise_max_length`: 400 live, 600 in the image, under review in the ROADMAP), and the
+   label comes from the response's `model`, not from what the page asked for. A cold start is
+   detected, not configured: `/health` unanswered after 1.5 s means "waking".
+3. **A live result is an Explorer landscape with `source: "live"`.** The same canvas heatmap,
+   top-10 lists, CSV and table draw it, and the one flag removes every mention of measurements
+   (tooltip, screen-reader text, CSV column). Unscored rows are NaN, so a running job shows grey
+   columns, never neutral white.
+
+**Problems encountered and how they were solved.**
+
+1. **A Playwright reconnect test timed out.** *Found:* the first run of the suite, 17 of 18 passed.
+   The test refused two reconnects before letting one through. The backoffs were 1, 2 and 4 s,
+   7 s in all, which is longer than Playwright's 5 s expect timeout. The page behaved correctly.
+   *Fix:* refuse one reconnect (backoffs 1 + 2 s), assert "attempt 2" and that exactly two
+   reconnects were made. *Verified:* 39 of 39 with `--repeat-each 3`; full suite 31 passed, 1
+   skipped (the live test).
+2. **The legend said "Not measured" for a live sequence.** *Found:* reviewing screenshots of a
+   half-finished precise job. Grey columns there are rows not scored yet. A pasted sequence has no
+   measurements, so the label was wrong. *Fix:* `EffectLegend` takes `missingLabel` (default
+   unchanged). The live view shows "Not scored yet", and only while a job is incomplete.
+   *Verified:* a legend unit test; the Explorer's legends are unchanged.
+
+**Supporting details.**
+
+- Live service before the change (v0.6.0): `/health` answered in 20.4 s from cold; `/ready`
+  reported `precise_max_length` 400 and `score_default_model` `esm2_35m`. A preflight from
+  `https://mutascope.abdullahhanif.me` for the stream with `Last-Event-ID` returned 200 with that
+  origin. `conf/deploy/cloudrun.yaml` already listed both production origins, so it is unchanged
+  and nothing is deployed by this task.
+- `POST /v1/score` without `mutations` returns the full `(L, 20)` landscape (`scores`), so fast
+  mode needed no API change. Precise jobs send `model: "esm2_35m"` explicitly: the generated
+  `JobRequest` type requires it.
+- Live smoke test (`MUTASCOPE_LIVE_API=1`, warm instance): ubiquitin, 128 residues, fast mode,
+  full landscape and label "Zero-shot, ESM-2 35M", 1.3 s. The API's CORS refuses the local test
+  server's origin, so the test relays API calls through Playwright and adds only the CORS header.
+- Examples are target sequences copied from the pinned bundle: ubiquitin
+  (`RL40A_YEAST_Roscoe_2013`, 128), GFP (`GFP_AEQVI_Sarkisyan_2016`, 238) and PTEN
+  (`PTEN_HUMAN_Mighell_2018`, 403, over the live precise limit, so it shows the limit at work).
+  A scored example links to its assay in the Explorer.
+- Tests: Vitest 113 (24 new in `src/lib/live/live.test.ts`); Playwright 31 + 1 skipped (13 new
+  mocked `/score` tests; `/score` added to the navigation and footer tests, which block the API).
+- No new dependencies.

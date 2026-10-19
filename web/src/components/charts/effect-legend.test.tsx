@@ -18,6 +18,10 @@ describe("EffectLegend", () => {
   it("shows the missing swatch on request", () => {
     render(<EffectLegend maxAbs={1} title="DMS score" showMissing />);
     expect(screen.getByText("Not measured")).toBeInTheDocument();
+    render(
+      <EffectLegend maxAbs={1} title="ESM-2 35M score" showMissing missingLabel="Not scored yet" />,
+    );
+    expect(screen.getByText("Not scored yet")).toBeInTheDocument();
   });
 });
 
