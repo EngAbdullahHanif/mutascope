@@ -89,8 +89,10 @@ web-check: require-web
 web-e2e: require-web
 	cd web && pnpm test:e2e
 
-# What CI's web-quality job runs after the build (`make web-check` first): the JavaScript size
-# budget, Playwright (axe, 375 px, end-to-end), then Lighthouse, mobile and desktop, median of 3.
+# The website's quality gate (`make web-check` first): the JavaScript size budget, Playwright
+# (axe, 375 px, end-to-end), then Lighthouse, mobile and desktop, median of 3, with the budgets
+# asserted. Run it on a machine with GPU rendering: this is where the Lighthouse budgets are
+# enforced. CI's runners have no GPU and only record their scores (ADR 0042, follow-up).
 # Lighthouse needs Chrome; set CHROME_PATH (e.g. Playwright's Chromium) if it is not installed.
 web-quality: require-web
 	cd web && pnpm size && pnpm test:e2e

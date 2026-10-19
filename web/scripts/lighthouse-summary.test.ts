@@ -1,4 +1,4 @@
-import { median, metricsRow, table } from "./lighthouse-summary.ts";
+import { heading, machineLabel, median, metricsRow, table } from "./lighthouse-summary.ts";
 
 describe("lighthouse summary", () => {
   it("takes the median of three runs, as the assertions do", () => {
@@ -33,6 +33,17 @@ describe("lighthouse summary", () => {
     };
     expect(metricsRow("mobile", "http://127.0.0.1:3200/explore/X", report)).toBe(
       "| mobile | `/explore/X` | 753 | 2926 | 186 | 0.000 | – | 1234 |",
+    );
+  });
+
+  it("labels scores from a machine where they are not asserted", () => {
+    expect(machineLabel(["--machine", "no-GPU runner"])).toBe("no-GPU runner");
+    expect(machineLabel([])).toBeNull();
+    expect(heading("no-GPU runner")).toMatch(
+      /^### Lighthouse on a no-GPU runner: recorded, not asserted/,
+    );
+    expect(heading(null)).toBe(
+      "### Lighthouse (budgets: performance ≥ 0.90, accessibility ≥ 0.95, median of 3)",
     );
   });
 });

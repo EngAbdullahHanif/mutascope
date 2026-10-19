@@ -6,6 +6,10 @@
  * score can be explained from the job summary alone. Reads LHCI's filesystem output
  * (`.lighthouseci/<form factor>/manifest.json` and the reports it lists) and appends to the CI
  * job summary when there is one.
+ *
+ * `--machine "<label>"` names where the scores come from. The budgets are asserted only on a
+ * machine with GPU rendering (`make web-quality`, ADR 0042 follow-up); CI's runners have no GPU,
+ * so CI records its scores under the label "no-GPU runner" without asserting them.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
@@ -66,6 +70,19 @@ export function table(formFactor: string, runs: Run[]): string {
   return rows.join("\n");
 }
 
+/** The value of `--machine`, if given. */
+export function machineLabel(args: string[]): string | null {
+  const i = args.indexOf("--machine");
+  return i >= 0 ? (args[i + 1] ?? null) : null;
+}
+
+export function heading(machine: string | null): string {
+  const budgets = "budgets: performance ≥ 0.90, accessibility ≥ 0.95, median of 3";
+  return machine
+    ? `### Lighthouse on a ${machine}: recorded, not asserted (${budgets}, asserted with GPU rendering only)`
+    : `### Lighthouse (${budgets})`;
+}
+
 async function main() {
   const root = join(dirname(fileURLToPath(import.meta.url)), "..", ".lighthouseci");
   const factors = ["mobile", "desktop"].filter((f) => existsSync(join(root, f, "manifest.json")));
@@ -78,7 +95,7 @@ async function main() {
       .map((r) => metricsRow(f, r.url, JSON.parse(readFileSync(r.jsonPath!, "utf8")) as Report)),
   );
   const text = [
-    "### Lighthouse (budgets: performance ≥ 0.90, accessibility ≥ 0.95, median of 3)",
+    heading(machineLabel(process.argv.slice(2))),
     "",
     "| Form factor | Page | Performance (runs) | Median | Accessibility (runs) | Median |",
     "| --- | --- | --- | ---: | --- | ---: |",
