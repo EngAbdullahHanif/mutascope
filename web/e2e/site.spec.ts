@@ -2,10 +2,16 @@ import { expect, test } from "@playwright/test";
 
 const PAGES = [
   { href: "/explore", label: "Explorer" },
+  { href: "/score", label: "Score" },
   { href: "/benchmarks", label: "Benchmarks" },
   { href: "/how-it-works", label: "How it works" },
   { href: "/about", label: "About" },
 ];
+
+// /score pings the live API on load; these tests never reach it.
+test.beforeEach(async ({ page }) => {
+  await page.route(/\/(health|ready)$/, (route) => route.abort());
+});
 
 test("the header navigates to every page and marks the current one", async ({ page }) => {
   await page.goto("/");
