@@ -180,3 +180,51 @@ test("the old /explorer link redirects, and an unknown protein is a 404", async 
   const res = await request.get("/explore/NOT_A_PROTEIN");
   expect(res.status()).toBe(404);
 });
+
+// A browser holding a protein file cached from an earlier bundle (the 1.0.0 → 1.1.0 move): the
+// loader retries once past the cache, and only then says the data is out of date.
+test.describe("a cached protein file with another digest", () => {
+  const assayId = "F7YBW8_MESOW_Aakre_2015";
+  const path = `/data/proteins/${assayId}.json.gz`;
+
+  /** Serves the file with one byte flipped (still gzip, another sha256) to the first `stale` requests. */
+  async function staleCopy(page: Page, stale: number): Promise<string[]> {
+    const requests: string[] = [];
+    await page.route(
+      (url) => url.pathname === path,
+      async (route) => {
+        requests.push(route.request().url());
+        const response = await route.fetch();
+        if (requests.length > stale) return route.fulfill({ response });
+        const body = Buffer.from(await response.body());
+        body[body.length - 5] = body[body.length - 5]! ^ 0xff;
+        return route.fulfill({ response, body });
+      },
+    );
+    return requests;
+  }
+
+  test("is fetched once more and the page loads", async ({ page }) => {
+    const requests = await staleCopy(page, 1);
+    await open(page, assayId);
+    expect(requests).toHaveLength(2);
+    expect(requests[0]).toMatch(new RegExp(`${path}\\?v=[0-9a-f]{64}$`));
+    expect(requests[1]).toBe(requests[0]);
+    await expect(page.getByTestId("stale-data")).toHaveCount(0);
+  });
+
+  test("still differing, says the data is out of date and offers a reload", async ({ page }) => {
+    const requests = await staleCopy(page, Infinity);
+    await page.goto(`/explore/${assayId}`);
+    const alert = page.getByTestId("stale-data");
+    await expect(alert).toContainText("This data is out of date. Reload the page.");
+    await expect(alert).not.toContainText("sha256");
+    expect(requests).toHaveLength(2);
+    await Promise.all([
+      page.waitForEvent("load"),
+      alert.getByRole("button", { name: "Reload" }).click(),
+    ]);
+    await expect(page.getByTestId("stale-data")).toBeVisible();
+    expect(requests).toHaveLength(4);
+  });
+});
