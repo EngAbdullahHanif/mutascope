@@ -154,11 +154,31 @@ sequences are always mono and never hyphenated.
   alternative and the CSV. Each one carries the label ("Supervised (n = …)", "Zero-shot" or
   "Measured").
 
+## Structure (ADR 0039)
+
+- 3Dmol.js, below the heatmap, mounted after the heatmap's first frame. Cartoon on a transparent
+  background (the page colour shows through in either theme), inside a bordered panel.
+- **Colour by mean effect** (default): each residue is its summary-bar colour (same lookup
+  table, centre, half-width, clipping), with the same `EffectLegend` and the view's label chip.
+- **Colour by pLDDT**: ColorBrewer Purples, light (≤ 40) to dark (100), interpolated in OKLab
+  (`src/lib/color/sequential.ts`, tokens `--color-plddt-0…6`, a test keeps them equal). Purple
+  is on neither pole of the effect scale nor the accent, so it is never read as an effect. Its
+  legend marks the low-confidence threshold.
+- **Low confidence** (pLDDT below the bundle's threshold, 70): a thin trace instead of a
+  cartoon, in both colourings, explained beside the viewer.
+- **Highlight**: a sphere on the residue's CA in the `foreground` ink; the residue's code, PDB
+  number, pLDDT and mean are written under the viewer. In the heatmap, a residue pointed at in
+  3D gets its whole column outlined in the `ring` colour.
+- **Outside a partial structure**: a coverage strip of the whole target in the viewer's colours,
+  residues without a 3D position in the missing grey, with its own swatch. Never white.
+- No structure: an info box saying why, never an empty panel. The panel always states that the
+  3D view is not keyboard-accessible and that the heatmap and table are.
+
 ## Data
 
 - Bundle files are loaded only through [`src/lib/bundle/load.ts`](src/lib/bundle/load.ts). It
   checks the schema version, the generated Zod validators and the manifest's sha256 for protein
-  files. A file that fails is shown as an error, never as data with a warning.
+  files (for structure files, the sha256 their protein file lists, and their sequence). A file that fails is shown as an error, never as data with a warning.
 - API types come only from [`src/lib/api-types.ts`](src/lib/api-types.ts) (`make types`). Bundle
   types come only from `src/lib/bundle/schemas.generated.ts` (`pnpm schemas`). Never hand-write
   either.

@@ -322,7 +322,10 @@ measured at 20 users on 4 GiB.
       labels, predicted / measured, unmeasured mask, mean bar, tooltip, top 10, CSV, keyboard,
       table alternative; the 5 MSA-region proteins labelled (ADR 0012); 1,000 residues drawn in
       ~30 ms
-- [ ] Link the heatmap to the 3D structure (3Dmol.js): hovered column ↔ residue
+- [x] Link the heatmap to the 3D structure (Task 3, ADR 0039): bundle `bundle-v1.1.0` (format
+      1.1.0) with 185 backbone structure files for 213 assays, every residue checked against its
+      target; 3Dmol.js loaded after the heatmap, coloured by mean effect or pLDDT; hover linked
+      both ways, click in 3D selects the column; no-structure message and accessibility note
 - [ ] Pages: Landing, Explorer, Benchmarks, How it works (pipeline, model card, limitations), About
 - [ ] Deploy frontend (Vercel / Cloudflare Pages) on a subdomain
 - [ ] README, 2-minute demo video, write-up
