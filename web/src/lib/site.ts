@@ -69,10 +69,7 @@ export function adrUrl(n: number): string {
   return repoFile(`docs/adr/${slug}.md`);
 }
 
-/**
- * The About page, exactly as the author supplied it (Phase 5 Task 5). The CV link is not here:
- * no URL was given for it.
- */
+/** The About page, exactly as the author supplied it (Phase 5 Task 5). */
 export const ABOUT = {
   home: "http://abdullahhanif.me/",
   links: [
@@ -80,5 +77,5 @@ export const ABOUT = {
     { label: "LinkedIn", href: "https://www.linkedin.com/in/engabdullahhanif/" },
   ],
   aiStatement:
-    "MutaScope was built with Claude Code, Anthropic's AI coding assistant, working under the project rules in CLAUDE.md, which is in the repository.",
+    "MutaScope is my own project: the idea, the scientific design, the evaluation rules and every decision recorded in the ADRs are mine. I used Claude as an AI assistant for writing code and for reviewing my plans, and I review and test everything before it is merged.",
 } as const;
