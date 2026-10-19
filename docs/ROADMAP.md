@@ -331,6 +331,11 @@ measured at 20 users on 4 GiB.
       cancel), precise limit read from `/ready`, "Waking up the server…" on a cold start, friendly
       429 / 503 with `Retry-After`, validation at the input; Playwright with a mocked API plus an
       opt-in live smoke test
-- [ ] Pages: Landing, Explorer, Benchmarks, How it works (pipeline, model card, limitations), About
+- [x] Pages (Task 5, ADR 0041): Landing (headlines read from `benchmarks.json`, lazy rotating
+      structure, examples, link to `/score`), Benchmarks (paired differences per split, by size,
+      per function type with the Binding caveat, test-fold coverage), How it works (pipeline,
+      decisions, deployment rule, limitations, upstream errors, links), About; SEO (metadata,
+      Open Graph images, sitemap, robots.txt)
+- [ ] Header navigation is 13 px wider than a 390 px phone (Task 1 header)
 - [ ] Deploy frontend (Vercel / Cloudflare Pages) on a subdomain
 - [ ] README, 2-minute demo video, write-up

@@ -3768,3 +3768,74 @@ sequence is only ever sent in a request body. Decision record: ADR 0040.
 - Tests: Vitest 113 (24 new in `src/lib/live/live.test.ts`); Playwright 31 + 1 skipped (13 new
   mocked `/score` tests; `/score` added to the navigation and footer tests, which block the API).
 - No new dependencies.
+
+---
+
+## Entry 43 — Content pages and SEO (Phase 5 Task 5, 2026-10-19)
+
+**Plain-language summary.** The four placeholder pages are now real. The Landing page says what
+MutaScope does in one sentence, shows GFP's structure slowly turning (it loads after the page
+appears and stays still for readers who ask for reduced motion), offers three example proteins,
+points to live scoring, and gives three headline numbers: how much SaProt's structure tokens add
+over ESM-2, how much the supervised model gains at positions it never saw, and how often its 90%
+intervals actually contain the measurement. The Benchmarks page draws every comparison as a
+difference with its 95% interval: zero-shot models against each other, the supervised ladder per
+split, the gain by assay size and per function type (with the Binding caveat), and the coverage
+of the intervals. How it works explains the pipeline, the decisions, the deployment rule (ridge on
+198 assays, zero-shot on 19), the limitations and the two upstream ProteinGym errors, with links
+to the ADRs, model card, dataset and API docs. About has the author's links and a sentence on AI
+use. Every page has metadata, a canonical URL and an Open Graph image; the site has a sitemap and
+robots.txt. Decision record: ADR 0041.
+
+**The 3 most important design choices.**
+
+1. **No number is typed into a page.** `benchmarks.json` is read and validated at build time, and
+   each number is looked up by its keys (model, split, metric, level, group). A lookup that finds
+   no row, or two, throws, so a missing number fails the build instead of showing a stale or
+   invented one. The Playwright tests read their expected values from the served file too, so a
+   new bundle cannot pass with old numbers on the page.
+2. **The headlines are the honest ones, not the biggest.** The supervised headline is the
+   contiguous split (+0.092), not random (+0.263): the website predicts at unmeasured positions,
+   and that is the job contiguous and modulo test (ADR 0026). The coverage headline is test-fold
+   coverage with split-matched calibration (90.8% at 90%), not the deployed landscapes' 0.900 on
+   measured variants, which holds by construction and proves nothing (ADR 0026, weak point 11).
+3. **Charts show differences, never two bars.** Every chart is a paired difference with its
+   interval and a line at 0, in ink only (DESIGN.md keeps the accent and the effect colours out
+   of charts). Each model's own score and CI is in a table that says it is not a comparison. A
+   hollow marker means the interval includes 0, and the row says so in words. Each chart states
+   its assay count.
+
+**Problems encountered and how they were solved.**
+
+1. **The first build failed on an Open Graph image.** *Found:* `next build` stopped prerendering
+   `/explore/opengraph-image` with "Expected <div> to have explicit display: flex … if it has
+   more than one child node". The footer line `{SITE.url…} · Not for clinical use` is two text
+   nodes to the image renderer (Satori), which needs flex for more than one child. *Fix:* one
+   template string in a `display: flex` div. *Verified:* the build prerenders all six images,
+   and a Playwright test fetches each page's `og:image` and checks it is `image/png`.
+2. **ESLint refused the reduced-motion state.** *Found:* `pnpm lint` reported
+   `react-hooks/set-state-in-effect` on `setReduced(query.matches)` inside an effect. *Fix:* read
+   the media query with `useSyncExternalStore` (subscribe to its `change` event; the server
+   snapshot is "reduced", so nothing moves before the setting is known). *Verified:* a Playwright
+   test switches `reducedMotion` from reduce to no-preference and back and sees `data-spinning`
+   follow each time.
+
+**Supporting details.**
+
+- Headlines from `benchmarks.json` (bundle-v1.1.0): SaProt 650M − ESM-2 650M +0.046 [+0.028,
+  +0.062], 213 assays; ridge `seq_struct` − zero-shot SaProt, contiguous +0.092 [+0.065,
+  +0.115], modulo +0.135, 213 assays; 90% interval coverage, contiguous, split-matched: mean
+  0.908, 0 of 213 assays more than 10 points below (random calibration: 0.806, 86 below).
+- The Binding caveat is documented in ADR 0026 (weak point 7) and written into the bundle by ADR
+  0028 section 8; the page shows the file's own text and cites both.
+- About: the CV link came without a URL and is not shown (ROADMAP item). The AI statement names
+  Claude Code and CLAUDE.md, which are in the repository; the author should confirm the wording.
+- Found while checking phone widths: the Task 1 header's navigation is 13 px wider than a 390 px
+  screen (scrollWidth 403). Not changed here; added to the ROADMAP.
+- Tests: Vitest 131 (18 new: selectors, axis, ADR links); Playwright 40 + 1 skipped (9 new in
+  `e2e/content.spec.ts`).
+- No new dependencies (`next/og` ships with Next).
+
+**Follow-up (2026-10-19).** Two changes to the About page after review (commit `5f65698`): the CV
+link was dropped by choice, not for lack of a URL (ADR 0041, decision 10), and the AI statement
+was replaced with the author's own text.
