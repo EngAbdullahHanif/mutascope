@@ -4,7 +4,7 @@ import { formatValue, positionStatusText, type CellDetail } from "@/lib/explorer
 
 const WIDTH = 288;
 
-/** What one cell holds: everything the bundle says about that substitution. */
+/** What one cell holds: everything the bundle (or a live result) says about that substitution. */
 export function CellTooltip({
   detail: d,
   decimals,
@@ -42,27 +42,33 @@ export function CellTooltip({
           </p>
           <p className="text-muted-foreground">{d.option.name}</p>
           <dl className="tabular mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5">
-            <Row term="Predicted">{f(d.predicted)}</Row>
+            <Row term="Predicted">
+              {d.live && Number.isNaN(d.predicted) ? "not scored yet" : f(d.predicted)}
+            </Row>
             {d.intervals?.map((iv) => (
               <Row key={iv.level} term={`${iv.level}% interval`}>
                 {f(iv.lower)} to {f(iv.upper)}
               </Row>
             ))}
-            <Row term="Measured">{Number.isNaN(d.measured) ? "not measured" : f(d.measured)}</Row>
+            {d.live ? null : (
+              <Row term="Measured">{Number.isNaN(d.measured) ? "not measured" : f(d.measured)}</Row>
+            )}
             {d.outOfFold !== null ? (
               <Row term="Out-of-fold prediction">{f(d.outOfFold)}</Row>
             ) : null}
           </dl>
         </>
       )}
-      <p className="mt-2 border-t pt-2 text-muted-foreground">
-        Residue {d.position + 1}: {positionStatusText(d.positionStatus)}
-        {d.structureImputed === null
-          ? null
-          : d.structureImputed
-            ? ". Structure features imputed (outside the structure)."
-            : "."}
-      </p>
+      {d.live ? null : (
+        <p className="mt-2 border-t pt-2 text-muted-foreground">
+          Residue {d.position + 1}: {positionStatusText(d.positionStatus)}
+          {d.structureImputed === null
+            ? null
+            : d.structureImputed
+              ? ". Structure features imputed (outside the structure)."
+              : "."}
+        </p>
+      )}
     </div>
   );
 }

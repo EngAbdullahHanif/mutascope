@@ -49,6 +49,8 @@ export type SupervisedGrids = {
 };
 
 export type Landscape = {
+  /** `bundle`: a ProteinGym assay. `live`: a sequence scored by the API, with no measurements. */
+  source: "bundle" | "live";
   assayId: string;
   sequence: string;
   length: number;
@@ -151,6 +153,7 @@ export function decodeProtein(p: ProteinFile): Landscape {
   const dmsCenter = median(measured);
   const both = supervised ? concat(measured, supervised.prediction) : measured;
   return {
+    source: "bundle",
     assayId: p.assay.assay_id,
     sequence,
     length,
@@ -290,6 +293,8 @@ export type CellDetail = {
   wt: string;
   mt: string;
   isWildType: boolean;
+  /** A live result: no measurements, so nothing is said about them. */
+  live: boolean;
   /** The selected model's prediction (NaN at the wild type for supervised). */
   predicted: number;
   option: ModelOption;
@@ -318,6 +323,7 @@ export function cellDetail(l: Landscape, model: string, position: number, aa: nu
     wt,
     mt,
     isWildType: l.wt[position] === aa,
+    live: l.source === "live",
     predicted,
     option,
     intervals:
@@ -355,7 +361,9 @@ export function formatValue(value: number, decimals: number): string {
 export function describeCell(d: CellDetail, decimals: number): string {
   const f = (v: number) => formatValue(v, decimals);
   if (d.isWildType) return `${d.wt}${d.position + 1}: wild type.`;
-  const parts = [`${d.code}. ${d.option.label} ${d.option.name}: ${f(d.predicted)}`];
+  const predicted = Number.isNaN(d.predicted) && d.live ? "not scored yet" : f(d.predicted);
+  const parts = [`${d.code}. ${d.option.label} ${d.option.name}: ${predicted}`];
+  if (d.live) return `${parts.join("; ")}.`;
   for (const iv of d.intervals ?? [])
     parts.push(`${iv.level}% interval ${f(iv.lower)} to ${f(iv.upper)}`);
   parts.push(Number.isNaN(d.measured) ? "not measured" : `measured ${f(d.measured)}`);
@@ -379,7 +387,9 @@ export function viewCsv(l: Landscape, view: View, mode: ViewMode): string {
   const sup = view.option.kind === "supervised" && mode === "predicted" ? l.supervised : null;
   const header = ["mutation", "position", "wt", "mt", "value", "quantity", "model", "label"];
   if (sup) header.push("lower_80", "upper_80", "lower_90", "upper_90");
-  header.push("measured_dms_score");
+  // A live sequence has no assay: no measured column, rather than one that is always empty.
+  const withMeasured = l.source === "bundle";
+  if (withMeasured) header.push("measured_dms_score");
   const rows = [header.join(",")];
   const quantity =
     mode === "measured"
@@ -403,7 +413,7 @@ export function viewCsv(l: Landscape, view: View, mode: ViewMode): string {
           ...[sup.lower80, sup.upper80, sup.lower90, sup.upper90].map((g) => csvNumber(g[i]!)),
         );
       }
-      row.push(csvNumber(l.measured[i]!));
+      if (withMeasured) row.push(csvNumber(l.measured[i]!));
       rows.push(row.join(","));
     }
   }

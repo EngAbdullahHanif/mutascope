@@ -19,6 +19,8 @@ export type EffectLegendProps = {
   decimals?: number;
   /** Adds a "Not measured" swatch, for views with missing cells. */
   showMissing?: boolean;
+  /** The missing swatch's words; a live sequence has nothing measured, only rows not scored yet. */
+  missingLabel?: string;
   /**
    * The neutral (white) value; 0 unless the quantity has no natural zero. DMS scores are
    * centred on the assay's median (ADR 0038), so the bar runs center ± maxAbs.
@@ -44,6 +46,7 @@ export function EffectLegend({
   title,
   decimals = 2,
   showMissing = false,
+  missingLabel = "Not measured",
   center = 0,
   ends = EFFECT_WORDS,
   clamped = false,
@@ -84,7 +87,7 @@ export function EffectLegend({
                 className="inline-block size-3 rounded-sm border"
                 style={{ background: EFFECT_MISSING }}
               />
-              Not measured
+              {missingLabel}
             </span>
           ) : null}
           {showWildType ? (
