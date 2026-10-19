@@ -11,6 +11,10 @@ commit, and :func:`open_bundle` checks it before anything is served:
 Protein files are parsed when first requested (the 217 of them are 79 MB of JSON) and kept in
 an LRU cache; each is checked against the manifest's sha256 when read. The API never reads
 ``data/processed``: everything it serves is in these files.
+
+Structure files (``structures/``, ADR 0039) are the website's: the API serves no structure, so
+it does not download them (:data:`IGNORED`), skips their lines of ``SHA256SUMS`` and never
+opens one, and they cost the 4 GiB instance no memory.
 """
 
 import gzip
@@ -40,6 +44,13 @@ forbid unknown fields, so even a minor version is only read once it is listed he
 CHECKSUMS = "SHA256SUMS"
 MANIFEST = "manifest.json"
 BENCHMARKS = "benchmarks.json"
+IGNORED = ("structures/",)
+"""Bundle folders the API never downloads or reads (relative to the bundle root)."""
+
+
+def ignored(name: str) -> bool:
+    """A bundle path the API leaves alone (:data:`IGNORED`)."""
+    return name.startswith(IGNORED)
 
 
 class BundleError(RuntimeError):
@@ -59,7 +70,12 @@ SnapshotDownload = Callable[..., str]
 
 
 def _snapshot_download(
-    *, repo_id: str, repo_type: str, revision: str, allow_patterns: list[str]
+    *,
+    repo_id: str,
+    repo_type: str,
+    revision: str,
+    allow_patterns: list[str],
+    ignore_patterns: list[str],
 ) -> str:
     from huggingface_hub import (
         snapshot_download,  # pyright: ignore[reportUnknownVariableType]
@@ -67,7 +83,11 @@ def _snapshot_download(
 
     return str(
         snapshot_download(
-            repo_id, repo_type=repo_type, revision=revision, allow_patterns=allow_patterns
+            repo_id,
+            repo_type=repo_type,
+            revision=revision,
+            allow_patterns=allow_patterns,
+            ignore_patterns=ignore_patterns,
         )
     )
 
@@ -87,6 +107,7 @@ def fetch_bundle(
         repo_type="dataset",
         revision=revision,
         allow_patterns=[f"{path_in_repo}/*", f"{path_in_repo}/**/*"],
+        ignore_patterns=[f"{path_in_repo}/{folder}*" for folder in IGNORED],
     )
     log.info("bundle_downloaded", repo=repo, revision=revision[:7], path=path_in_repo)
     return Source(repo=repo, revision=revision, path=Path(root) / path_in_repo)
@@ -101,7 +122,8 @@ def verify_checksums(root: Path, *, require_all: bool) -> int:
 
     ``manifest.json`` and ``benchmarks.json`` must always be present. With ``require_all``
     (a Hub snapshot) every listed file must be; a local copy may hold a subset of the
-    protein files, which are checked against the manifest when read.
+    protein files, which are checked against the manifest when read. Lines under
+    :data:`IGNORED` are skipped: those files are neither required nor opened.
 
     Raises:
         BundleError: A required file is missing or a digest differs.
@@ -112,6 +134,8 @@ def verify_checksums(root: Path, *, require_all: bool) -> int:
     checked = 0
     for line in sums.read_text().splitlines():
         digest, name = line.split(maxsplit=1)
+        if ignored(name):
+            continue
         path = root / name
         if not path.is_file():
             if require_all or name in (MANIFEST, BENCHMARKS):

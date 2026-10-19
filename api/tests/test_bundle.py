@@ -15,6 +15,7 @@ from api.app.bundle import (
     Source,
     fetch_bundle,
     open_bundle,
+    verify_checksums,
 )
 from api.app.main import create_app
 from api.app.settings import Settings
@@ -112,6 +113,7 @@ def test_fetch_reads_the_bundle_folder_at_the_pinned_commit(
             "repo_type": "dataset",
             "revision": revision,
             "allow_patterns": ["bundle/*", "bundle/**/*"],
+            "ignore_patterns": ["bundle/structures/*"],
         }
     ]
 
@@ -137,3 +139,29 @@ def test_fetch_refuses_anything_but_a_commit_hash(revision: str) -> None:
 
     with pytest.raises(BundleError, match="full commit hash"):
         fetch_bundle("org/repo", "bundle", revision, download)
+
+
+def test_structure_files_are_never_downloaded_required_or_read(
+    bundle_dir: Path, tmp_path: Path
+) -> None:
+    """ADR 0039: structure files are the website's; the API keeps none of them in memory."""
+    root = _copy(bundle_dir, tmp_path)
+    (root / "structures").mkdir()
+    (root / "structures" / "X.json.gz").write_bytes(b"not even gzip")
+    with (root / "SHA256SUMS").open("a") as f:
+        f.write(f"{'0' * 64}  structures/X.json.gz\n{'1' * 64}  structures/Y.json.gz\n")
+    # A wrong digest and a missing file under structures/ are not looked at...
+    assert len(_open(root).entries) == 217
+    top = tmp_path / "top"
+    top.mkdir()
+    for name in ("manifest.json", "benchmarks.json"):
+        shutil.copyfile(root / name, top / name)
+    lines = (root / "SHA256SUMS").read_text().splitlines()
+    kept = [
+        line
+        for line in lines
+        if line.endswith(("  manifest.json", "  benchmarks.json")) or "  structures/" in line
+    ]
+    (top / "SHA256SUMS").write_text("\n".join(kept) + "\n")
+    # ...even by a Hub snapshot, which must hold every other listed file.
+    assert verify_checksums(top, require_all=True) == 2

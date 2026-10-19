@@ -20,7 +20,7 @@ async def test_ready_reports_the_loaded_bundle_and_models(client: httpx.AsyncCli
     assert response.status_code == 200
     assert response.json() == {
         "status": "ready",
-        "schema_version": "1.0.0",
+        "schema_version": "1.1.0",
         "bundle_revision": None,  # a local copy
         "proteins": 217,
         "models": ["esm2_150m_onnx_fp32", "esm2_35m_onnx_fp32"],
@@ -127,6 +127,6 @@ async def test_protein_files_are_parsed_once(started: FastAPI) -> None:
 
 
 def test_fixture_bundle_is_the_published_one(bundle_dir: Path) -> None:
-    """The fixture's protein files are gzip JSON at schema 1.0.0 (sanity for the tests above)."""
+    """The fixture's protein files are gzip JSON at schema 1.1.0 (sanity for the tests above)."""
     for path in (bundle_dir / "proteins").iterdir():
-        assert json.loads(gzip.decompress(path.read_bytes()))["schema_version"] == "1.0.0"
+        assert json.loads(gzip.decompress(path.read_bytes()))["schema_version"] == "1.1.0"
