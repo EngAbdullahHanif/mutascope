@@ -228,6 +228,13 @@ If you use this dataset, cite ProteinGym:
 
 and, for the 3Di tokens, Foldseek (van Kempen et al., *Nature Biotechnology* 2024).
 
+**AF2 structures.** The structures (and the structure features, 3Di tokens and the website
+bundle's backbone files derived from them, ADR 0039) are ProteinGym's AlphaFold2 models in
+`ProteinGym_AF2_structures.zip`, released with ProteinGym v1.3 under the MIT licence; they are
+not AlphaFold DB entries. AlphaFold2 is by Jumper et al., "Highly accurate protein structure
+prediction with AlphaFold", *Nature* 596, 583–589 (2021); its code is Apache 2.0 and its model
+parameters CC BY 4.0. Cite both ProteinGym and Jumper et al. when you use the structures.
+
 ## Loading
 
 ```python

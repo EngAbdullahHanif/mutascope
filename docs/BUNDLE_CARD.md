@@ -14,9 +14,14 @@ SaProt 650M (AF2).
   `DMS_score`, the zero-shot landscapes, per-residue structure features, the MSA region of the
   five assays benchmarked on part of their target, and, for the 198 assays with a supervised
   model, its predictions with 80% and 90% CV+ intervals.
+- `structures/<pdb>.json.gz` (format 1.1.0): one per ProteinGym AF2 structure used by an assay
+  (185 files for the 213 assays with a structure): PDB residue numbers, sequence, backbone
+  (N, CA, C, O) coordinates in Å and pLDDT. A protein file's `structure_file` names its file,
+  sha256 and the target residues it models; every residue was checked against the target.
+  AlphaFold2 models from ProteinGym (MIT); cite Jumper et al., *Nature* 2021.
 - `benchmarks.json`: the headline zero-shot and supervised tables, paired comparisons, the
   per-function-type table with its caveats, and interval coverage.
-- `schema/`: JSON Schemas of the three file kinds; their `$id` carries the format version.
+- `schema/`: JSON Schemas of the four file kinds; their `$id` carries the format version.
 - `SHA256SUMS`: checksums of every file above.
 
 ## Reading a protein file
