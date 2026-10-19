@@ -3835,3 +3835,7 @@ robots.txt. Decision record: ADR 0041.
 - Tests: Vitest 131 (18 new: selectors, axis, ADR links); Playwright 40 + 1 skipped (9 new in
   `e2e/content.spec.ts`).
 - No new dependencies (`next/og` ships with Next).
+
+**Follow-up (2026-10-19).** Two changes to the About page after review (commit `5f65698`): the CV
+link was dropped by choice, not for lack of a URL (ADR 0041, decision 10), and the AI statement
+was replaced with the author's own text.
