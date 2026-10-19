@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.7.0](https://github.com/EngAbdullahHanif/mutascope/compare/v0.6.0...v0.7.0) (2026-10-19)
+
+
+### Features
+
+* **web:** /score page with fast and precise live scoring ([0283e5e](https://github.com/EngAbdullahHanif/mutascope/commit/0283e5e32445b70ae012789a0153b900898fd7dd))
+* **web:** live scoring page /score (Phase 5 Task 4) ([fded137](https://github.com/EngAbdullahHanif/mutascope/commit/fded137f40af7ffcd30e254dd08b5077ca86eb4c))
+* **web:** live-scoring client: sequence checks, SSE over fetch, reconnecting job follower, wake-up ([b4e26a1](https://github.com/EngAbdullahHanif/mutascope/commit/b4e26a1f8fdd32a283e91ed39a216d2b971f1d58))
+
+
+### Documentation
+
+* ADR 0040 live scoring page, build log 42, roadmap, design and CLAUDE.md rules ([c7f4cf4](https://github.com/EngAbdullahHanif/mutascope/commit/c7f4cf40d99e73ff8d96b143a0fe8c82a2604101))
+
 ## [0.6.0](https://github.com/EngAbdullahHanif/mutascope/compare/v0.5.1...v0.6.0) (2026-10-19)
 
 
