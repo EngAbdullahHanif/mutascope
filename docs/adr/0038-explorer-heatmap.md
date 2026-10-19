@@ -5,6 +5,8 @@
 - Builds on: ADR 0012 (MSA region), ADR 0025 (deployed model, out-of-fold predictions),
   ADR 0028 (bundle grids), ADR 0037 (website foundation, effect scale)
 - Amends: ADR 0037, section 3 ("symmetric around 0") for quantities in DMS units
+- Addendum (2026-10-19, Phase 5 Task 6): each protein page's static text is prerendered from
+  its bundle file at build time; the grids still load in the browser (see "Addendum" at the end)
 
 ## Context
 
@@ -132,3 +134,43 @@ residues and 33 ms for the largest protein (CPU 1×).
   table and the CSV.
 - The 3D structure view (linked hover) attaches to the heatmap's hovered column in the next
   task.
+
+## Addendum (2026-10-19): prerendered text on protein pages
+
+**Change.** At build time, each `/explore/[assayId]` page reads its protein file from
+`public/data/` (the bundle `pnpm build` has just downloaded and checked against `SHA256SUMS`).
+It checks the file the way `load.ts` does: the manifest's sha256 on the gzip bytes, then the
+schema version and the generated validator. From it, the page prerenders a small summary
+(`proteinSummary` in `src/lib/explorer/landscape.ts`): the breadcrumb and title, the facts list,
+the model options, the default view's label and description, and the reason when there is no
+supervised model. The view controls are in the HTML too, disabled until the data loads. A file
+that fails a check fails the build. Nothing else moves to the server: the browser still loads
+the protein file through `loadProtein` and draws the heatmap, the side panel, the structure and
+the table from it, as sections 1–8 describe.
+
+**Why.** Phase 5 Task 6 set Lighthouse budgets (performance ≥ 0.90, accessibility ≥ 0.95,
+median of 3, mobile and desktop; ADR 0042). As built in Task 2, a protein page's HTML held only
+"Loading…". Lighthouse's mobile profile (a slow phone on slow 4G) measured
+`/explore/GFP_AEQVI_Sarkisyan_2016` at 0.81:
+
+- The footer was the largest paint, then moved down when the heatmap arrived (CLS 0.22).
+- Reserving a screen's height and prerendering the title fixed the shift (CLS 0) but left 0.83.
+  The largest paint became the model description, drawn only after the scripts, the manifest
+  and the 88 kB protein file (4.0 s simulated).
+- With the summary prerendered, the description is in the HTML. It paints 36 ms after
+  navigation (observed in Chromium at phone size, protein file held back), and the page scores
+  0.92 (0.91–0.92 over two measurements). Desktop: 0.99 before, 1.00 after.
+
+The reader gains too: the title, facts and what the colours will mean are readable at once, and
+also without script.
+
+**Same text before and after loading.** The summary is built by the same function in both
+places, from the same file. A unit test checks that the prerendered label and description equal
+the loaded default view's. All 217 pages were checked after the build: each has its manifest
+name and label in the HTML. The controls and the label line keep their positions when the data
+arrives, so the swap shifts nothing above the heatmap (CLS 0 in every Lighthouse run).
+
+**Cost.** The build reads and validates all 217 protein files (29 MB). A clean `pnpm build`
+took 7.6 s on the M4 Pro; generating the 233 static pages took 650 ms (about 505 ms before, on a
+warm build). A protein page's HTML is now about 21.5 kB (5.4 kB gzip) for GFP and for the
+largest protein alike: the summary is the same size whatever the length.

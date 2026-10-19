@@ -6,6 +6,8 @@
   ADR 0028 (bundle format, budgets, publishing), ADR 0030 (pinned by commit), ADR 0037 (site
   reads only the bundle), ADR 0038 (heatmap, summary bar, neutral point)
 - Amends: ADR 0028 (a fourth file kind; `budget.structure_bytes`)
+- Addendum (2026-10-19, Phase 5 Task 6): the viewer mounts when its box scrolls into view, not
+  as soon as the heatmap is drawn (see "Addendum" at the end)
 
 ## Context
 
@@ -138,3 +140,22 @@ assays without a structure (ADR 0003) show a message saying why, never an empty 
   `results/zero_shot/comparisons.parquet` since 1.0.0 (300 rows, was 240; build log 29 expected
   this): content, not format.
 - Not done: surfaces, side chains, ligands, multiple models or chains; SaProt is not served live.
+
+## Addendum (2026-10-19): the viewer mounts when it scrolls into view
+
+**Change.** Section 5 mounted the viewer, and so fetched its module, 3Dmol.js and the structure
+file, right after the heatmap's first frame. It now also waits for the reader to reach it:
+the Structure section renders as before (heading, colour switch, legend, notes), but the viewer's
+box is a placeholder of the same size until it comes into view (`useInView`, an
+IntersectionObserver in `src/lib/use-in-view.ts`). The heatmap's first frame still comes first.
+Once mounted, the viewer stays mounted when the reader scrolls away, so the linked hover keeps
+working in both directions. The Playwright tests scroll to the structure before using it, and a
+new test checks that nothing 3D is fetched before then.
+
+**Why.** Phase 5 Task 6 ran Lighthouse in CI (ADR 0042). GitHub's runners have no GPU, so
+3Dmol's WebGL runs in software on the main thread. Setting up the viewer was one task of up to
+0.9 s there (total blocking time 1.2 s, mobile score 0.72). A reader whose browser has no GPU
+acceleration pays the same. Most readers of a protein page look at the heatmap first, and the
+structure is below it (at 375 px, far below). With the change, the Mac's mobile Lighthouse score
+for `/explore/GFP_AEQVI_Sarkisyan_2016` went from 0.92 to 0.95 (total blocking time 236 → 13 ms),
+and a reader who never scrolls to the structure never downloads 3Dmol.js (about 160 kB gzip).

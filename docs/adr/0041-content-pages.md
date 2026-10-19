@@ -6,6 +6,8 @@
   (CV+ intervals and their test-fold coverage), ADR 0026 (Phase 3 close: the Binding weak point,
   coverage of measured variants proves nothing), ADR 0028 (bundle, `benchmarks.json`, caveat
   rule), ADR 0037 (site foundation), ADR 0039 (structure files)
+- Addendum (2026-10-19, Phase 5 Task 6): the Landing structure loads only when it is on screen
+  (see "Addendum" at the end)
 
 ## Context
 
@@ -106,3 +108,28 @@ one, or drawing two models' own intervals side by side as if that compared them.
   routes already).
 - The header's navigation is 13 px wider than a 390 px phone (an existing issue of the Task 1
   header, not changed here).
+
+## Addendum (2026-10-19): the Landing structure loads when it is on screen
+
+**Change.** Decision 8 loaded the Landing structure (its module, 3Dmol.js, the protein and
+structure files) once the browser was idle after hydration, whether or not the figure could be
+seen. The figure now holds a same-size placeholder until any part of it comes on screen
+(`useInView`, as on protein pages, ADR 0039 addendum). Only then does it load, and it still waits
+for the browser to be idle. Reduced motion is unchanged: the structure, once loaded, is a still
+image and never turns, and it follows changes to the setting. The turn is still `spin("y", 0.25)`
+and only runs while the canvas is on screen.
+
+**Why.** In CI (ADR 0042), the turning structure was the largest cost on any page. Without a GPU,
+each WebGL frame is drawn in software on the main thread. The Landing page's total blocking
+time was 7.3 s (mobile) and 1.7 s (desktop), with frames still costing 60–180 ms each 40 s after
+load. A reader with no GPU acceleration pays the same. Loading on sight spares everyone who
+never scrolls to it. On wide screens the figure is in the hero and is on screen at once, so
+nothing changes there. On a phone it sits under the introduction:
+
+- at 375 × 667 (an iPhone SE) it starts below the fold and loads only on scroll (Playwright test);
+- at 375 × 812, and on Lighthouse's 412 × 823 mobile screen, its top edge is visible at load, so
+  it loads as before.
+
+**Measured.** On the Mac (GPU), Landing scores 0.95 on mobile and 1.00 on desktop. With software
+rendering it scores 0.73 and 0.90, because the structure is on screen in both of Lighthouse's
+windows: the budgets are asserted with GPU rendering only (ADR 0042, follow-up).

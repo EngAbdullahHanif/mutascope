@@ -87,11 +87,33 @@ test("the Landing structure loads after first paint and turns", async ({ page })
   await page.goto("/", { waitUntil: "load" });
   const loadedAt = Date.now();
   const viewer = page.getByTestId("landing-structure");
+  await viewer.scrollIntoViewIfNeeded();
   await expect(viewer).toHaveAttribute("data-state", "ready", { timeout: 15_000 });
   await expect(viewer).toHaveAttribute("data-spinning", "true");
   expect(structureRequests.length).toBe(1);
   // Fetched once the page had loaded, never as part of it.
   expect(structureRequests[0]!).toBeGreaterThanOrEqual(loadedAt - 50);
+});
+
+test("on a phone the Landing structure loads only when scrolled to", async ({ page }) => {
+  const structureRequests: string[] = [];
+  page.on("request", (r) => {
+    if (r.url().includes("/data/structures/")) structureRequests.push(r.url());
+  });
+  // An iPhone SE-sized window, where the figure starts below the fold (at 375 × 812 its top
+  // edge is already on screen, and it loads at once).
+  await page.setViewportSize({ width: 375, height: 667 });
+  await page.goto("/", { waitUntil: "load" });
+  const viewer = page.getByTestId("landing-structure");
+  expect((await viewer.boundingBox())!.y).toBeGreaterThan(667);
+  // Still the placeholder after the page is idle.
+  await page.waitForTimeout(2500);
+  await expect(viewer).toHaveAttribute("data-state", "waiting");
+  expect(structureRequests).toEqual([]);
+  await viewer.scrollIntoViewIfNeeded();
+  await expect(viewer).toHaveAttribute("data-state", "ready", { timeout: 15_000 });
+  await expect(viewer).toHaveAttribute("data-spinning", "true");
+  expect(structureRequests).toHaveLength(1);
 });
 
 test("with reduced motion the structure never turns, and stops when the setting changes", async ({
@@ -100,6 +122,7 @@ test("with reduced motion the structure never turns, and stops when the setting 
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/");
   const viewer = page.getByTestId("landing-structure");
+  await viewer.scrollIntoViewIfNeeded();
   await expect(viewer).toHaveAttribute("data-state", "ready", { timeout: 15_000 });
   await expect(viewer).toHaveAttribute("data-spinning", "false");
   await page.emulateMedia({ reducedMotion: "no-preference" });

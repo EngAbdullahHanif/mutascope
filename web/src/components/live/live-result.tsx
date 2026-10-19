@@ -67,7 +67,10 @@ export function LiveResult({ data }: { data: LiveResultData }) {
       {example ? (
         <p className="text-sm text-muted-foreground">
           This is the target of a ProteinGym assay:{" "}
-          <Link href={`/explore/${example.assayId}`} className="text-primary hover:underline">
+          <Link
+            href={`/explore/${example.assayId}`}
+            className="text-primary underline underline-offset-4 hover:decoration-2"
+          >
             compare with its measurements in the Explorer
           </Link>
           .
