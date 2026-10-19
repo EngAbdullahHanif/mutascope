@@ -1,0 +1,14 @@
+{
+  "note": "Initial JavaScript per page, gzip kB (scripts/bundle-size.ts). Budgets are main's measured baseline (Phase 5 Task 6, build log 44) plus 10%, rounded up to 5 kB. Raise one only with the reason in the PR.",
+  "pages": {
+    "/": { "html": "index.html", "maxGzipKb": 220 },
+    "/explore": { "html": "explore.html", "maxGzipKb": 260 },
+    "/explore/[assayId]": { "html": "explore/GFP_AEQVI_Sarkisyan_2016.html", "maxGzipKb": 270 },
+    "/score": { "html": "score.html", "maxGzipKb": 235 },
+    "/benchmarks": { "html": "benchmarks.html", "maxGzipKb": 215 },
+    "/how-it-works": { "html": "how-it-works.html", "maxGzipKb": 215 },
+    "/about": { "html": "about.html", "maxGzipKb": 255 },
+    "404": { "html": "_not-found.html", "maxGzipKb": 215 }
+  },
+  "no3Dmol": ["/"]
+}

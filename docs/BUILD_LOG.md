@@ -3839,3 +3839,131 @@ robots.txt. Decision record: ADR 0041.
 **Follow-up (2026-10-19).** Two changes to the About page after review (commit `5f65698`): the CV
 link was dropped by choice, not for lack of a URL (ADR 0041, decision 10), and the AI statement
 was replaced with the author's own text.
+
+## Entry 44 — Website quality: Lighthouse, axe, phones, error pages (Phase 5 Task 6, 2026-10-19)
+
+**Plain-language summary.** The website is now checked for speed, accessibility and phone
+layouts on every PR. Lighthouse loads the Landing page and the GFP protein page three times
+each, as a slow phone and as a desktop, and the median must score at least 90 for performance
+and 95 for accessibility. axe checks all eight pages in light and dark for accessibility
+problems, and a test checks that no page scrolls sideways on a 375 px phone. The baseline missed
+both budgets on the protein page (mobile 0.81 / 0.92). Six fixes made the site pass without
+touching the budgets:
+
+- links in text are underlined;
+- the side panel's headings are in order;
+- its buttons are big enough to tap;
+- the header folds into a Menu button on phones;
+- the model menu fits the screen;
+- each protein page now carries its title, facts and model label in the HTML, so they appear at
+  once instead of after the data loads.
+
+Pages that crash now show a "Something went wrong / Try again" page. A size report keeps each
+page's JavaScript within budget and checks that the 3D viewer is not in the Landing page's
+first download. There are no analytics. Decision records: ADR 0042, and an addendum to ADR 0038.
+
+**The 3 most important design choices.**
+
+1. **Change the site, not the budget.** The budgets (≥ 0.90, ≥ 0.95, median of 3) were set before
+   measuring, and the Explorer missed them. The fixes went into the page itself: prerendered text
+   (ADR 0038 addendum) and a reserved height while loading. Nothing makes Lighthouse see
+   something different from what a reader gets.
+2. **Prerender only what does not need the grids.** The build reads each protein file, checked
+   like the browser checks it (sha256 against the manifest, then the validator), and puts a
+   small summary in the HTML. The heatmap, side panel, structure and table still come from the
+   file in the browser. The summary comes from one function used in both places, and a test
+   checks the prerendered label and description equal the loaded view's.
+3. **Budgets that cannot go blind.** The JavaScript budget reads what each prerendered page
+   actually loads, because Turbopack prints no sizes. The 3Dmol check fails if it can no longer
+   find 3Dmol in any chunk, rather than passing because a minifier renamed things.
+
+**Problems encountered and how they were solved.**
+
+1. **Fixing the layout shift moved the problem.** *Found:* the protein page's footer was the
+   largest paint, then jumped down when the heatmap arrived (CLS 0.22, mobile 0.81). Reserving a
+   screen's height and prerendering the title fixed the shift (CLS 0), but the score only reached
+   0.83: the largest paint became the model description, drawn after the scripts, the manifest
+   and the 88 kB protein file (4.0 s simulated). *Fix:* after asking (a change to ADR 0038's
+   loading design), the description, facts and controls are prerendered from the bundle at build
+   time. The controls are in the HTML too (disabled), because inserting them later would push
+   the label line down. *Verified:* the largest paint is the description, at 36 ms in Chromium at
+   phone size with the protein file held back. Mobile 0.92, then 0.91 on a second measurement,
+   CLS 0. All 217 pages carry their manifest name and label in the HTML.
+2. **Every page was 27 px too wide on a phone.** *Found:* the new 375 px test failed on all pages
+   (scrollWidth 402–403), and on protein pages 442: the header's five links, and the model menu
+   as wide as its longest option. *Fix:* a Menu disclosure button below 640 px (squeezing the
+   padding would still overflow at 360 px), and `max-w-full` on the menu. *Verified:* the test
+   passes on all pages and on the 3,423-residue protein. A Playwright test opens the menu,
+   follows a link and sees it close.
+3. **A careless `git checkout` while measuring the baseline.** *Found:* to measure main's
+   JavaScript sizes I stashed my work and ran `git checkout -- .` in `web/`, which also reverted
+   the uncommitted `package.json` and lockfile changes. The untracked size script was deleted in
+   the same step. *Fix:* the script was restored from a scratch copy, and the two dev
+   dependencies were re-added at the same pinned versions. *Verified:* `package.json` differs from
+   main only by `@axe-core/playwright` 4.14.0, `@lhci/cli` 0.15.1 and two scripts; no lockfile
+   entry of main's is missing (its diff's 4 "deleted" lines are realignments); `pnpm install
+   --frozen-lockfile` passes.
+
+**Supporting details.**
+
+- Lighthouse, median of 3 (M4 Pro, `next start`; performance / accessibility):
+
+  | Page | Before: mobile | Before: desktop | After: mobile | After: desktop |
+  | --- | --- | --- | --- | --- |
+  | Landing | 0.94 / 0.96 | 1.00 / 0.96 | 0.95 / 1.00 | 1.00 / 1.00 |
+  | GFP protein page | 0.81 / 0.92 | 0.99 / 0.92 | 0.92 / 1.00 | 1.00 / 1.00 |
+
+  A second full run (`make web-quality`): Landing mobile 0.94, GFP mobile 0.91 (runs 0.92, 0.91,
+  0.91). The mobile margin is small; the CI job is not required yet (ROADMAP).
+- axe violations at baseline: `link-in-text-block` on Landing, Benchmarks, How it works and the
+  protein page (both themes); `heading-order` and `target-size` (20 px rows in the top-10 lists)
+  on the protein page. Now none, on 8 pages × 2 themes.
+- Initial JavaScript, gzip, on main: Landing 195.5 kB, `/explore` 232.2, protein page 241.8,
+  `/score` 211.6, Benchmarks / How it works / 404 193.7, About 228.6. Budgets are +10%, rounded
+  up to 5 kB. This branch adds about 1 kB per page (the error boundary and the menu icons).
+  React and the Next.js runtime are about 160 kB of every page.
+- Build with prerendered protein text: clean `pnpm build` 7.6 s. Generating the 233 static pages
+  takes 650 ms (about 505 ms before, warm build). A protein page's HTML is about 21.5 kB (5.4 kB
+  gzip).
+- Tests: Vitest 143 (12 new: error pages, size script, Lighthouse summary, prerendered summary);
+  Playwright 67 + 1 skipped (27 new in `e2e/quality.spec.ts`). CI runs Playwright for the first
+  time, in the new job.
+- New dev dependencies: `@axe-core/playwright` 4.14.0, `@lhci/cli` 0.15.1 (Lighthouse 12.6.1),
+  versions checked on npm. No new GitHub Action.
+- `<protein id>` was left blank in the task; GFP (`GFP_AEQVI_Sarkisyan_2016`) was used, the
+  Landing page's first example.
+- Found and listed in the ROADMAP, not fixed: no favicon (a 404 in every page's console),
+  3Dmol's chunk has no source map, `global-error` is always light, about 13 kB of legacy
+  polyfills.
+
+**Follow-up (2026-10-19): the budgets are met on the Mac, not in CI.** The entry above reports
+the budgets as met. That was measured on the M4 Pro, which renders with its GPU. CI's first run
+scored performance 0.67 / 0.72 (mobile, Landing / Explorer) and 0.70 / 0.88 (desktop), with
+accessibility 1.00.
+
+- *Found:* the runner's CPU benchmark (2,850–3,090 against the Mac's 3,900) and its first and
+  largest paints were close to the Mac's. Total blocking time was not: Landing 7.3 s mobile and
+  1.7 s desktop, Explorer 1.2 s mobile. GitHub's runners have no GPU, so 3Dmol's WebGL runs in
+  software on the main thread: the Landing structure's turn costs 60–180 ms a frame, and the
+  Explorer viewer's setup is one task of up to 0.9 s. Software rendering on the Mac
+  (`--use-angle=swiftshader`) reproduced it.
+- *Fix (agreed in review):*
+  - the 3D views load only when on screen (ADR 0039 and 0041 addenda): the Explorer's viewer
+    when its box scrolls into view, the Landing structure when the figure is visible, never
+    turning with reduced motion;
+  - the Lighthouse budgets are asserted by `make web-quality` on a machine with GPU rendering;
+  - CI records and reports its scores as "no-GPU runner" and fails only on axe, 375 px, the
+    end-to-end suite and the JavaScript budget (ADR 0042, follow-up).
+- *Verified, on the Mac with GPU rendering* (`make web-quality`, exit 0, median of 3): Landing
+  mobile 0.95 / 1.00, desktop 1.00 / 1.00; Explorer GFP mobile 0.95 / 1.00 (total blocking time
+  13 ms, was 236), desktop 1.00 / 1.00. Playwright 69 + 1 skipped. Two new tests: nothing 3D is
+  fetched before the structure is reached, and on a 375 × 667 phone the Landing structure loads
+  only when scrolled to. The hover-linking tests scroll to the structure first.
+- *Without a GPU,* mobile Explorer reaches about 0.87 (software rendering on the Mac, current
+  code; the same with both 3D views switched off), because software painting delays the largest
+  paint (3.9 s simulated). Landing reaches 0.73 mobile and 0.90 desktop: on Lighthouse's screens
+  the figure is visible at load, so it still loads and turns. A no-GPU runner cannot meet the
+  mobile budget, which is why CI does not assert it.
+- Also fixed: the CI artifact had no Lighthouse reports (`upload-artifact` skips hidden
+  directories), and the summary now lists the metrics behind each score and the machine's CPU
+  benchmark.

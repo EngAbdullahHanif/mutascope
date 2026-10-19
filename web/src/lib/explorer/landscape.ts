@@ -108,6 +108,51 @@ export function modelOptions(p: ProteinFile): ModelOption[] {
   return options;
 }
 
+/**
+ * What a protein page shows before its grids load: the header's facts, the model options and
+ * the default view's label. Built at build time from the bundle file (prerendered, ADR 0038
+ * addendum) and again in the browser from the same file, so the two always agree.
+ */
+export type ProteinSummary = {
+  assayId: string;
+  moleculeName: string;
+  uniprotId: string;
+  organism: string;
+  functionType: string;
+  length: number;
+  nMeasuredVariants: number;
+  nMeasuredPositions: number;
+  options: ModelOption[];
+  /** Why the assay has no supervised model, if it has none. */
+  defaultReason: string | null;
+};
+
+export function proteinSummary(p: ProteinFile): ProteinSummary {
+  const a = p.assay;
+  return {
+    assayId: a.assay_id,
+    moleculeName: a.molecule_name,
+    uniprotId: a.uniprot_id,
+    organism: a.source_organism,
+    functionType: a.function_type,
+    length: a.length,
+    nMeasuredVariants: a.n_measured_variants,
+    nMeasuredPositions: a.n_measured_positions,
+    options: modelOptions(p),
+    defaultReason: p.default.reason,
+  };
+}
+
+/** The sentence beside a view's label: what the values are and whether this model is default. */
+export function viewDescription(option: ModelOption, mode: ViewMode, nMeasured: number): string {
+  if (mode === "measured") return `Assay measurements; ${formatCount(nMeasured)} variants.`;
+  const what =
+    option.kind === "supervised"
+      ? `${option.name}, trained on this assay's measured variants; out-of-fold where measured.`
+      : `${option.name}, never trained on this assay.`;
+  return option.isDefault ? what : `${what} Not the default for this assay.`;
+}
+
 function median(values: Float32Array): number {
   const finite = Array.from(values).filter((v) => !Number.isNaN(v));
   if (finite.length === 0) return 0;

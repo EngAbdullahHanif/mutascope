@@ -74,7 +74,7 @@ export default function HomePage() {
           <figcaption className="border-t px-4 py-2 text-xs text-muted-foreground">
             AF2 structure of {featured.molecule_name} ({featured.assay_id}).{" "}
             <Link
-              className="text-primary underline-offset-4 hover:underline"
+              className="text-primary underline underline-offset-4 hover:decoration-2"
               href={`/explore/${featured.assay_id}`}
             >
               Explore its landscape
@@ -127,7 +127,10 @@ export default function HomePage() {
         </dl>
         <p className="text-sm text-muted-foreground">
           Read from the bundle&apos;s <span className="font-mono">benchmarks.json</span>.{" "}
-          <Link className="text-primary underline-offset-4 hover:underline" href="/benchmarks">
+          <Link
+            className="text-primary underline underline-offset-4 hover:decoration-2"
+            href="/benchmarks"
+          >
             Every chart, split and caveat
           </Link>
           .

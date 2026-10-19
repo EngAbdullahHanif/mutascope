@@ -93,7 +93,7 @@ function TopList({
 }) {
   return (
     <section>
-      <h3 className="mb-1.5 font-medium">{title}</h3>
+      <h2 className="mb-1.5 font-medium">{title}</h2>
       {cells.length === 0 ? (
         <p className="text-muted-foreground">No substitutions shown.</p>
       ) : (
@@ -102,7 +102,7 @@ function TopList({
             <li key={`${c.position}-${c.aa}`}>
               <button
                 type="button"
-                className="flex w-full justify-between rounded-sm px-1.5 py-0.5 text-left hover:bg-accent"
+                className="flex min-h-6 w-full items-center justify-between rounded-sm px-1.5 text-left hover:bg-accent"
                 onClick={() => onSelect({ position: c.position, aa: c.aa })}
               >
                 <span>

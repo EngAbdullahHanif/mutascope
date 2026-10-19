@@ -14,6 +14,12 @@ async function open(page: Page, assayId: string) {
   await expect(page.getByTestId("render-timing")).toHaveAttribute("data-render-ms", /\d/);
 }
 
+/** The viewer mounts only once its box scrolls into view (ADR 0039 addendum). */
+async function revealStructure(page: Page) {
+  await page.getByTestId("structure-placeholder").scrollIntoViewIfNeeded();
+  await expect(page.getByTestId("structure-viewer")).toHaveAttribute("data-state", "ready");
+}
+
 /** Moves over the 3D canvas until the viewer reports a hovered residue; returns where. */
 async function findResidueIn3D(page: Page): Promise<{ x: number; y: number; position: string }> {
   const viewer = page.getByTestId("structure-viewer");
@@ -51,10 +57,12 @@ test("hovering links the heatmap and the 3D structure both ways (PIN1)", async (
   await open(page, "PIN1_HUMAN_Tsuboyama_2023_1I6C");
   const heatmap = page.getByTestId("heatmap");
   const viewer = page.getByTestId("structure-viewer");
-  await expect(viewer).toHaveAttribute("data-state", "ready");
+  await revealStructure(page);
   await expect(page.getByTestId("structure-a11y-note")).toContainText("heatmap");
 
-  // Heatmap -> 3D: hovering residue 13's column (position 12) highlights it in the structure.
+  // Heatmap -> 3D: hovering residue 13's column (position 12) highlights it in the structure,
+  // which stays mounted after scrolling back to the heatmap.
+  await page.getByRole("application").scrollIntoViewIfNeeded();
   const grid = (await page.getByRole("application").boundingBox())!;
   const zoom = Number(await heatmap.getAttribute("data-zoom"));
   await page.mouse.move(grid.x + 12.5 * zoom, grid.y + GRID_TOP + 5 * ROW_H);
@@ -85,8 +93,7 @@ test("a click in 3D scrolls a long heatmap to the residue (ZIKV, partial structu
   page,
 }) => {
   await open(page, "A0A140D2T1_ZIKV_Sourisseau_2019");
-  const viewer = page.getByTestId("structure-viewer");
-  await expect(viewer).toHaveAttribute("data-state", "ready");
+  await revealStructure(page);
   await expect(page.getByTestId("coverage")).toContainText("residues 291–794 of 3,423");
   const scroller = page.getByRole("application");
   expect(await scroller.evaluate((el) => el.scrollLeft)).toBe(0);
@@ -104,6 +111,25 @@ test("a click in 3D scrolls a long heatmap to the residue (ZIKV, partial structu
   const x = Number(hit.position) * zoom;
   expect(x).toBeGreaterThanOrEqual(left);
   expect(x).toBeLessThan(left + width);
+});
+
+test("the viewer and 3Dmol load only when the structure scrolls into view", async ({ page }) => {
+  const fetched: string[] = [];
+  page.on("request", (r) => {
+    if (/\/data\/structures\/|\/_next\/static\/chunks\//.test(r.url())) fetched.push(r.url());
+  });
+  // A phone-sized window: the structure starts well below the fold.
+  await page.setViewportSize({ width: 375, height: 812 });
+  await open(page, "PIN1_HUMAN_Tsuboyama_2023_1I6C");
+  await page.waitForTimeout(1000);
+  await expect(page.getByTestId("structure-placeholder")).toBeAttached();
+  await expect(page.getByTestId("structure-viewer")).toHaveCount(0);
+  expect(fetched.filter((u) => u.includes("/data/structures/"))).toEqual([]);
+  const chunksBefore = fetched.length;
+  await revealStructure(page);
+  // Scrolling to it fetched the structure file and new chunks (the viewer and 3Dmol).
+  expect(fetched.filter((u) => u.includes("/data/structures/"))).toHaveLength(1);
+  expect(fetched.length).toBeGreaterThan(chunksBefore + 1);
 });
 
 test("an assay without a structure says so instead of showing an empty viewer", async ({

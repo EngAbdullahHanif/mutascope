@@ -3,7 +3,7 @@
 export PYTORCH_ENABLE_MPS_FALLBACK := 1
 
 .PHONY: setup lint fmt test test-slow pipeline pipeline-test pipeline-test-docker mlflow api web types
-.PHONY: api-image pipeline-image images test-container web-check web-e2e
+.PHONY: api-image pipeline-image images test-container web-check web-e2e web-quality
 
 setup:
 	uv sync --all-extras
@@ -88,6 +88,17 @@ web-check: require-web
 # chromium` once).
 web-e2e: require-web
 	cd web && pnpm test:e2e
+
+# The website's quality gate (`make web-check` first): the JavaScript size budget, Playwright
+# (axe, 375 px, end-to-end), then Lighthouse, mobile and desktop, median of 3, with the budgets
+# asserted. Run it on a machine with GPU rendering: this is where the Lighthouse budgets are
+# enforced. CI's runners have no GPU and only record their scores (ADR 0042, follow-up).
+# Lighthouse needs Chrome; set CHROME_PATH (e.g. Playwright's Chromium) if it is not installed.
+web-quality: require-web
+	cd web && pnpm size && pnpm test:e2e
+	cd web && pnpm lighthouse; m=$$?; \
+	  pnpm lighthouse --collect.settings.preset=desktop --upload.outputDir=.lighthouseci/desktop; d=$$?; \
+	  node scripts/lighthouse-summary.ts; test $$m -eq 0 && test $$d -eq 0
 
 # API types for the frontend, from the OpenAPI schema; committed, and CI fails when they are stale.
 # Needs `pnpm install` in web/ once (pinned openapi-typescript).
