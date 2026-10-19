@@ -3,12 +3,14 @@
 Predicts the functional effect of every single amino-acid substitution in a protein and presents it as an
 interactive mutation landscape, with an honest benchmark on ProteinGym DMS assays.
 
-Status: early development (Phase 5, frontend and launch; the zero-shot benchmark is summarised in
+Status: launched. The website and the API are live; Phase 5 (frontend and launch) closes with
+this README, a demo and a write-up (the zero-shot benchmark is summarised in
 [ADR 0017](docs/adr/0017-phase-2-close.md), the supervised models in [ADR 0026](docs/adr/0026-phase-3-close.md),
 the API and its deployment in [ADR 0035](docs/adr/0035-phase-4-close.md)). See [docs/ROADMAP.md](docs/ROADMAP.md).
 
-Live API (zero-shot scoring, precomputed landscapes; it sleeps when idle, so the first request
-can take ~20 s): https://mutascope-api-2lvmztrsha-ew.a.run.app/docs
+**Live site: https://mutascope.abdullahhanif.me**
+
+Live API (zero-shot scoring, precomputed landscapes; it sleeps when idle, so the first request can take ~20 s): https://mutascope-api-2lvmztrsha-ew.a.run.app/docs
 
 ## Quick start
 
