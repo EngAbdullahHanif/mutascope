@@ -1,0 +1,292 @@
+"use client";
+
+import { CircleAlert, Info, LoaderCircle } from "lucide-react";
+import Link from "next/link";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+import { EffectLegend } from "@/components/charts/effect-legend";
+import { Button } from "@/components/ui/button";
+import { loadManifest, loadProtein } from "@/lib/bundle/load";
+import type { ProteinFile } from "@/lib/bundle/schemas.generated";
+import {
+  buildView,
+  decodeProtein,
+  formatCount,
+  positionMeans,
+  type View,
+  type ViewMode,
+} from "@/lib/explorer/landscape";
+
+import { Heatmap, type FocusCell } from "./heatmap";
+import { LandscapeTable } from "./landscape-table";
+import { SidePanel } from "./side-panel";
+
+type State =
+  | { state: "loading" }
+  | { state: "error"; message: string }
+  | { state: "ready"; protein: ProteinFile; loadedAt: number };
+
+/** One protein's landscape: loads its bundle file through the checked loader, then draws it. */
+export function ProteinExplorer({ assayId }: { assayId: string }) {
+  const [state, setState] = useState<State>({ state: "loading" });
+
+  useEffect(() => {
+    let live = true;
+    loadManifest()
+      .then((manifest) => {
+        const entry = manifest.proteins.find((p) => p.assay_id === assayId);
+        if (!entry) throw new Error(`${assayId} is not in the bundle`);
+        return loadProtein(entry);
+      })
+      .then((protein) => {
+        if (live) setState({ state: "ready", protein, loadedAt: performance.now() });
+      })
+      .catch((error: unknown) => {
+        if (live) {
+          setState({
+            state: "error",
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+      });
+    return () => {
+      live = false;
+    };
+  }, [assayId]);
+
+  if (state.state === "loading") {
+    return (
+      <p className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
+        <LoaderCircle aria-hidden className="size-4 animate-spin" />
+        Loading {assayId}…
+      </p>
+    );
+  }
+  if (state.state === "error") {
+    return (
+      <p className="flex items-center gap-2 text-sm text-destructive" role="alert">
+        <CircleAlert aria-hidden className="size-4" />
+        Could not load this protein: {state.message}
+      </p>
+    );
+  }
+  return <Loaded protein={state.protein} loadedAt={state.loadedAt} />;
+}
+
+function Loaded({ protein, loadedAt }: { protein: ProteinFile; loadedAt: number }) {
+  const landscape = useMemo(() => decodeProtein(protein), [protein]);
+  const [model, setModel] = useState(landscape.options[0]!.model);
+  const [mode, setMode] = useState<ViewMode>("predicted");
+  const [maskUnmeasured, setMaskUnmeasured] = useState(false);
+  const [focus, setFocus] = useState<FocusCell | null>(null);
+  const [showTable, setShowTable] = useState(false);
+  const view = useMemo(
+    () => buildView(landscape, { model, mode, maskUnmeasured }),
+    [landscape, model, mode, maskUnmeasured],
+  );
+  const means = useMemo(() => positionMeans(view, landscape.length), [view, landscape.length]);
+  const option = view.option;
+  const a = protein.assay;
+
+  // Timing (ADR 0038): first frame after the data loaded, then each view change.
+  const pending = useRef<{ since: number; what: "render" | "switch" } | null>({
+    since: loadedAt,
+    what: "render",
+  });
+  const [timing, setTiming] = useState<{ render?: number; switch?: number }>({});
+  const change =
+    <T,>(set: (v: T) => void) =>
+    (v: T) => {
+      pending.current = { since: performance.now(), what: "switch" };
+      set(v);
+    };
+  const onDrawn = useCallback((_: View, at: number) => {
+    const p = pending.current;
+    if (!p) return;
+    pending.current = null;
+    const ms = Math.round((at - p.since) * 10) / 10;
+    performance.measure(`mutascope:heatmap-${p.what}`, { start: p.since, end: at });
+    setTiming((t) => ({ ...t, [p.what]: ms }));
+  }, []);
+
+  return (
+    <div className="flex flex-col gap-6">
+      <header className="flex flex-col gap-2">
+        <p className="text-sm text-muted-foreground">
+          <Link href="/explore" className="text-primary hover:underline">
+            Explorer
+          </Link>{" "}
+          / <span className="font-mono">{a.assay_id}</span>
+        </p>
+        <h1 className="text-3xl font-semibold tracking-tight">{a.molecule_name}</h1>
+        <dl className="flex flex-wrap gap-x-6 gap-y-1 text-sm">
+          <Fact term="UniProt" value={a.uniprot_id} mono />
+          <Fact term="Organism" value={a.source_organism} />
+          <Fact term="Function type" value={a.function_type} />
+          <Fact term="Length" value={`${formatCount(a.length)} residues`} />
+          <Fact
+            term="Measured"
+            value={`${formatCount(a.n_measured_variants)} variants at ${formatCount(a.n_measured_positions)} residues`}
+          />
+        </dl>
+      </header>
+
+      <section
+        aria-label="View options"
+        className="flex flex-wrap items-end gap-x-6 gap-y-3 text-sm"
+      >
+        <label className="flex flex-col gap-1">
+          <span className="text-muted-foreground">Model</span>
+          <select
+            className="h-8 rounded-md border bg-background px-2"
+            value={model}
+            onChange={(e) => change(setModel)(e.target.value)}
+            data-testid="model-select"
+          >
+            {landscape.options.map((o) => (
+              <option key={o.model} value={o.model}>
+                {o.isDefault ? "Default: " : ""}
+                {o.name} — {o.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <fieldset className="flex flex-col gap-1">
+          <legend className="mb-1 text-muted-foreground">Show</legend>
+          <div className="flex h-8 overflow-hidden rounded-md border">
+            {(["predicted", "measured"] as const).map((m) => (
+              <label
+                key={m}
+                className="flex cursor-pointer items-center px-3 has-checked:bg-accent has-checked:font-medium has-focus-visible:ring-2 has-focus-visible:ring-ring"
+              >
+                <input
+                  type="radio"
+                  name="mode"
+                  value={m}
+                  checked={mode === m}
+                  onChange={() => change(setMode)(m)}
+                  className="sr-only"
+                />
+                {m === "predicted" ? "Predicted" : "Measured"}
+              </label>
+            ))}
+          </div>
+        </fieldset>
+        <label className="flex h-8 items-center gap-2">
+          <input
+            type="checkbox"
+            checked={maskUnmeasured}
+            disabled={mode === "measured"}
+            onChange={(e) => change(setMaskUnmeasured)(e.target.checked)}
+            className="size-4 accent-primary"
+          />
+          <span className={mode === "measured" ? "text-muted-foreground" : undefined}>
+            Grey out unmeasured
+          </span>
+        </label>
+      </section>
+
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <span className="rounded-sm border px-2 py-0.5 font-medium" data-testid="model-label">
+          {view.label}
+        </span>
+        <span className="text-muted-foreground">
+          {mode === "measured"
+            ? `Assay measurements; ${formatCount(a.n_measured_variants)} variants.`
+            : option.kind === "supervised"
+              ? `${option.name}, trained on this assay's measured variants; out-of-fold where measured.`
+              : `${option.name}, never trained on this assay.`}
+          {option.isDefault || mode === "measured" ? "" : " Not the default for this assay."}
+        </span>
+        {protein.default.reason ? (
+          <span className="text-muted-foreground" data-testid="default-reason">
+            No supervised model: {protein.default.reason}.
+          </span>
+        ) : null}
+      </div>
+
+      {landscape.msaRegion ? (
+        <p
+          className="flex max-w-prose gap-2 rounded-md border bg-muted/50 p-3 text-sm"
+          data-testid="msa-note"
+        >
+          <Info aria-hidden className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+          <span>
+            ESM-2&apos;s benchmark numbers for this assay come from residues{" "}
+            {landscape.msaRegion.start + 1}–{landscape.msaRegion.end}, its MSA region (marked under
+            the ruler). The landscapes here score the full target, so inside that region they differ
+            from the benchmark&apos;s scores.
+          </span>
+        </p>
+      ) : null}
+
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_14rem]">
+        <div className="flex min-w-0 flex-col gap-3">
+          <div className="flex flex-wrap items-end justify-between gap-4">
+            <EffectLegend
+              maxAbs={view.halfWidth}
+              center={view.center}
+              title={view.title}
+              decimals={view.decimals}
+              clamped
+              showMissing
+              showWildType
+              ends={view.units === "dms" ? ["Less fit", "Assay median", "Fitter"] : undefined}
+            />
+            <p className="max-w-xs text-xs text-muted-foreground">
+              {view.units === "dms"
+                ? "DMS scores have no common zero, so white is this assay's median measured score, not the wild type."
+                : "White is the wild type's own score (0). Bars: mean over each residue's substitutions."}
+            </p>
+          </div>
+          <Heatmap
+            landscape={landscape}
+            view={view}
+            means={means}
+            focus={focus}
+            onFocusChange={setFocus}
+            onDrawn={onDrawn}
+          />
+          <p
+            className="text-xs text-muted-foreground"
+            data-testid="render-timing"
+            data-render-ms={timing.render}
+            data-switch-ms={timing.switch}
+          >
+            {timing.render === undefined ? null : `Drawn ${timing.render} ms after the data loaded`}
+            {timing.switch === undefined ? null : ` · last view change ${timing.switch} ms`}
+          </p>
+        </div>
+        <SidePanel landscape={landscape} view={view} mode={mode} onSelect={setFocus} />
+      </div>
+
+      <section className="flex flex-col gap-2">
+        <div>
+          <Button
+            variant="outline"
+            size="sm"
+            aria-expanded={showTable}
+            aria-controls="landscape-table"
+            onClick={() => setShowTable(!showTable)}
+          >
+            {showTable ? "Hide" : "Show"} as a table
+          </Button>
+        </div>
+        {showTable ? (
+          <div id="landscape-table">
+            <LandscapeTable landscape={landscape} view={view} />
+          </div>
+        ) : null}
+      </section>
+    </div>
+  );
+}
+
+function Fact({ term, value, mono = false }: { term: string; value: string; mono?: boolean }) {
+  return (
+    <div className="flex gap-1.5">
+      <dt className="text-muted-foreground">{term}</dt>
+      <dd className={mono ? "font-mono" : undefined}>{value}</dd>
+    </div>
+  );
+}
