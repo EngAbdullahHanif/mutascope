@@ -1,4 +1,4 @@
-import { median, table } from "./lighthouse-summary.ts";
+import { median, metricsRow, table } from "./lighthouse-summary.ts";
 
 describe("lighthouse summary", () => {
   it("takes the median of three runs, as the assertions do", () => {
@@ -18,6 +18,21 @@ describe("lighthouse summary", () => {
     ]);
     expect(text).toBe(
       "| mobile | `/` | 0.95, 0.93, 0.94 | **0.94** | 1.00, 1.00, 1.00 | **1.00** |",
+    );
+  });
+
+  it("shows the metrics behind a median run and the machine's benchmark", () => {
+    const report = {
+      environment: { benchmarkIndex: 1234.4 },
+      audits: {
+        "first-contentful-paint": { numericValue: 752.6 },
+        "largest-contentful-paint": { numericValue: 2926 },
+        "total-blocking-time": { numericValue: 186 },
+        "cumulative-layout-shift": { numericValue: 0 },
+      },
+    };
+    expect(metricsRow("mobile", "http://127.0.0.1:3200/explore/X", report)).toBe(
+      "| mobile | `/explore/X` | 753 | 2926 | 186 | 0.000 | – | 1234 |",
     );
   });
 });
