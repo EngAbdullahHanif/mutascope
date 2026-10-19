@@ -3935,3 +3935,35 @@ first download. There are no analytics. Decision records: ADR 0042, and an adden
 - Found and listed in the ROADMAP, not fixed: no favicon (a 404 in every page's console),
   3Dmol's chunk has no source map, `global-error` is always light, about 13 kB of legacy
   polyfills.
+
+**Follow-up (2026-10-19): the budgets are met on the Mac, not in CI.** The entry above reports
+the budgets as met. That was measured on the M4 Pro, which renders with its GPU. CI's first run
+scored performance 0.67 / 0.72 (mobile, Landing / Explorer) and 0.70 / 0.88 (desktop), with
+accessibility 1.00.
+
+- *Found:* the runner's CPU benchmark (2,850–3,090 against the Mac's 3,900) and its first and
+  largest paints were close to the Mac's. Total blocking time was not: Landing 7.3 s mobile and
+  1.7 s desktop, Explorer 1.2 s mobile. GitHub's runners have no GPU, so 3Dmol's WebGL runs in
+  software on the main thread: the Landing structure's turn costs 60–180 ms a frame, and the
+  Explorer viewer's setup is one task of up to 0.9 s. Software rendering on the Mac
+  (`--use-angle=swiftshader`) reproduced it.
+- *Fix (agreed in review):*
+  - the 3D views load only when on screen (ADR 0039 and 0041 addenda): the Explorer's viewer
+    when its box scrolls into view, the Landing structure when the figure is visible, never
+    turning with reduced motion;
+  - the Lighthouse budgets are asserted by `make web-quality` on a machine with GPU rendering;
+  - CI records and reports its scores as "no-GPU runner" and fails only on axe, 375 px, the
+    end-to-end suite and the JavaScript budget (ADR 0042, follow-up).
+- *Verified, on the Mac with GPU rendering* (`make web-quality`, exit 0, median of 3): Landing
+  mobile 0.95 / 1.00, desktop 1.00 / 1.00; Explorer GFP mobile 0.95 / 1.00 (total blocking time
+  13 ms, was 236), desktop 1.00 / 1.00. Playwright 69 + 1 skipped. Two new tests: nothing 3D is
+  fetched before the structure is reached, and on a 375 × 667 phone the Landing structure loads
+  only when scrolled to. The hover-linking tests scroll to the structure first.
+- *Without a GPU,* mobile Explorer reaches about 0.87 (software rendering on the Mac, current
+  code; the same with both 3D views switched off), because software painting delays the largest
+  paint (3.9 s simulated). Landing reaches 0.73 mobile and 0.90 desktop: on Lighthouse's screens
+  the figure is visible at load, so it still loads and turns. A no-GPU runner cannot meet the
+  mobile budget, which is why CI does not assert it.
+- Also fixed: the CI artifact had no Lighthouse reports (`upload-artifact` skips hidden
+  directories), and the summary now lists the metrics behind each score and the machine's CPU
+  benchmark.
