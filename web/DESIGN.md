@@ -174,6 +174,19 @@ sequences are always mono and never hyphenated.
 - No structure: an info box saying why, never an empty panel. The panel always states that the
   3D view is not keyboard-accessible and that the heatmap and table are.
 
+## Live scoring (ADR 0040)
+
+- `/score` is the only page that calls the API. A sleeping server is a state, not an error:
+  "Waking up the server…" with a spinner, and the submit button says the same while disabled.
+- Every live result carries one label chip, `Zero-shot, <model>` (from the response), and the
+  method in words. No 3D view, no supervised model, nothing about measurements.
+- A running precise job: a `primary` progress bar with residues done / total, the connection's
+  state in words ("Connection lost. Reconnecting (attempt n)…"), unscored columns grey with a
+  "Not scored yet" legend swatch.
+- Input errors sit under the textarea (`aria-invalid`, `aria-describedby`), naming the first
+  bad residue's 1-indexed position. Other errors are one sentence saying what to do, with the
+  `Retry-After` wait as a time; the button counts down meanwhile.
+
 ## Data
 
 - Bundle files are loaded only through [`src/lib/bundle/load.ts`](src/lib/bundle/load.ts). It

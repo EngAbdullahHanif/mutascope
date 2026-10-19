@@ -326,6 +326,11 @@ measured at 20 users on 4 GiB.
       1.1.0) with 185 backbone structure files for 213 assays, every residue checked against its
       target; 3Dmol.js loaded after the heatmap, coloured by mean effect or pLDDT; hover linked
       both ways, click in 3D selects the column; no-structure message and accessibility note
+- [x] Live scoring page `/score` (Task 4, ADR 0040): fast mode (full landscape) and precise mode
+      (job over fetch-streamed SSE, filled batch by batch, reconnect with `Last-Event-ID`,
+      cancel), precise limit read from `/ready`, "Waking up the server…" on a cold start, friendly
+      429 / 503 with `Retry-After`, validation at the input; Playwright with a mocked API plus an
+      opt-in live smoke test
 - [ ] Pages: Landing, Explorer, Benchmarks, How it works (pipeline, model card, limitations), About
 - [ ] Deploy frontend (Vercel / Cloudflare Pages) on a subdomain
 - [ ] README, 2-minute demo video, write-up

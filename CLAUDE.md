@@ -420,6 +420,13 @@ Run `make lint test` before declaring any task done.
   3D selects the residue's column. They meet only through 0-indexed target positions
   (`positionOfResi` / `resiOfPosition`); state is exposed as `data-*-position` attributes, which
   tests assert on (never pixels or WebGL).
+- Live scoring (ADR 0040): `/score` is the only page that calls the API (`SITE.api`,
+  `src/lib/live/`). It pings `/health` on load ("Waking up the server…", never an error), reads
+  `precise_max_length` from `/ready` (never hard-coded), follows job streams with `fetch` and
+  reconnects with `Last-Event-ID` (the job advances only while a stream is open), and labels
+  every result `Zero-shot, <model>` from the response. The sequence goes only in request
+  bodies: never in a URL, storage, a log or analytics. Its Playwright tests mock the API; the
+  live smoke test runs only with `MUTASCOPE_LIVE_API=1`.
 - Always label results as "Supervised (n = …)" or "Zero-shot".
 
 ## CI (GitHub Actions)
@@ -493,8 +500,8 @@ one ONNX thread), GHCR visibility, the trusted-proxy log check, Sentry (no proje
 Task 1 built the site foundation (ADR 0037), Task 2 the Explorer and canvas heatmap (ADR 0038),
 Task 3 the structure view (ADR 0039): bundle format 1.1.0 (`bundle-v1.1.0`) adds 185 backbone
 structure files for the 213 assays with a structure, shown in 3Dmol.js and linked to the heatmap
-both ways. Next (ROADMAP): the Landing, Benchmarks, How it works and About pages, README, demo
-and write-up. The frontend reads the bundle from the Hub at
+both ways. Task 4 added live scoring at `/score` (ADR 0040). Next (ROADMAP): the Landing,
+Benchmarks, How it works and About pages, README, demo and write-up. The frontend reads the bundle from the Hub at
 `export.publish.revision` and must work with the API asleep (cold start ~20 s).
 Update this section at the start of each phase.
 The per-phase task checklist lives in `docs/ROADMAP.md`; mark items `[x]` there as they land.
