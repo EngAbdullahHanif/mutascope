@@ -1,9 +1,10 @@
 # Every pull request and every push to main: lint and type-check, tests with coverage, the API
 # types check, the website (lint, typecheck, unit tests, bundle download, build), both Docker
 # images built for linux/amd64, the Nextflow smoke test on 2 assays in the pipeline image, and
-# the API image's container tests. Python steps run through the Makefile, so CI runs the same
-# commands as a laptop. Branch protection requires every job here (ADR 0034), so the job names
-# are the check names: renaming one means updating the rule.
+# the API image's container tests, and the website's quality checks (Lighthouse, axe, bundle
+# size). Python steps run through the Makefile, so CI runs the same commands as a laptop. Branch
+# protection requires every job here except web-quality (ADR 0034), so the job names are the
+# check names: renaming one means updating the rule.
 # Actions are pinned by exact release tag (CLAUDE.md); Dependabot moves the pins.
 name: CI
 
@@ -132,6 +133,67 @@ jobs:
           pnpm data:fetch
           pnpm data:verify
       - run: pnpm build
+
+  # Website quality (Phase 5 Task 6, build log 44): the JavaScript size budget and no 3Dmol in
+  # the Landing page's initial JavaScript, every Playwright test (axe in light and dark, no
+  # sideways scroll at 375 px, the rest of the end-to-end suite), then Lighthouse against
+  # `next start` (median of 3, mobile and desktop; performance >= 0.90, accessibility >= 0.95).
+  # Not a required check yet. Lighthouse runs from the pinned @lhci/cli with the runner's Chrome:
+  # no Lighthouse action and no upload anywhere, only this run's artifacts.
+  web-quality:
+    name: web quality (Lighthouse, axe, bundle size)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: web
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: pnpm/action-setup@v6.1.0
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/cache@v6.1.0
+        with:
+          path: web/public/data
+          key: bundle-${{ hashFiles('web/bundle.json') }}
+      - name: Download the pinned bundle and verify SHA256SUMS
+        run: |
+          pnpm data:fetch
+          pnpm data:verify
+      - run: pnpm build
+      - name: JavaScript size budget, no 3Dmol on Landing
+        run: pnpm size
+      - name: Playwright browsers
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Playwright (axe, 375 px, end-to-end)
+        run: pnpm test:e2e
+      - name: Lighthouse, mobile
+        id: lh-mobile
+        run: pnpm lighthouse
+      - name: Lighthouse, desktop
+        if: ${{ !cancelled() && steps.lh-mobile.conclusion != 'skipped' }}
+        run: pnpm lighthouse --collect.settings.preset=desktop --upload.outputDir=.lighthouseci/desktop
+      - name: Lighthouse scores
+        if: ${{ !cancelled() }}
+        run: node scripts/lighthouse-summary.ts
+      - uses: actions/upload-artifact@v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: web-quality
+          path: |
+            web/.lighthouseci/
+            web/playwright-report/
+            web/test-results/
+            web/.next/bundle-size.md
+          if-no-files-found: ignore
 
   # The smoke test runs in the pipeline image (-profile docker,test; ADR 0007, 0033), built here
   # for the runner's architecture (linux/amd64), as `make pipeline-image` does on a laptop.
