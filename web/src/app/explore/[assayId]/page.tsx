@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 
 import { ProteinExplorer } from "@/components/explorer/protein-explorer";
-import { manifestFromDisk } from "@/lib/bundle/static-params";
+import { manifestFromDisk, proteinSummaryFromDisk } from "@/lib/bundle/static-params";
 import { pageMetadata } from "@/lib/seo";
 
 // Every protein in the pinned bundle is prerendered; any other id is a 404.
@@ -25,5 +25,6 @@ export async function generateMetadata(props: PageProps<"/explore/[assayId]">): 
 
 export default async function ProteinPage(props: PageProps<"/explore/[assayId]">) {
   const { assayId } = await props.params;
-  return <ProteinExplorer assayId={assayId} />;
+  // Static text only (header, options, default label); the grids load in the browser.
+  return <ProteinExplorer summary={proteinSummaryFromDisk(assayId)} />;
 }

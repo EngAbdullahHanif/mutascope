@@ -17,7 +17,9 @@ import {
   mutationCode,
   positionMeans,
   positionStatusFrom,
+  proteinSummary,
   viewCsv,
+  viewDescription,
 } from "./landscape";
 
 const idx = (pos: number, aa: string) => pos * N_AA + AA_ORDER.indexOf(aa);
@@ -138,6 +140,50 @@ describe("model options and labels", () => {
     const p = supervisedProtein();
     p.supervised!.n_measured = 9576;
     expect(modelOptions(p)[0]!.label).toBe("Supervised (n = 9,576)");
+  });
+});
+
+describe("prerendered summary (ADR 0038 addendum)", () => {
+  it("carries the header facts, the options and the reason for no default", () => {
+    const p = protein();
+    const s = proteinSummary(p);
+    expect(s).toMatchObject({
+      assayId: p.assay.assay_id,
+      moleculeName: p.assay.molecule_name,
+      uniprotId: p.assay.uniprot_id,
+      organism: p.assay.source_organism,
+      nMeasuredVariants: p.assay.n_measured_variants,
+      nMeasuredPositions: p.assay.n_measured_positions,
+      defaultReason: p.default.reason,
+    });
+    expect(s.options).toEqual(modelOptions(p));
+  });
+
+  it("gives the same label and description as the loaded page's default view", () => {
+    for (const p of [protein(), supervisedProtein()]) {
+      const s = proteinSummary(p);
+      const option = s.options[0]!;
+      const view = buildView(decodeProtein(p), {
+        model: option.model,
+        mode: "predicted",
+        maskUnmeasured: false,
+      });
+      expect(option.label).toBe(view.label);
+      expect(viewDescription(option, "predicted", s.nMeasuredVariants)).toBe(
+        viewDescription(view.option, "predicted", s.nMeasuredVariants),
+      );
+    }
+  });
+
+  it("describes measured, default and non-default views", () => {
+    const [ridge, esm] = modelOptions(supervisedProtein());
+    expect(viewDescription(ridge!, "predicted", 9576)).toBe(
+      "Ridge (sequence + structure), trained on this assay's measured variants; out-of-fold where measured.",
+    );
+    expect(viewDescription(esm!, "predicted", 9576)).toBe(
+      "ESM-2 650M, never trained on this assay. Not the default for this assay.",
+    );
+    expect(viewDescription(esm!, "measured", 9576)).toBe("Assay measurements; 9,576 variants.");
   });
 });
 
