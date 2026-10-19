@@ -1,16 +1,42 @@
 import type { Metadata } from "next";
 
 import { BundleStatus } from "@/components/bundle-status";
-import { PageHeader, Placeholder } from "@/components/layout/page-header";
+import { PageHeader } from "@/components/layout/page-header";
+import { pageMetadata } from "@/lib/seo";
+import { ABOUT } from "@/lib/site";
 
-export const metadata: Metadata = { title: "About" };
+const DESCRIPTION = "Who built MutaScope, and how.";
+
+export const metadata: Metadata = pageMetadata({
+  title: "About",
+  description: DESCRIPTION,
+  path: "/about",
+});
+
+const link = "text-primary underline-offset-4 hover:underline";
 
 export default function AboutPage() {
   return (
     <>
-      <PageHeader title="About">Who built MutaScope, and why.</PageHeader>
+      <PageHeader title="About" />
       <div className="grid gap-6 md:grid-cols-2">
-        <Placeholder>About text arrives in a later task.</Placeholder>
+        <div className="flex max-w-prose flex-col gap-4">
+          <p>
+            <a className={link} href={ABOUT.home}>
+              {ABOUT.home}
+            </a>
+          </p>
+          <ul className="flex flex-wrap gap-4" data-testid="about-links">
+            {ABOUT.links.map(({ label, href }) => (
+              <li key={href}>
+                <a className={link} href={href}>
+                  {label}
+                </a>
+              </li>
+            ))}
+          </ul>
+          <p data-testid="ai-statement">{ABOUT.aiStatement}</p>
+        </div>
         <BundleStatus />
       </div>
     </>
