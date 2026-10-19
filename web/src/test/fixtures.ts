@@ -158,12 +158,29 @@ export function benchmarks(): Benchmarks {
 /** A `fetch` that serves `files` by URL suffix and 404s everything else. */
 export function fakeFetch(files: Record<string, Uint8Array | string>) {
   const calls: string[] = [];
-  const fn = async (url: string): Promise<Response> => {
+  const inits: (RequestInit | undefined)[] = [];
+  const fn = async (url: string, init?: RequestInit): Promise<Response> => {
     calls.push(url);
+    inits.push(init);
+    const path = url.split("?")[0]!;
     for (const [name, body] of Object.entries(files)) {
-      if (url.endsWith(`/${name}`)) return new Response(body as BodyInit, { status: 200 });
+      if (path.endsWith(`/${name}`)) return new Response(body as BodyInit, { status: 200 });
     }
     return new Response("not found", { status: 404 });
   };
-  return Object.assign(fn, { calls });
+  return Object.assign(fn, { calls, inits });
+}
+
+/**
+ * A fetch that serves `stale` for `name` until a request bypasses the cache (`cache: "reload"`),
+ * then `fresh`: a browser holding a copy from an earlier bundle.
+ */
+export function staleCacheFetch(name: string, stale: Uint8Array, fresh: Uint8Array) {
+  const inits: (RequestInit | undefined)[] = [];
+  const fn = async (url: string, init?: RequestInit): Promise<Response> => {
+    inits.push(init);
+    if (!url.split("?")[0]!.endsWith(`/${name}`)) return new Response("not found", { status: 404 });
+    return new Response((init?.cache === "reload" ? fresh : stale) as BodyInit, { status: 200 });
+  };
+  return Object.assign(fn, { inits });
 }

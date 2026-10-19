@@ -7,8 +7,10 @@ const config: NextConfig = {
   async redirects() {
     return [{ source: "/explorer", destination: "/explore", permanent: true }];
   },
-  // The bundle under public/data is fixed by its pinned commit (bundle.json), so its files can be
-  // cached hard. A new bundle is a new deploy, and the browser revalidates after a day.
+  // Browsers keep /data files for a day without asking. That is safe because the loader's URLs
+  // name their content (src/lib/bundle/load.ts): `?v=<sha256>` for protein and structure files,
+  // `?v=<bundle revision>` for the manifest and benchmarks, so a new bundle never reads a copy
+  // cached from an old one. Unversioned URLs (as before) could mix bundles for up to a day.
   async headers() {
     return [
       {
