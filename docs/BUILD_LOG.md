@@ -3840,6 +3840,13 @@ robots.txt. Decision record: ADR 0041.
 link was dropped by choice, not for lack of a URL (ADR 0041, decision 10), and the AI statement
 was replaced with the author's own text.
 
+**Follow-up (2026-10-19): About text replaced.** The About page now shows the author's own text:
+three paragraphs with bold lead-ins ("Hi, I'm Abdullah Hanif.", "Why I built MutaScope.",
+"Let's talk.") and a links line (email as a `mailto:` link, abdullahhanif.me, GitHub, LinkedIn).
+It replaces the link to the author's site and the AI statement. The AI statement was removed by
+the author's choice: `ABOUT.aiStatement` and its test are gone (ADR 0041, decision 10). The
+Playwright test checks the three paragraphs, the bold lead-ins and the four links in order.
+
 ## Entry 44 — Website quality: Lighthouse, axe, phones, error pages (Phase 5 Task 6, 2026-10-19)
 
 **Plain-language summary.** The website is now checked for speed, accessibility and phone
