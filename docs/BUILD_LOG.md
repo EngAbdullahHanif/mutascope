@@ -4048,13 +4048,13 @@ outside any pull request. The README now says the project is launched and links 
 
 **Plain-language summary.** The README was written for a developer running the pipeline; it is
 now written for a first-time visitor. Its first screen has the live site link, a hero image
-(`docs/img/explorer.png`, captured by hand: `docs/launch/hero-image.md` says exactly what to
+(`docs/img/explorer.png`, captured by hand: says exactly what to
 capture), a one-paragraph summary and the headline results, followed by an architecture
 diagram (Mermaid), short "run it yourself" steps, links to the site, the API docs, the dataset
 and the models, a line on AI assistance and the statement that the results are not for clinical
 use. Everything operational (the pipeline steps, resuming a run, the model gate, experiment
 tracking, the benchmark harness, publishing, Docker, Foldseek) moved word for word to
-`docs/OPERATIONS.md`. `docs/launch/` holds drafts for the demo video script, a LinkedIn post and
+`docs/OPERATIONS.md`.  holds drafts for the demo video script, a LinkedIn post and
 a portfolio description.
 
 **The 3 most important design choices.**
@@ -4094,5 +4094,5 @@ a portfolio description.
   returned 200 on 2026-10-19.
 - *Loose ends (the author's):* capture `docs/img/explorer.png` before merging (until then the
   README shows a broken image); record the video; check the flags at the end of each draft in
-  `docs/launch/`. ROADMAP's "README, 2-minute demo video, write-up" stays open until the video
+  . ROADMAP's "README, 2-minute demo video, write-up" stays open until the video
   exists.
