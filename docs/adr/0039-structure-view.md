@@ -34,7 +34,9 @@ place that conversion happens) and `low_plddt_threshold` (`structure.low_plddt_t
 It is present exactly where `structure` (the features) is; the model validator enforces it.
 
 A reader can notice the change, so `SCHEMA_VERSION` is 1.1.0 (minor: a new optional file kind
-and field), with `schema/structure.schema.json`. The new bundle is tag `bundle-v1.1.0`.
+and field), with `schema/structure.schema.json`. The new bundle is tag `bundle-v1.1.0`,
+published 2026-10-19 as commit `1bfc294371d4adeb31d8613989bed9055f03409a` (the upload landed as two
+commits; the tag and the pin are the second), public, its 410 files identical to the build.
 
 ### 2. Every structure residue is checked against its assay's target (data rule 3)
 
