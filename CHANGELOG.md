@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.6.0](https://github.com/EngAbdullahHanif/mutascope/compare/v0.5.1...v0.6.0) (2026-10-19)
+
+
+### Features
+
+* AF2 structure view linked to the heatmap (bundle 1.1.0, ADR 0039) ([f5015f6](https://github.com/EngAbdullahHanif/mutascope/commit/f5015f64d91b40ad881c065c36d7928d19414c71))
+* **api:** never download, check or open the bundle's structure files ([b3efe4a](https://github.com/EngAbdullahHanif/mutascope/commit/b3efe4aca13b214b9a4bf8a7bd0fb2f59d25a117))
+* **export:** AF2 backbone structure files in bundle format 1.1.0 ([aaf977a](https://github.com/EngAbdullahHanif/mutascope/commit/aaf977a9453dffc7035e6aa7d74cc7758be24bff))
+* **web:** 3D structure view linked to the heatmap (3Dmol.js) ([620d28d](https://github.com/EngAbdullahHanif/mutascope/commit/620d28d50507abcbbdafbbe5f3651f445324d03a))
+* **web:** Explorer with protein picker and canvas mutation heatmap (Phase 5 Task 2) ([f5c2469](https://github.com/EngAbdullahHanif/mutascope/commit/f5c246970d98fe8eeef930a916556cc9a335ba19))
+
+
+### Bug Fixes
+
+* **web:** regenerate API types for bundle schema 1.1.0 (benchmarks constant) ([e19b233](https://github.com/EngAbdullahHanif/mutascope/commit/e19b2334afafeb342b58982126a7bfab413295ec))
+
+
+### Documentation
+
+* ADR 0039 structure view, AF2 licence line, DESIGN.md, roadmap, CLAUDE.md ([3889105](https://github.com/EngAbdullahHanif/mutascope/commit/38891055bdf582d0daee9e3422b094049f7c215c))
+* build log entry 41 (structure view) ([78a6d41](https://github.com/EngAbdullahHanif/mutascope/commit/78a6d41dd80f15ed4b4a60d7c50fe9de3fbcbd7e))
+
 ## [0.5.1](https://github.com/EngAbdullahHanif/mutascope/compare/v0.5.0...v0.5.1) (2026-10-18)
 
 
