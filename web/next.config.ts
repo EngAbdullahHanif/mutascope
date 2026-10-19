@@ -3,6 +3,10 @@ import type { NextConfig } from "next";
 const config: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  // The Explorer moved to /explore with the per-protein pages (ADR 0038); old links still work.
+  async redirects() {
+    return [{ source: "/explorer", destination: "/explore", permanent: true }];
+  },
   // The bundle under public/data is fixed by its pinned commit (bundle.json), so its files can be
   // cached hard. A new bundle is a new deploy, and the browser revalidates after a day.
   async headers() {

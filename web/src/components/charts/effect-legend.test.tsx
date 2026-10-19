@@ -21,6 +21,35 @@ describe("EffectLegend", () => {
   });
 });
 
+describe("EffectLegend around a centre", () => {
+  it("labels the centre and clamped ends without a sign, with the given words", () => {
+    render(
+      <EffectLegend
+        maxAbs={0.5}
+        center={1.25}
+        title="Measured DMS score"
+        clamped
+        ends={["Less fit", "Assay median", "Fitter"]}
+        showWildType
+      />,
+    );
+    for (const text of [
+      "≤ 0.75",
+      "1.25",
+      "≥ 1.75",
+      "Less fit",
+      "Assay median",
+      "Fitter",
+      "Wild type",
+    ]) {
+      expect(screen.getByText(text)).toBeInTheDocument();
+    }
+    expect(screen.getByRole("img")).toHaveAccessibleName(
+      "Colour scale for Measured DMS score: blue is less fit (≤ 0.75), white is assay median (1.25), red is fitter (≥ 1.75).",
+    );
+  });
+});
+
 describe("formatSigned", () => {
   it("uses a true minus and never signs zero", () => {
     expect(formatSigned(-0.5, 2)).toBe("−0.50");

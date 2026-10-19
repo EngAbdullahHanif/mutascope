@@ -316,9 +316,13 @@ measured at 20 users on 4 GiB.
       (`web/DESIGN.md`), layout and placeholder pages, CI `web` job
 - [x] Add `web (lint, typecheck, unit tests, build)` to the `main` ruleset's required checks;
       gzip serving of protein files checked on production (build log 39)
-- [ ] Explorer page
-- [ ] Heatmap (D3/visx, colourblind-safe diverging) linked to 3D structure (3Dmol.js); label the
-      5 proteins whose benchmark scores use the MSA region (ADR 0012)
+- [x] Explorer page (Task 2, ADR 0038): `/explore` picker (name, UniProt, function type, label),
+      `/explore/[assayId]` for all 217 assays
+- [x] Heatmap (Task 2, ADR 0038): canvas, colourblind-safe diverging scale, model switch with
+      labels, predicted / measured, unmeasured mask, mean bar, tooltip, top 10, CSV, keyboard,
+      table alternative; the 5 MSA-region proteins labelled (ADR 0012); 1,000 residues drawn in
+      ~30 ms
+- [ ] Link the heatmap to the 3D structure (3Dmol.js): hovered column ↔ residue
 - [ ] Pages: Landing, Explorer, Benchmarks, How it works (pipeline, model card, limitations), About
 - [ ] Deploy frontend (Vercel / Cloudflare Pages) on a subdomain
 - [ ] README, 2-minute demo video, write-up

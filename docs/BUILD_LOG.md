@@ -3509,3 +3509,96 @@ ADR 0037.
 - The `main` ruleset ("protect main") requires `web (lint, typecheck, unit tests, build)`
   alongside the other five checks (read through the GitHub API, 2026-10-19).
 - Loose end: the Explorer itself is next.
+
+---
+
+## Entry 40 — Explorer and mutation heatmap (Phase 5 Task 2, 2026-10-19)
+
+**Plain-language summary.** The website can now show any of the 217 assays. `/explore` lists
+them, with a search box that matches the protein name, UniProt id, function type and the default
+model's label (typing "zero-shot" leaves the 19 assays without a supervised model). Each protein
+has its own page with a heatmap: one column per residue, one row per amino acid, one coloured
+cell per substitution. Up to 68,460 cells (Zika env, 3,423 residues). The reader can switch the
+model (the default, ESM-2 650M, SaProt where there is a structure), show measured values instead
+of predictions, and grey out unmeasured substitutions. Every number on the page carries its
+label: "Supervised (n = …)", "Zero-shot" or "Measured". Hovering a cell, or moving to it with the
+arrow keys, shows the mutation, the prediction, the 80% and 90% intervals, the measured value
+and out-of-fold prediction, and what was measured at that residue. A bar above the grid shows
+each residue's mean effect. A side panel lists the ten most harmful and most tolerated
+substitutions and downloads the current view as CSV. A table shows the same numbers for screen
+readers. The five assays whose ESM-2 benchmark used only part of the protein say so. A
+1,000-residue protein is drawn in about 30 ms after its data arrives, against a 300 ms budget.
+Decision record: ADR 0038.
+
+**The 3 most important design choices.**
+
+1. **A neutral point per quantity, not 0 for everything.** Zero-shot scores are log-ratios
+   against the wild type, so 0 is the wild type and stays white. ProteinGym's DMS scores have no
+   common zero. In the bundle, 55 assays have fewer than 20% of their measured scores below 0,
+   and 56 have more than 80% below 0. Centred on 0, half the landscapes would be almost all red
+   or almost all blue. DMS-unit views (measured, and supervised predictions, which share the
+   units) are therefore centred on the assay's median measured score. Measured and predicted
+   views share one scale, and the legend says "Assay median", not "Neutral". The half-width is
+   the 99th percentile of the deviations, with the clipped ends marked "≤" / "≥", because in 44
+   assays the largest deviation is at least twice that percentile (11.1 times in Zika env).
+2. **One canvas the size of the window, drawn from a one-pixel-per-cell image.** Each view is
+   rasterised once (L × 20 pixels, coloured through a 257-step lookup table that a test keeps
+   equal to `effectColor`). Every scroll or zoom frame then scales only the visible slice onto
+   a canvas the width of the window, and draws the overlays for visible columns only. SVG would
+   be 68,000 nodes. A canvas as wide as the protein would be 82,152 px at the widest zoom, past
+   browser limits. Drawing costs the same at 37 residues as at 3,423.
+3. **Everything on the canvas is also text, with the label attached.** The focused cell is
+   described in a live region (mutation, label, model, value, intervals, measured value,
+   out-of-fold prediction, residue status, imputed structure). The tooltip, the paged table and
+   every CSV row carry the same facts and the view's label. The grid maths is pure and lives in
+   `src/lib/explorer/` (unit-tested). `mutationCode` is the only place the website writes a
+   1-indexed residue, mirroring `parse_mutation` in the Python package.
+
+**Problems encountered and how they were solved.**
+
+1. **Centring on 0 would have mislabelled half the assays.** *Found:* before writing the colour
+   code, I checked the share of measured scores below 0 in every protein file. All 9,576 of
+   Zika env's measured scores are positive (0.002 to 8.44, median 0.04), and all 224 of SCN5A's
+   are negative (−205.5 to −9.5). *Fix:* DMS-unit views are centred on the assay median
+   (design choice 1; ADR 0038 amends ADR 0037's "symmetric around 0"). *Verified:* unit tests
+   (the centre is the median; measured and supervised share centre and half-width; zero-shot
+   stays at 0), and screenshots of PIN1, MSH2, Zika env and p53 in both themes.
+2. **My first count of one-sided assays was wrong.** *Found:* while writing the ADR. The quick
+   script rounded each share with `toFixed(2)` before testing "> 0.8", so five assays just
+   above 80% (80.06% to 80.39% below 0: ARGR, DLG4, DN7A, OBSCN, SBI) printed as "0.80" and were
+   left out. It reported 51 assays above 80% negative. *Fix:* recounted on the raw fractions:
+   56, so 111 of 217 one-sided, not 106. *Verified:* the five assays listed by a check that
+   compares both tests. The ADR, DESIGN.md and this entry quote the recount, and I corrected
+   the number in the session where I had first given it.
+3. **The table said "Supervised (n = 16,749)" over measured values.** *Found:* in a screenshot
+   of MSH2 in measured mode. The table caption read the selected model's label, but the numbers
+   were the assay's own. *Fix:* a view now carries its own `label` ("Measured" for measured
+   values), and the badge, table caption, heatmap name and CSV all read that one field.
+   *Verified:* a unit test checks the three labels (supervised, zero-shot, measured), and the
+   Playwright test for PIN1 checks the badge after switching to Measured.
+
+**Supporting details.**
+
+- Render time, from the protein file loaded and validated to the first frame drawn (decode,
+  view, raster, draw). Production build on an M4 Pro, 20 cold loads per protein, median / max:
+  PIN1 (39 residues) 15.4 / 16.5 ms; MSH2 (934) 30.6 / 31.3 ms; CAR11 `Meitlis_2020_gof`
+  (1,154) 26.4 / 45.1 ms; Zika env (3,423) 56.3 / 57.2 ms. With the CPU throttled 4× in
+  Chrome: 60.7, 122.3, 100.5 and 210.1 ms (medians). A view change takes 9.1 ms (MSH2), 11.5 ms
+  (CAR11) and 32.9 ms (Zika env). The page exposes the time as `data-render-ms` and as a
+  `performance.measure`, and a Playwright test fails at 300 ms for MSH2 and CAR11, the two
+  proteins nearest 1,000 residues.
+- Routes: `/explore` and `/explore/[assayId]`, all 217 prerendered from the downloaded manifest
+  (through the same validator); any other id is a 404. `/explorer` redirects to `/explore`. The
+  bundle-status box moved to About.
+- Tests: Vitest 39 → 70 (data mapping, views, masks, extremes, cell details, CSV, raster, ruler,
+  zoom, search, lookup table, robust half-width, legend around a centre). Playwright 5 → 15:
+  three proteins with their labels and model options (PIN1, small and supervised; Zika env, the
+  largest, with its MSA note; p53 `Null_Nutlin`, zero-shot only, no structure, so no SaProt),
+  each with every request to another origin blocked. Also the picker search, keyboard
+  navigation and descriptions, the top lists and CSV (686 rows = the assay's measured
+  variants), the table, the render budget, and the redirect and 404. The suite passed 3 runs out
+  of 3.
+- No new dependencies: the canvas, the zoom and the table are plain React and DOM.
+- `make lint test`, `make web-check` and `make web-e2e` pass.
+- Loose ends: link the heatmap's hovered column to the 3D structure (next task). The view state
+  is not in the URL yet, so a shared link opens the default view.

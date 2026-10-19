@@ -7,7 +7,12 @@ import {
   EFFECT_STOPS,
   effectColor,
   effectColorAt,
+  EFFECT_MISSING_RGB,
+  LUT_STEPS,
+  effectLut,
   hexToOklab,
+  lutIndex,
+  robustHalfWidth,
   symmetricMax,
 } from "./diverging";
 
@@ -75,5 +80,48 @@ describe("effect scale", () => {
     });
     expect(tokens).toEqual([...EFFECT_STOPS]);
     expect(/--color-effect-missing:\s*(#[0-9a-f]{6});/.exec(css)?.[1]).toBe(EFFECT_MISSING);
+  });
+
+  it("robustHalfWidth covers the share q of deviations around the centre", () => {
+    const values = Float32Array.from([...Array.from({ length: 99 }, (_, i) => i / 98), 100]);
+    // 100 values, one outlier at 100: q = 0.99 reaches the 99th smallest deviation (1), not 100.
+    expect(robustHalfWidth(values, 0)).toBeCloseTo(1);
+    expect(robustHalfWidth(values, 0, 1)).toBe(100);
+    expect(robustHalfWidth(Float32Array.from([5, 5, Number.NaN]), 5)).toBe(1);
+    expect(robustHalfWidth(Float32Array.from([2, 4]), 3)).toBe(1);
+  });
+});
+
+describe("lookup table", () => {
+  const lut = effectLut();
+  const hexAt = (i: number) =>
+    `#${[lut[i * 4]!, lut[i * 4 + 1]!, lut[i * 4 + 2]!].map((c) => c.toString(16).padStart(2, "0")).join("")}`;
+
+  it("has white in the middle and the poles at the ends", () => {
+    expect(hexAt((LUT_STEPS - 1) / 2)).toBe("#ffffff");
+    expect(hexAt(0)).toBe(EFFECT_STOPS[0]);
+    expect(hexAt(LUT_STEPS - 1)).toBe(EFFECT_STOPS[10]);
+  });
+
+  it("indexes a value around its centre, clamped", () => {
+    expect(lutIndex(3, 3, 2)).toBe((LUT_STEPS - 1) / 2);
+    expect(lutIndex(1, 3, 2)).toBe(0);
+    expect(lutIndex(-50, 3, 2)).toBe(0);
+    expect(lutIndex(50, 3, 2)).toBe(LUT_STEPS - 1);
+  });
+
+  it("matches effectColor at every step (the canvas and the legend agree)", () => {
+    for (let i = 0; i < LUT_STEPS; i++) {
+      const t = (2 * i) / (LUT_STEPS - 1) - 1;
+      expect(hexAt(i)).toBe(effectColor(t, 1));
+      expect(lutIndex(t, 0, 1)).toBe(i);
+    }
+  });
+
+  it("keeps missing grey apart from every scale colour", () => {
+    const [r, g, b] = EFFECT_MISSING_RGB;
+    for (let i = 0; i < LUT_STEPS; i++) {
+      expect([lut[i * 4], lut[i * 4 + 1], lut[i * 4 + 2]]).not.toEqual([r, g, b]);
+    }
   });
 });
