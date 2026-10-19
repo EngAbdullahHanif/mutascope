@@ -269,7 +269,7 @@ export function generate(files: Record<string, JsonSchema>): string {
   ].join("\n");
 }
 
-const SOURCES = ["manifest", "benchmarks", "protein"] as const;
+const SOURCES = ["manifest", "benchmarks", "protein", "structure"] as const;
 
 function main(): void {
   const here = dirname(fileURLToPath(import.meta.url));

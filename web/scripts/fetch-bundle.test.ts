@@ -9,7 +9,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { benchmarks, fakeFetch, gzipJson, manifest, protein, sha256 } from "@/test/fixtures";
+import {
+  benchmarks,
+  fakeFetch,
+  gzipJson,
+  manifest,
+  protein,
+  sha256,
+  structure,
+  structureRef,
+} from "@/test/fixtures";
 
 import {
   BundleFetchError,
@@ -140,6 +149,58 @@ describe("fetchBundle", () => {
       fetchBundle({ ...pin, revision: "bundle-v1.0.0" }, out, { fetchFn, log: quiet }),
     ).rejects.toThrow("is not a commit");
     expect(fetchFn.calls).toEqual([]);
+  });
+});
+
+describe("structure files (ADR 0039)", () => {
+  /** A bundle whose protein points to a structure file; `edit` runs before SHA256SUMS. */
+  function withStructure(
+    edit: (files: Record<string, Uint8Array>) => void = () => {},
+    shipped: unknown = structure(),
+  ): Record<string, Uint8Array | string> & { SHA256SUMS: string } {
+    const structureGz = gzipJson(shipped);
+    const p = { ...protein(), structure_file: structureRef(structureGz) };
+    const gz = gzipJson(p);
+    const files: Record<string, Uint8Array> = {
+      "manifest.json": enc(manifest(gz)),
+      "benchmarks.json": enc(benchmarks()),
+      "proteins/TEST_HUMAN_Example_2024.json.gz": gz,
+      "structures/TEST_HUMAN.json.gz": structureGz,
+    };
+    edit(files);
+    const sums = Object.entries(files)
+      .map(([name, bytes]) => `${sha256(bytes)}  ${name}`)
+      .join("\n");
+    return { ...files, SHA256SUMS: `${sums}\n` };
+  }
+
+  it("downloads and validates them", async () => {
+    expect(await fetchBundle(pin, out, { fetchFn: fakeFetch(withStructure()), log: quiet })).toBe(
+      4,
+    );
+    expect(existsSync(join(out, "structures/TEST_HUMAN.json.gz"))).toBe(true);
+  });
+
+  it("refuses a structure file that does not match its schema", async () => {
+    const files = withStructure(() => {}, { ...structure(), sequence: "MX" });
+    await expect(fetchBundle(pin, out, { fetchFn: fakeFetch(files), log: quiet })).rejects.toThrow(
+      "structures/TEST_HUMAN.json.gz does not match the bundle schema: sequence",
+    );
+  });
+
+  it("refuses a protein whose structure reference disagrees with SHA256SUMS", async () => {
+    const files = withStructure((f) => {
+      f["structures/TEST_HUMAN.json.gz"] = gzipJson(structure("MK", { plddt: [50, 60] }));
+    });
+    await expect(fetchBundle(pin, out, { fetchFn: fakeFetch(files), log: quiet })).rejects.toThrow(
+      "TEST_HUMAN_Example_2024: structures/TEST_HUMAN.json.gz sha256 differs from SHA256SUMS",
+    );
+    const missing = withStructure((f) => {
+      delete f["structures/TEST_HUMAN.json.gz"];
+    });
+    await expect(
+      fetchBundle(pin, out, { fetchFn: fakeFetch(missing), log: quiet }),
+    ).rejects.toThrow("structures/TEST_HUMAN.json.gz is not in SHA256SUMS");
   });
 });
 

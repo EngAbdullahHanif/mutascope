@@ -10,8 +10,13 @@ A "protein" is a ProteinGym assay (217): the measured values, the supervised mod
 landscape are per assay, and assays of one UniProt entry can have different target sequences.
 
 Every input is checked against the target sequence before anything is encoded: a wild type
-that disagrees, a missing or extra substitution, or a measured value that differs between the
-processed variants and the supervised landscape fails the build (CLAUDE.md, data rule 3).
+that disagrees, a missing or extra substitution, a measured value that differs between the
+processed variants and the supervised landscape, or a structure residue that is not the
+target's residue at its mapped position fails the build (CLAUDE.md, data rule 3).
+
+Structure files (ADR 0039) are written once per PDB (:meth:`BundleWriter.add_structure`); they
+have their own size budget and do not count towards a protein file's, since the browser
+fetches them separately, after the heatmap.
 """
 
 import gzip
@@ -44,6 +49,8 @@ from mutascope.export.format import (
     MsaRegion,
     ProteinFile,
     StructureFeatures,
+    StructureFile,
+    StructureRef,
     SupervisedLandscape,
     VersionStamp,
     ZeroShotLandscape,
@@ -54,6 +61,7 @@ from mutascope.export.format import (
     quantize,
 )
 from mutascope.export.hub import CHECKSUMS_FILE, checksums
+from mutascope.export.structure import STRUCTURE_DIR, structure_path
 from mutascope.utils.io import fresh_tmp_dir, replace_dir
 from mutascope.utils.logging import get_logger
 
@@ -138,6 +146,7 @@ def build_protein(
     n_assays_for_protein: int,
     encoding: Encoding,
     version: VersionStamp,
+    structure_file: StructureRef | None = None,
 ) -> tuple[ProteinFile, SourceGrids]:
     """One assay's protein file, and the values it was encoded from.
 
@@ -158,6 +167,8 @@ def build_protein(
         n_assays_for_protein: Assays with this UniProt ID.
         encoding: Rounding settings.
         version: The bundle's version stamp.
+        structure_file: Its written structure file, already checked against the target
+            (:func:`mutascope.export.structure.check_against_target`); None without a structure.
 
     Raises:
         BundleError: An input disagrees with the target sequence or with another input.
@@ -217,6 +228,8 @@ def build_protein(
     has_structure = bool(assay["has_structure"])
     if has_structure != (structure is not None and len(structure) > 0):
         raise BundleError(f"{assay_id}: has_structure disagrees with the structure features")
+    if has_structure != (structure_file is not None):
+        raise BundleError(f"{assay_id}: has_structure disagrees with the structure file")
     info = AssayInfo(
         assay_id=assay_id,
         uniprot_id=str(assay["UniProt_ID"]),
@@ -243,6 +256,7 @@ def build_protein(
             if structure is not None and has_structure
             else None
         ),
+        structure_file=structure_file,
         zero_shot=zero,
         supervised=landscape,
         version=version,
@@ -427,14 +441,19 @@ def _structure(
     )
 
 
-def encode(protein: ProteinFile) -> bytes:
+def encode(document: ProteinFile | StructureFile) -> bytes:
     """The gzip file: compact JSON, level 9, no timestamp, so equal content gives equal bytes."""
-    return gzip.compress(protein.model_dump_json().encode(), compresslevel=9, mtime=0)
+    return gzip.compress(document.model_dump_json().encode(), compresslevel=9, mtime=0)
 
 
 def load_protein(data: bytes) -> ProteinFile:
     """Parse and validate a protein file's bytes (what a reader does)."""
     return ProteinFile.model_validate_json(gzip.decompress(data))
+
+
+def load_structure(data: bytes) -> StructureFile:
+    """Parse and validate a structure file's bytes."""
+    return StructureFile.model_validate_json(gzip.decompress(data))
 
 
 def grid(values: Any) -> FloatArray:
@@ -458,13 +477,33 @@ class BundleWriter:
     them; :meth:`finish` then refuses, and the previous bundle stays as it was.
     """
 
-    def __init__(self, out_dir: Path, *, budget_bytes: int) -> None:
+    def __init__(self, out_dir: Path, *, budget_bytes: int, structure_budget_bytes: int) -> None:
         self.out_dir, self.budget_bytes = out_dir, budget_bytes
+        self.structure_budget_bytes = structure_budget_bytes
         self.tmp = fresh_tmp_dir(out_dir)
         (self.tmp / PROTEIN_DIR).mkdir()
+        (self.tmp / STRUCTURE_DIR).mkdir()
         self.entries: list[ManifestEntry] = []
         self.raw_bytes: dict[str, int] = {}
         self.over_budget: list[tuple[str, int]] = []
+        self.structures: dict[str, tuple[str, bytes]] = {}
+        """PDB file -> (bundle path, gzip bytes) of each structure written."""
+
+    def add_structure(self, structure: StructureFile) -> tuple[str, bytes]:
+        """Write one structure file, once per PDB; returns its bundle path and bytes."""
+        written = self.structures.get(structure.pdb_file)
+        if written is not None:
+            return written
+        data = encode(structure)
+        relative = structure_path(structure.pdb_file)
+        if any(path == relative for path, _ in self.structures.values()):
+            raise BundleError(f"two PDB files would be written to {relative}")
+        (self.tmp / relative).write_bytes(data)
+        if len(data) > self.structure_budget_bytes:
+            self.over_budget.append((relative, len(data)))
+        self.structures[structure.pdb_file] = (relative, data)
+        log.info("structure_written", pdb_file=structure.pdb_file, bytes=len(data))
+        return relative, data
 
     def add(self, protein: ProteinFile) -> bytes:
         """Write one protein file; returns its bytes."""
@@ -504,10 +543,7 @@ class BundleWriter:
         if self.over_budget:
             shutil.rmtree(self.tmp)
             listed = ", ".join(f"{a} ({b:,} bytes)" for a, b in self.over_budget)
-            raise BundleError(
-                f"{len(self.over_budget)} protein files over the {self.budget_bytes:,}-byte "
-                f"budget: {listed}"
-            )
+            raise BundleError(f"{len(self.over_budget)} files over their size budget: {listed}")
         entries = sorted(self.entries, key=lambda e: e.assay_id)
         manifest = Manifest(
             version=version, proteins=entries, total_bytes=sum(e.bytes for e in entries)

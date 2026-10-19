@@ -9,11 +9,13 @@ import type {
   Benchmarks,
   Manifest,
   ProteinFile,
+  StructureFile,
+  StructureRef,
   VersionStamp,
 } from "@/lib/bundle/schemas.generated";
 
 export const version: VersionStamp = {
-  schema_version: "1.0.0",
+  schema_version: "1.1.0",
   mutascope_version: "0.1.0",
   code_version: "0".repeat(40),
   proteingym_release: "v1.3",
@@ -29,7 +31,7 @@ const grid = (fill: number | null) => ({ decimals: 2, values: Array(L * 20).fill
 
 export function protein(assayId = "TEST_HUMAN_Example_2024"): ProteinFile {
   return {
-    schema_version: "1.0.0",
+    schema_version: "1.1.0",
     assay: {
       assay_id: assayId,
       uniprot_id: "TEST_HUMAN",
@@ -50,6 +52,7 @@ export function protein(assayId = "TEST_HUMAN_Example_2024"): ProteinFile {
     msa_region: null,
     measured: grid(null),
     structure: null,
+    structure_file: null,
     zero_shot: {
       esm2_650m: {
         hf_id: "facebook/esm2_t33_650M_UR50D",
@@ -63,6 +66,44 @@ export function protein(assayId = "TEST_HUMAN_Example_2024"): ProteinFile {
   };
 }
 
+/**
+ * A backbone-only structure of `sequence`: residue `i` is numbered `firstNumber + i`, its atoms
+ * sit 1.5 Å apart along x, and its pLDDT is `plddt[i]` (default 90).
+ */
+export function structure(
+  sequence = "MK",
+  { firstNumber = 1, plddt }: { firstNumber?: number; plddt?: number[] } = {},
+): StructureFile {
+  const n = sequence.length;
+  const coordinates: number[] = [];
+  for (let i = 0; i < n; i++) {
+    for (let k = 0; k < 4; k++) coordinates.push(Math.round((i * 4 + k) * 1500), 250, -500);
+  }
+  return {
+    schema_version: "1.1.0",
+    pdb_file: "TEST_HUMAN.pdb",
+    source_sha256: "c".repeat(64),
+    chain: "A",
+    residue_numbers: Array.from({ length: n }, (_, i) => firstNumber + i),
+    sequence,
+    atoms: ["N", "CA", "C", "O"],
+    coordinates: { decimals: 3, values: coordinates },
+    plddt: { decimals: 2, values: (plddt ?? Array(n).fill(90)).map((v) => Math.round(v * 100)) },
+  };
+}
+
+/** A protein's reference to `bytes`, the gzip of a structure file. */
+export function structureRef(bytes: Uint8Array, start = 0, end = 2): StructureRef {
+  return {
+    file: "structures/TEST_HUMAN.json.gz",
+    bytes: bytes.length,
+    sha256: sha256(bytes),
+    start,
+    end,
+    low_plddt_threshold: 70,
+  };
+}
+
 export function gzipJson(value: unknown): Uint8Array {
   return new Uint8Array(gzipSync(Buffer.from(JSON.stringify(value))));
 }
@@ -73,7 +114,7 @@ export function sha256(bytes: Uint8Array): string {
 
 export function manifest(proteinBytes: Uint8Array, assayId = "TEST_HUMAN_Example_2024"): Manifest {
   return {
-    schema_version: "1.0.0",
+    schema_version: "1.1.0",
     version,
     proteins: [
       {
@@ -98,7 +139,7 @@ export function manifest(proteinBytes: Uint8Array, assayId = "TEST_HUMAN_Example
 
 export function benchmarks(): Benchmarks {
   return {
-    schema_version: "1.0.0",
+    schema_version: "1.1.0",
     version,
     deployed_model: "ridge_seq_struct",
     zero_shot_comparator: "esm2_score",

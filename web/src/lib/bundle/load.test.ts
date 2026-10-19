@@ -2,9 +2,17 @@
 // (DecompressionStream and crypto.subtle as in a browser; jsdom lacks them.)
 import { describe, expect, it } from "vitest";
 
-import { benchmarks, fakeFetch, gzipJson, manifest, protein } from "@/test/fixtures";
+import {
+  benchmarks,
+  fakeFetch,
+  gzipJson,
+  manifest,
+  protein,
+  structure,
+  structureRef,
+} from "@/test/fixtures";
 
-import { BundleLoadError, loadBenchmarks, loadManifest, loadProtein } from "./load";
+import { BundleLoadError, loadBenchmarks, loadManifest, loadProtein, loadStructure } from "./load";
 
 const enc = (v: unknown) => new TextEncoder().encode(JSON.stringify(v));
 
@@ -26,7 +34,7 @@ describe("loadManifest / loadBenchmarks", () => {
   it("refuses another schema version before checking anything else", async () => {
     const fetchFn = fakeFetch({ "manifest.json": enc({ schema_version: "2.0.0" }) });
     await expect(loadManifest(fetchFn)).rejects.toThrow(
-      'manifest.json: schema version "2.0.0"; this site reads 1.0.0',
+      'manifest.json: schema version "2.0.0"; this site reads 1.1.0',
     );
   });
 
@@ -82,5 +90,46 @@ describe("loadProtein", () => {
     await expect(loadProtein(entry, fakeFetch({ [entry.file]: gz }))).rejects.toThrow(
       /at measured\.values\.0/,
     );
+  });
+});
+
+describe("loadStructure (ADR 0039)", () => {
+  const file = "structures/TEST_HUMAN.json.gz";
+  function withStructure(shipped: unknown = structure(), start = 0, end = 2) {
+    const gz = gzipJson(shipped);
+    return { gz, p: { ...protein(), structure_file: structureRef(gz, start, end) } };
+  }
+
+  it("checks the protein file's digest, unzips and validates", async () => {
+    const { gz, p } = withStructure();
+    const fetchFn = fakeFetch({ [file]: gz });
+    const s = await loadStructure(p, fetchFn);
+    expect(s.sequence).toBe("MK");
+    expect(s.coordinates.values).toHaveLength(2 * 4 * 3);
+    expect(fetchFn.calls).toEqual([`/data/${file}`]);
+  });
+
+  it("refuses bytes that are not the ones the protein file lists", async () => {
+    const { p } = withStructure();
+    const other = gzipJson(structure("MK", { plddt: [10, 20] }));
+    await expect(loadStructure(p, fakeFetch({ [file]: other }))).rejects.toThrow(
+      `${file}: sha256 differs from the protein file`,
+    );
+  });
+
+  it("refuses a structure of other residues than the protein file says", async () => {
+    // Target "MK"; a structure of "KM" passes its schema but is not this protein's.
+    const { gz, p } = withStructure(structure("KM"));
+    await expect(loadStructure(p, fakeFetch({ [file]: gz }))).rejects.toThrow(
+      "is not residues 1–2 of TEST_HUMAN_Example_2024's target",
+    );
+  });
+
+  it("refuses a file that fails its schema, and a protein without a structure", async () => {
+    const { gz, p } = withStructure({ ...structure(), extra: 1 });
+    await expect(loadStructure(p, fakeFetch({ [file]: gz }))).rejects.toThrow(
+      /does not match the bundle schema/,
+    );
+    await expect(loadStructure(protein(), fakeFetch({}))).rejects.toThrow("has no structure");
   });
 });

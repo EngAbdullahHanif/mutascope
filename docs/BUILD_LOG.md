@@ -3602,3 +3602,101 @@ Decision record: ADR 0038.
 - `make lint test`, `make web-check` and `make web-e2e` pass.
 - Loose ends: link the heatmap's hovered column to the 3D structure (next task). The view state
   is not in the URL yet, so a shared link opens the default view.
+
+---
+
+## Entry 41 — Structure view linked to the heatmap (Phase 5 Task 3, 2026-10-19)
+
+**Plain-language summary.** Protein pages now show the protein's 3D structure next to its
+mutation heatmap. The website bundle had per-residue structure numbers but no coordinates, so a
+new bundle, `bundle-v1.1.0` (format 1.1.0), adds one small file per ProteinGym AF2 structure:
+185 files for the 213 assays that have one, 2.6 MB in all. Each keeps only what a cartoon needs:
+the backbone atoms, the residue numbers and AF2's confidence (pLDDT). While building them, every
+structure residue of every assay is checked against that assay's protein sequence, and the build
+stops on any mismatch. In the browser, the structure loads only after the heatmap is drawn, in
+3Dmol.js. Residues are coloured like the heatmap's mean bar (same model, same scale, same legend)
+or by pLDDT, and low-confidence regions are drawn as a thin trace. Pointing at a heatmap column
+marks that residue in 3D. Pointing at a residue in 3D outlines its column. Clicking a residue in
+3D scrolls the heatmap to it and selects it. The four assays without a structure say why, and
+the page says the 3D view is not keyboard-accessible: the heatmap and table are. The API serves
+no structures and never downloads or reads these files. Decision record: ADR 0039.
+
+**The 3 most important design choices.**
+
+1. **One backbone file per PDB, checked per assay.** Assays of one protein share a structure
+   (213 assays, 185 files), so each file is written once, and its sha256 sits in every protein
+   file that uses it. The residue check runs per assay, because the mapping (`pdb_range`) and the
+   target are per assay: structure residue `i` must equal `target_seq[start + i]`, and the
+   structure must have exactly `end − start` residues. The pLDDT must equal the published
+   structure features, which a different parser (biotite) read from the same PDBs in Phase 1. The
+   PDBs are read from the zip after its sha256 matches `data/manifest.yaml`, not from the
+   unverified extracted folder. Coordinates and pLDDT keep the PDB's own decimals, so they are
+   exact.
+2. **Structure files are not protein bytes.** `protein_bytes` is what the browser must download
+   before it can draw the heatmap. A structure comes later, separately. So structure files have
+   their own budget, `structure_bytes` (500,000; the largest, BRCA2 with 2,832 residues, is
+   114,664 bytes), and count towards `total_bytes` (31,837,522 of 40,000,000), which is what the
+   Hub folder and a static deployment hold. The API lists `structures/` as ignored: it is not in
+   the Hub snapshot, its checksum lines are skipped, and no structure file is opened.
+3. **The two views meet only through target positions, and expose them.** The page holds one
+   linked residue (0-indexed target position) and which view set it, so a pointer leaving one
+   view clears only its own highlight. PDB residue numbers become positions in one pair of
+   functions. Each view writes its state as data attributes (`data-highlighted-position`,
+   `data-linked-position`, `data-focus-position`, ...). The Playwright tests find a residue in
+   3D by moving the pointer until the viewer reports one, then assert on those attributes,
+   never on pixels or WebGL output.
+
+**Problems encountered and how they were solved.**
+
+1. **The backbone parser could merge two residues that share a number.** *Found:* by a unit test
+   that renumbers the last residue of a synthetic PDB to 1. The first parser grouped atoms by
+   (residue number, insertion code), so a number used again later attached that residue's atoms
+   to the earlier one. Here it failed only because the names differed ("residue 1 is both MET and
+   LEU"). With equal residue names it would have overwritten coordinates silently, or failed with
+   a misleading "appears twice". *Fix:* a residue number that comes back after other residues is
+   its own error ("appears again after others"), separate from "not strictly increasing".
+   *Verified:* two parametrised cases (a number reused, numbers decreasing); the 185 PDBs the assays use all
+   parse, and all 213 assays pass the residue check.
+2. **The 3D hover tests found no residue.** *Found:* the first Playwright run. Two of the three new
+   tests failed with "no residue found under the pointer in the 3D view", although the same scan
+   had worked in a 1280 × 1400 probe. Playwright's default viewport is 1280 × 720, so the viewer
+   was below the fold and pointer moves outside the viewport reached nothing. *Fix:* scroll the
+   viewer's canvas into view before scanning. *Verified:* 15 of 15 runs with `--repeat-each 5`;
+   the full suite 18 of 18.
+3. **Updating a ref during render.** *Found:* `pnpm lint` (react-hooks/refs). 3Dmol.js keeps the
+   hover and click handlers it is given at creation, so they call the latest props through a ref,
+   which I had assigned in the render body. *Fix:* assign it in an effect. *Verified:* lint
+   clean; the linking tests pass.
+
+**Supporting details.**
+
+- Bundle `bundle-v1.1.0` built at `3889105` (code version stamp without `-dirty`): 217 protein
+  files, 29,249,984 bytes (largest Zika env 1,154,127); 185 structure files, 2,587,538 bytes;
+  409 files in `SHA256SUMS`. Fidelity unchanged from 1.0.0 (largest |encoded − source| Spearman
+  4.30e-4 ESM-2, 6.56e-4 SaProt, 4.04e-4 ridge; coverage exact). `benchmarks.json` also gains
+  the 60 int8 comparison rows (300, was 240), as build log 29 expected. Partial structures:
+  Zika env 291–794 of 3,423, BRCA2 1–2,832 of 3,418, POLG_HCVJF 1,982–2,225 of 3,033.
+- Loading (production build, local): heatmap drawn about 150 ms after navigation; only then the
+  viewer chunk (7.0 kB) and 3Dmol.js (573 kB, 161 kB gzip) are requested, and the structure file
+  at about 460 ms. The 300 ms heatmap budget tests pass.
+- Layout at 1440 × 900: heatmap grid y 453–807, viewer from 982. The colour switch and legend sit
+  beside the viewer, not above it, so both views fit on one screen while linking.
+- Tests: Python `tests/export/test_structure.py` (parser, residue and pLDDT checks, archive
+  checksum, exact round trip) and six bundle tests (structure written once and referenced, a
+  residue mismatch, a shifted `pdb_range`, a missing PDB, pLDDT disagreement, budgets); the real
+  bundle test now checks all 213 structures (sequence = target slice) and the 3 partial ones. API:
+  structure files never required or read; snapshot `ignore_patterns`. All API tests also pass
+  against the local 1.1.0 build (golden landscapes unchanged). Web: Vitest 89 (structure
+  mapping, PDB text, colours equal to the summary bar's, coverage strip, pLDDT tokens,
+  `loadStructure`, fetch checks of structure files); Playwright 18 (PIN1 both directions and
+  click; Zika env click scrolls a 3,423-residue heatmap; p53 no structure).
+- New dependency: `3dmol` 2.5.5 (BSD-3-Clause). Licence line for the AF2 structures in
+  `docs/DATA_CARD.md` (ProteinGym, MIT; AlphaFold2, Jumper et al. 2021, parameters CC BY 4.0).
+- Published by the author with `mutascope export push` on 2026-10-19: the Hub split the upload
+  into two commits (`df77169`, then `1bfc294`), and tag `bundle-v1.1.0` resolves to `1bfc294`.
+  Checked through the Hub API without a token: public, its 410 bundle files match `build/bundle`
+  by sha256, and the 14 files outside `bundle/` are identical to `3ae7672`. Pinned in
+  `conf/export/default.yaml`, `api/app/settings.py`, `.env.example` and `web/bundle.json`. The
+  API started on it (`/ready`: schema 1.1.0, revision `1bfc294`, 217 proteins; 224 files checked,
+  no `structures/` in its snapshot). `make web-check` downloaded and verified 409 files, and
+  Playwright passed 18 of 18 on them.

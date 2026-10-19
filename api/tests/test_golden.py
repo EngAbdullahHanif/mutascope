@@ -2,7 +2,7 @@
 
 The expected values are decoded here straight from the gzip JSON, independently of the API's
 models (``value = q / 10**decimals``), and a few cells are pinned as literals read from the
-files of ``bundle-v1.0.0``, so a change in either decoding fails.
+files of ``bundle-v1.0.0`` (unchanged in ``bundle-v1.1.0``), so a change in either decoding fails.
 """
 
 import gzip

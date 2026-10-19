@@ -4,12 +4,14 @@ import { useTheme } from "next-themes";
 import {
   useCallback,
   useEffect,
+  useImperativeHandle,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type KeyboardEvent,
   type MouseEvent,
+  type Ref,
 } from "react";
 
 import { lutIndex } from "@/lib/color/diverging";
@@ -43,6 +45,12 @@ const HEIGHT = GRID_TOP + N_AA * ROW_H;
 
 export type FocusCell = { position: number; aa: number };
 
+/** What other views can ask of the heatmap (ADR 0039: a click on a residue in 3D). */
+export type HeatmapApi = {
+  /** Scroll so `position` is centred, take keyboard focus and focus that residue's cell. */
+  select: (position: number) => void;
+};
+
 type Palette = {
   background: string;
   foreground: string;
@@ -73,6 +81,11 @@ export type HeatmapProps = {
   onFocusChange: (cell: FocusCell) => void;
   /** Called once per view, with `performance.now()` after its first frame is drawn. */
   onDrawn?: (view: View, at: number) => void;
+  /** The column the pointer is over, or null when it leaves (linked views, ADR 0039). */
+  onHoverPosition?: (position: number | null) => void;
+  /** A residue another view points at (the 3D structure's hovered residue): outlined. */
+  linkedPosition?: number | null;
+  apiRef?: Ref<HeatmapApi>;
 };
 
 /**
@@ -85,7 +98,17 @@ export type HeatmapProps = {
  * Home / End the first and last residue, + / − zoom. The focused cell is described in a live
  * region (and in the tooltip), so the canvas never holds information a screen reader misses.
  */
-export function Heatmap({ landscape, view, means, focus, onFocusChange, onDrawn }: HeatmapProps) {
+export function Heatmap({
+  landscape,
+  view,
+  means,
+  focus,
+  onFocusChange,
+  onDrawn,
+  onHoverPosition,
+  linkedPosition = null,
+  apiRef,
+}: HeatmapProps) {
   const L = landscape.length;
   const scroller = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -261,6 +284,14 @@ export function Heatmap({ landscape, view, means, focus, onFocusChange, onDrawn 
       }
     }
 
+    // A residue linked from another view (3D): its whole column, bar to grid, outlined in the
+    // ring colour.
+    if (linkedPosition !== null && linkedPosition >= first && linkedPosition < last) {
+      ctx.strokeStyle = p.ring;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(xOf(linkedPosition) - 1, 1, cw + 2, HEIGHT - 2);
+    }
+
     // Hovered column, then the focused cell on top.
     if (hover && hover.position >= first && hover.position < last) {
       ctx.strokeStyle = p.foreground;
@@ -283,7 +314,53 @@ export function Heatmap({ landscape, view, means, focus, onFocusChange, onDrawn 
       drawnView.current = view;
       onDrawn?.(view, performance.now());
     }
-  }, [raster, width, scrollLeft, cw, L, landscape, means, view, hover, focus, hasFocus, onDrawn]);
+  }, [
+    raster,
+    width,
+    scrollLeft,
+    cw,
+    L,
+    landscape,
+    means,
+    view,
+    hover,
+    focus,
+    hasFocus,
+    linkedPosition,
+    onDrawn,
+  ]);
+
+  // Tell linked views which column is hovered, once per column, not per pointer move.
+  const hoverPosition = hover?.position ?? null;
+  useEffect(() => {
+    onHoverPosition?.(hoverPosition);
+  }, [hoverPosition, onHoverPosition]);
+
+  // A residue linked from 3D comes into view if it is off screen.
+  useEffect(() => {
+    const el = scroller.current;
+    if (!el || linkedPosition === null) return;
+    const x = linkedPosition * cw;
+    if (x < el.scrollLeft || x + cw > el.scrollLeft + el.clientWidth) {
+      el.scrollLeft = Math.max(0, x + cw / 2 - el.clientWidth / 2);
+    }
+  }, [linkedPosition, cw]);
+
+  useImperativeHandle(
+    apiRef,
+    () => ({
+      select: (position: number) => {
+        const el = scroller.current;
+        if (!el) return;
+        // Focus first: onFocus may pick a cell of its own, which the call below replaces.
+        el.focus({ preventScroll: true });
+        onFocusChange({ position, aa: focus?.aa ?? 0 });
+        el.scrollLeft = Math.max(0, (position + 0.5) * cw - el.clientWidth / 2);
+        setScrollLeft(el.scrollLeft);
+      },
+    }),
+    [cw, focus, onFocusChange],
+  );
 
   // Draw synchronously after layout (the first frame of a view is what we time), and again
   // whenever anything drawn changes. Colours are read from the theme tokens at draw time.
@@ -372,7 +449,14 @@ export function Heatmap({ landscape, view, means, focus, onFocusChange, onDrawn 
     : "";
 
   return (
-    <div className="relative" data-testid="heatmap" data-zoom={cw}>
+    <div
+      className="relative"
+      data-testid="heatmap"
+      data-zoom={cw}
+      data-hovered-position={hoverPosition ?? ""}
+      data-linked-position={linkedPosition ?? ""}
+      data-focus-position={focus?.position ?? ""}
+    >
       <div className="flex overflow-hidden rounded-md border bg-background">
         <div aria-hidden className="w-6 shrink-0 border-r font-mono text-xs text-muted-foreground">
           <div style={{ height: GRID_TOP }} />

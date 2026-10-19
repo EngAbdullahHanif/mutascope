@@ -319,10 +319,10 @@ export interface components {
         Benchmarks: {
             /**
              * Schema Version
-             * @default 1.0.0
+             * @default 1.1.0
              * @constant
              */
-            schema_version: "1.0.0";
+            schema_version: "1.1.0";
             version: components["schemas"]["VersionStamp"];
             /** Deployed Model */
             deployed_model: string;
