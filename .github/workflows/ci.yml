@@ -188,6 +188,8 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           name: web-quality
+          # .lighthouseci/ is a hidden directory, which upload-artifact skips by default.
+          include-hidden-files: true
           path: |
             web/.lighthouseci/
             web/playwright-report/
