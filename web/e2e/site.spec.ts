@@ -24,11 +24,14 @@ test("the header navigates to every page and marks the current one", async ({ pa
   }
 });
 
-test("every page carries the not-for-clinical-use note and the project links", async ({ page }) => {
+test("every page carries the not-for-clinical-use note, the copyright and the project links", async ({
+  page,
+}) => {
   for (const href of ["/", ...PAGES.map((p) => p.href)]) {
     await page.goto(href);
     const footer = page.getByRole("contentinfo");
     await expect(footer.getByTestId("clinical-note")).toContainText("Not for clinical use.");
+    await expect(footer.getByTestId("copyright")).toHaveText("© 2026 Abdullah Hanif");
     await expect(footer.getByRole("link", { name: "GitHub" })).toHaveAttribute(
       "href",
       "https://github.com/EngAbdullahHanif/mutascope",
