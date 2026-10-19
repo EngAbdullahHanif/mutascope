@@ -69,13 +69,29 @@ export function adrUrl(n: number): string {
   return repoFile(`docs/adr/${slug}.md`);
 }
 
-/** The About page, exactly as the author supplied it (Phase 5 Task 5). */
+/**
+ * The About page, exactly as the author supplied it (Phase 5 Task 5; text replaced 2026-10-19,
+ * ADR 0041 decision 10). Each paragraph opens with a bold lead-in.
+ */
 export const ABOUT = {
-  home: "http://abdullahhanif.me/",
+  paragraphs: [
+    {
+      lead: "Hi, I'm Abdullah Hanif.",
+      text: "I use machine learning to understand genomes and proteins, and I'm doing a Master's in Bioinformatics at Saarland University.",
+    },
+    {
+      lead: "Why I built MutaScope.",
+      text: "Protein language models are usually summarised by a single score. I wanted to see where they predict well and where they don't, so the benchmark results here come with their test setup, their uncertainty and their limits.",
+    },
+    {
+      lead: "Let's talk.",
+      text: "I'd love to join a team working on similar ideas, where machine learning meets genomics and biomedicine. If you're working on something similar, I'd love to hear from you.",
+    },
+  ],
   links: [
+    { label: "abha00004@stud.uni-saarland.de", href: "mailto:abha00004@stud.uni-saarland.de" },
+    { label: "abdullahhanif.me", href: "https://abdullahhanif.me" },
     { label: "GitHub", href: "https://github.com/EngAbdullahHanif/" },
     { label: "LinkedIn", href: "https://www.linkedin.com/in/engabdullahhanif/" },
   ],
-  aiStatement:
-    "MutaScope is my own project: the idea, the scientific design, the evaluation rules and every decision recorded in the ADRs are mine. I used Claude as an AI assistant for writing code and for reviewing my plans, and I review and test everything before it is merged.",
 } as const;
