@@ -3,8 +3,9 @@
  *
  * The site serves the bundle from its own CDN, so it works with the API asleep (ADR 0037). The
  * pin is web/bundle.json (the same commit as `export.publish.revision`). Every file is checked
- * against the bundle's SHA256SUMS of that commit, the manifest's protein digests must agree with
- * it, and manifest, benchmarks and every protein file must pass the generated Zod validators.
+ * against the bundle's SHA256SUMS of that commit, the manifest's protein digests and the protein
+ * files' structure references (ADR 0039) must agree with it, and manifest, benchmarks, every
+ * protein file and every structure file must pass the generated Zod validators.
  * Files are written to a staging directory and moved into place only when all of that passes,
  * so a failed or tampered download never leaves a partial bundle behind.
  *
@@ -23,6 +24,8 @@ import {
   BenchmarksSchema,
   ManifestSchema,
   ProteinFileSchema,
+  StructureFileSchema,
+  type ProteinFile,
 } from "../src/lib/bundle/schemas.generated.ts";
 
 export const CHECKSUMS = "SHA256SUMS";
@@ -111,10 +114,13 @@ function parseJson(name: string, bytes: Uint8Array): unknown {
 }
 
 /** What a bundle file is, by its path; anything else is only checksummed. */
-export function fileRole(name: string): "manifest" | "benchmarks" | "protein" | "schema" | "other" {
+export function fileRole(
+  name: string,
+): "manifest" | "benchmarks" | "protein" | "structure" | "schema" | "other" {
   if (name === MANIFEST) return "manifest";
   if (name === BENCHMARKS) return "benchmarks";
   if (/^proteins\/[^/]+\.json\.gz$/.test(name)) return "protein";
+  if (/^structures\/[^/]+\.json\.gz$/.test(name)) return "structure";
   if (/^schema\/[^/]+\.schema\.json$/.test(name)) return "schema";
   return "other";
 }
@@ -147,8 +153,15 @@ export function validateFile(name: string, bytes: Uint8Array): unknown {
       `${name} has schema version ${JSON.stringify(version)}; this site reads ${BUNDLE_SCHEMA_VERSION}`,
     );
   }
+  const role = fileRole(name);
   const schema =
-    name === MANIFEST ? ManifestSchema : name === BENCHMARKS ? BenchmarksSchema : ProteinFileSchema;
+    role === "manifest"
+      ? ManifestSchema
+      : role === "benchmarks"
+        ? BenchmarksSchema
+        : role === "structure"
+          ? StructureFileSchema
+          : ProteinFileSchema;
   const result = schema.safeParse(data);
   if (!result.success) {
     const first = result.error.issues[0];
@@ -172,6 +185,24 @@ export function checkManifest(manifest: unknown, sums: Map<string, string>): num
     }
   }
   return proteins.length;
+}
+
+/**
+ * A protein file's structure reference names a file in SHA256SUMS with the same digest, so the
+ * site's own check of a structure (`loadStructure`) uses the digest the bundle was published with.
+ */
+export function checkStructureRef(protein: ProteinFile, sums: Map<string, string>): void {
+  const ref = protein.structure_file;
+  if (!ref) return;
+  const listed = sums.get(ref.file);
+  if (listed === undefined) {
+    throw new BundleFetchError(`${protein.assay.assay_id}: ${ref.file} is not in ${CHECKSUMS}`);
+  }
+  if (listed !== ref.sha256) {
+    throw new BundleFetchError(
+      `${protein.assay.assay_id}: ${ref.file} sha256 differs from ${CHECKSUMS}`,
+    );
+  }
 }
 
 /**
@@ -240,6 +271,7 @@ export async function fetchBundle(
       else if (role !== "other") {
         const data = validateFile(name, bytes);
         if (role === "manifest") manifest = data;
+        if (role === "protein") checkStructureRef(data as ProteinFile, sums);
       }
       const dest = join(staging, name);
       await mkdir(dirname(dest), { recursive: true });

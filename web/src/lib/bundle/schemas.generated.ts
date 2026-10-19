@@ -3,7 +3,7 @@
 import { z } from "zod";
 
 /** The bundle schema version these validators were generated from. */
-export const BUNDLE_SCHEMA_VERSION = "1.0.0";
+export const BUNDLE_SCHEMA_VERSION = "1.1.0";
 
 /** What the protein page says about the assay (ProteinGym reference table). */
 export const AssayInfoSchema = z.strictObject({
@@ -173,6 +173,28 @@ export const StructureFeaturesSchema = z.strictObject({
 export type StructureFeatures = z.infer<typeof StructureFeaturesSchema>;
 
 /**
+ * Where a protein's AF2 structure is, and which residues of the target it models.
+ *
+ * Structure residue ``i`` (file order) is target residue ``start + i``; the builder checked
+ * every one of them against ``target_seq`` (CLAUDE.md, data rule 3). Residues outside
+ * ``start..end`` are not in the structure.
+ */
+export const StructureRefSchema = z.strictObject({
+  /** Path relative to the bundle root: ``structures/<pdb>.json.gz``. */
+  file: z.string(),
+  bytes: z.int().min(1),
+  /** Of the gzip file as stored; a reader checks it before parsing. */
+  sha256: z.string().regex(new RegExp("^[0-9a-f]{64}$")),
+  /** 0-indexed first target residue the structure models (``pdb_range`` start - 1). */
+  start: z.int().min(0),
+  /** 0-indexed, exclusive: ``end - start`` residues. */
+  end: z.int().min(1),
+  /** Residues with a lower pLDDT are low-confidence (``structure.low_plddt_threshold``). */
+  low_plddt_threshold: z.number().min(0).max(100),
+});
+export type StructureRef = z.infer<typeof StructureRefSchema>;
+
+/**
  * A ProteinGym-style aggregate (per UniProt -> per function type -> overall) with its
  * bootstrap 95% CI over assays. ``group`` is the function type when ``level`` is
  * ``function``.
@@ -264,7 +286,7 @@ export type ZeroShotLandscape = z.infer<typeof ZeroShotLandscapeSchema>;
  * Root of benchmarks.schema.json.
  */
 export const BenchmarksSchema = z.strictObject({
-  schema_version: z.literal("1.0.0").optional(),
+  schema_version: z.literal("1.1.0").optional(),
   version: VersionStampSchema,
   deployed_model: z.string(),
   zero_shot_comparator: z.string(),
@@ -293,7 +315,7 @@ export type Benchmarks = z.infer<typeof BenchmarksSchema>;
  * Root of manifest.schema.json.
  */
 export const ManifestSchema = z.strictObject({
-  schema_version: z.literal("1.0.0").optional(),
+  schema_version: z.literal("1.1.0").optional(),
   version: VersionStampSchema,
   proteins: z.array(ManifestEntrySchema),
   total_bytes: z.int().min(0),
@@ -306,16 +328,45 @@ export type Manifest = z.infer<typeof ManifestSchema>;
  * Root of protein.schema.json.
  */
 export const ProteinFileSchema = z.strictObject({
-  schema_version: z.literal("1.0.0").optional(),
+  schema_version: z.literal("1.1.0").optional(),
   assay: AssayInfoSchema,
   default: DefaultModelSchema,
   msa_region: MsaRegionSchema.nullable(),
   /** ``(L, 20)`` grid of ``DMS_score`` (higher = fitter); ``null`` where not measured. */
   measured: QuantizedSchema,
   structure: StructureFeaturesSchema.nullable(),
+  /** The AF2 structure (ADR 0039); present exactly where :attr:`structure` is. */
+  structure_file: StructureRefSchema.nullable(),
   /** By model name: ``esm2_650m`` always, ``saprot_650m_af2`` where there is a structure. */
   zero_shot: z.record(z.string(), ZeroShotLandscapeSchema),
   supervised: SupervisedLandscapeSchema.nullable(),
   version: VersionStampSchema,
 });
 export type ProteinFile = z.infer<typeof ProteinFileSchema>;
+
+/**
+ * One ProteinGym AF2 structure (matched to the DMS target sequences), backbone only.
+ *
+ * Per residue: its number and amino acid as in the PDB, the coordinates of
+ * :data:`BACKBONE_ATOMS` and AF2's pLDDT (the PDB's B-factor, the same on every atom of a
+ * residue). Side chains and hydrogens are dropped: the viewer draws a cartoon.
+ *
+ * Root of structure.schema.json.
+ */
+export const StructureFileSchema = z.strictObject({
+  schema_version: z.literal("1.1.0").optional(),
+  /** The file's name in ProteinGym's ``ProteinGym_AF2_structures.zip``. */
+  pdb_file: z.string(),
+  /** Of the PDB file the structure was read from. */
+  source_sha256: z.string().regex(new RegExp("^[0-9a-f]{64}$")),
+  chain: z.string(),
+  /** PDB residue numbers, strictly increasing. */
+  residue_numbers: z.array(z.int()),
+  sequence: z.string().regex(new RegExp("^[ACDEFGHIKLMNPQRSTVWY]+$")),
+  atoms: z.tuple([z.literal("N"), z.literal("CA"), z.literal("C"), z.literal("O")]).optional(),
+  /** Å, flattened ``(residue, atom, xyz)``: ``12 * n`` values, none null. */
+  coordinates: QuantizedSchema,
+  /** Per residue, 0-100. */
+  plddt: QuantizedSchema,
+});
+export type StructureFile = z.infer<typeof StructureFileSchema>;
