@@ -4081,8 +4081,10 @@ a portfolio description.
    so does the comment in `pipeline/modules/foldseek_3di.nf`. The section heading is unchanged,
    so `tests/data/test_three_di.py`'s check for "Installing Foldseek" still holds.
 2. *The LinkedIn draft was 1,299 characters, with no margin under 1,300.* Measured with
-   Python's `len` on the post text after the first draft. Fix: three sentences shortened, now
-   1,249, and the file records the measured count.
+   Python's `len` on the post text after the first draft. Fix: three sentences shortened, to
+   1,249. A later edit (the reproduction test's wording, "in cross-validation" beside +0.092 and
+   the author's closing line) took it to 1,320; four phrases shortened again, now 1,276. The
+   file records the measured count.
 
 **Supporting details.**
 
