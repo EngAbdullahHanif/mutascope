@@ -1,6 +1,6 @@
 /*
  * Foldseek 3Di state per structure residue. Needs the pinned Foldseek build: FOLDSEEK_BIN, or
- * `foldseek` on PATH (README, "Installing Foldseek"); the command refuses any other version.
+ * `foldseek` on PATH (docs/OPERATIONS.md, "Installing Foldseek"); the command refuses any other version.
  */
 process FOLDSEEK_3DI {
     publishDir params.processed_dir, mode: 'copy'
