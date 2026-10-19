@@ -88,9 +88,15 @@ export const ABOUT = {
       text: "I'd love to join a team working on similar ideas, where machine learning meets genomics and biomedicine. If you're working on something similar, I'd love to hear from you.",
     },
   ],
-  links: [
-    { label: "abha00004@stud.uni-saarland.de", href: "mailto:abha00004@stud.uni-saarland.de" },
-    { label: "abdullahhanif.me", href: "https://abdullahhanif.me" },
+  /** The first links line. */
+  site: { label: "abdullahhanif.me", href: "https://abdullahhanif.me" },
+  /** The second line, separated by middle dots. The address is a title, not visible text. */
+  contacts: [
+    {
+      label: "Email",
+      href: "mailto:abha00004@stud.uni-saarland.de",
+      title: "abha00004@stud.uni-saarland.de",
+    },
     { label: "GitHub", href: "https://github.com/EngAbdullahHanif/" },
     { label: "LinkedIn", href: "https://www.linkedin.com/in/engabdullahhanif/" },
   ],
