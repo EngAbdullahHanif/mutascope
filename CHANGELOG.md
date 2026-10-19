@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.8.0](https://github.com/EngAbdullahHanif/mutascope/compare/v0.7.0...v0.8.0) (2026-10-19)
+
+
+### Features
+
+* **web:** content pages (Landing, Benchmarks, How it works, About) and SEO ([1344753](https://github.com/EngAbdullahHanif/mutascope/commit/13447536dab4ded322bba8fbc40b1f4f0b31021c))
+* **web:** error boundaries, and a title for the 404 page ([e4aa084](https://github.com/EngAbdullahHanif/mutascope/commit/e4aa084c064743d9e8fd9e8ec876cd058e6a453c))
+* **web:** load the 3D views only when they come on screen ([e5f24c5](https://github.com/EngAbdullahHanif/mutascope/commit/e5f24c52d31190612ecd888226d96e5b3f539fd2))
+* **web:** prerender each protein page's text from the bundle ([ac2f963](https://github.com/EngAbdullahHanif/mutascope/commit/ac2f963537b25995b2d803dc41f493ace312c2f7))
+
+
+### Bug Fixes
+
+* **web:** fold the header links behind a Menu button below 640 px ([06ebd9e](https://github.com/EngAbdullahHanif/mutascope/commit/06ebd9e323067529389073394795023a716e5d8d))
+* **web:** underline links in text, order side-panel headings, 24 px tap targets ([09462f6](https://github.com/EngAbdullahHanif/mutascope/commit/09462f66e7066f0b4546300a74d8f97bec2b7c8a))
+
+
+### Documentation
+
+* ADR 0042 web quality checks, build log 44, roadmap and CLAUDE.md ([868060b](https://github.com/EngAbdullahHanif/mutascope/commit/868060b19331da14cc64439316e11bda97a4646e))
+* budgets met with GPU rendering, not in CI (ADR 0042 follow-up, build log 44 follow-up) ([6fa7c2e](https://github.com/EngAbdullahHanif/mutascope/commit/6fa7c2e57db594861edc95f51d1bc10a71eb30b5))
+
 ## [0.7.0](https://github.com/EngAbdullahHanif/mutascope/compare/v0.6.0...v0.7.0) (2026-10-19)
 
 
