@@ -1,287 +1,143 @@
 # MutaScope
 
-Predicts the functional effect of every single amino-acid substitution in a protein and presents it as an
-interactive mutation landscape, with an honest benchmark on ProteinGym DMS assays.
-
-Status: launched. The website and the API are live; Phase 5 (frontend and launch) closes with
-this README, a demo and a write-up (the zero-shot benchmark is summarised in
-[ADR 0017](docs/adr/0017-phase-2-close.md), the supervised models in [ADR 0026](docs/adr/0026-phase-3-close.md),
-the API and its deployment in [ADR 0035](docs/adr/0035-phase-4-close.md)). See [docs/ROADMAP.md](docs/ROADMAP.md).
-
 **Live site: https://mutascope.abdullahhanif.me**
 
-Live API (zero-shot scoring, precomputed landscapes; it sleeps when idle, so the first request can take ~20 s): https://mutascope-api-2lvmztrsha-ew.a.run.app/docs
+![The MutaScope Explorer: GFP's mutation landscape as a heatmap, linked to its AF2 structure](docs/img/explorer.png)
 
-## Quick start
+MutaScope predicts the functional effect of every single amino-acid substitution in a protein and
+shows it as an interactive mutation landscape: a heatmap of all 19 × L substitutions, linked to
+the protein's 3D structure. It covers the 217 deep mutational scanning (DMS) assays of the
+ProteinGym v1.3 substitution benchmark, with zero-shot scores from protein language models
+(ESM-2, and SaProt, which also reads the AF2 structure) and, where an assay has a structure and
+enough measurements, a supervised model trained on that assay's own data, with prediction
+intervals. Every model is benchmarked against the
+measurements, ProteinGym's way, with paired bootstrap intervals for every comparison. You can
+also paste any sequence and score it live with ESM-2 35M.
+
+## Headline results
+
+Spearman correlation between predicted and measured effect within an assay, aggregated over
+assays as ProteinGym does (per protein, per function type, then overall). Each row is a paired
+difference on the assays both models have, with its 95% paired bootstrap interval.
+
+<!-- Every number below is a row of benchmarks.json in bundle-v1.1.0 (revision 1bfc294), the rows
+the Landing and Benchmarks pages read (web/src/lib/benchmarks/select.ts), rounded as the pages
+round them. The comment in each row names its source row. -->
+
+| Comparison | Assays | Difference in Spearman | Paired 95% CI |
+| --- | ---: | ---: | ---: |
+| SaProt 650M − ESM-2 650M, zero-shot (adding structure tokens) | 213 | +0.046 | [+0.028, +0.062] <!-- zero_shot_comparisons: model_a=saprot_650m_af2, model_b=esm2_650m, split=null, metric=spearman, level=overall --> |
+| Ensemble (ESM-2 650M + SaProt) − SaProt 650M, zero-shot | 213 | +0.006 | [−0.002, +0.014] <!-- zero_shot_comparisons: model_a=ensemble_esm2_650m_saprot_650m_af2, model_b=saprot_650m_af2, split=null, metric=spearman, level=overall --> |
+| Supervised ridge (sequence + structure) − zero-shot SaProt, **contiguous** split | 213 | +0.092 | [+0.065, +0.115] <!-- supervised_comparisons: model_a=ridge_seq_struct, model_b=zero_shot_saprot_score, split=contiguous, metric=spearman, level=overall, group=null, size_bin=null --> |
+| The same, modulo split | 213 | +0.135 | [+0.109, +0.156] <!-- supervised_comparisons: model_a=ridge_seq_struct, model_b=zero_shot_saprot_score, split=modulo, metric=spearman, level=overall, group=null, size_bin=null --> |
+
+- Structure helps zero-shot: SaProt ranks variants better than ESM-2 650M of the same size.
+- The ensemble is **not** shown to beat SaProt: its interval includes 0.
+- The supervised model is trained per assay. The contiguous split holds out whole blocks of
+  positions, so it measures prediction at residues the model never saw; it is the headline.
+  On random folds, where the same positions appear in training, the gain is larger and less
+  informative.
+- Its 90% prediction intervals cover 90.8% of held-out measurements on average (contiguous
+  split, split-matched calibration), and none of the 213 assays falls more than 10 points
+  below target. <!-- calibration: scheme=contiguous, mode=scheme, level=0.9, size_bin=all; statistic=mean (0.9075), n_below (0), n_assays (213) -->
+
+Each model on its own assays, for scale (these intervals describe one model each; compare models
+only with the paired differences above):
+
+| Model | Assays | Spearman | Own 95% CI |
+| --- | ---: | ---: | ---: |
+| ESM-2 35M, wild-type marginal (the method live fast mode uses) | 217 | 0.303 | [0.277, 0.329] <!-- zero_shot_summary: model=esm2_35m_wt, split=null, metric=spearman, level=overall, group=null --> |
+| ESM-2 650M, zero-shot | 217 | 0.413 | [0.389, 0.441] <!-- zero_shot_summary: model=esm2_650m, split=null, metric=spearman, level=overall, group=null --> |
+| SaProt 650M, zero-shot | 213 | 0.460 | [0.442, 0.483] <!-- zero_shot_summary: model=saprot_650m_af2, split=null, metric=spearman, level=overall, group=null --> |
+| Supervised ridge (sequence + structure), contiguous split | 213 | 0.553 | [0.528, 0.581] <!-- supervised_summary: model=ridge_seq_struct, split=contiguous, metric=spearman, level=overall, group=null --> |
+
+Every chart, split, function type and caveat is on the
+[Benchmarks page](https://mutascope.abdullahhanif.me/benchmarks).
+
+**Not for clinical use.** These are functional effects measured in laboratory DMS assays, not
+pathogenicity, and nothing here is a clinical prediction.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    PG["ProteinGym v1.3<br/>DMS assays + AF2 structures"]
+
+    subgraph pipeline["Pipeline: Nextflow → mutascope CLI"]
+        direction TB
+        D["data<br/>download, checksum, validate,<br/>structure features, Foldseek 3Di"]
+        Z["score<br/>ESM-2, SaProt, ensemble"]
+        S["features + train<br/>ridge, LightGBM, MLP,<br/>CV+ intervals"]
+        E["eval<br/>metrics, paired bootstrap"]
+        X["export<br/>website bundle, ONNX"]
+        D --> Z --> S --> E --> X
+    end
+
+    HUB[("Hugging Face Hub<br/>dataset + bundle, model,<br/>ONNX ESM-2, pinned by commit")]
+    WEB["Website<br/>Next.js on Vercel,<br/>static landscapes"]
+    API["API<br/>FastAPI on Cloud Run,<br/>ONNX ESM-2 35M, CPU"]
+    U(("Browser"))
+
+    PG --> D
+    X --> HUB
+    HUB -- "bundle at build time" --> WEB
+    HUB -- "bundle + ONNX at image build" --> API
+    U --> WEB
+    U -- "/score only" --> API
+```
+
+- The website is static: every precomputed landscape, structure and benchmark number is a file of
+  the published bundle, so the site works while the API is asleep.
+- The API only scores sequences live. It never imports torch, runs one process on 2 vCPU, and
+  scales to zero; the first request after idle takes about 20 s.
+- Every pipeline step is a CLI command that reads and writes paths; Nextflow only calls them.
+  Inputs are pinned and checksummed, and published files are pinned by Hub commit.
+- Design decisions are recorded as ADRs in [docs/adr/](docs/adr/); the build log is in
+  [docs/BUILD_LOG.md](docs/BUILD_LOG.md).
+
+## Run it yourself
+
+Requires [uv](https://docs.astral.sh/uv/) and Python 3.11. The pipeline also needs Nextflow
+(Java 17+) and Foldseek ([install](docs/OPERATIONS.md#installing-foldseek)); the website needs
+Node 24 and pnpm.
 
 ```bash
-make setup   # uv sync --all-extras && pre-commit install
-make lint test
-make pipeline
+make setup           # uv sync --all-extras && pre-commit install
+make lint test       # ruff, pyright, pytest (under 2 min, tiny model)
+make pipeline-test   # the whole pipeline on 2 small assays with a 30 MB model
 ```
 
-Requires [uv](https://docs.astral.sh/uv/), Nextflow (Java 17+) and Foldseek (see below).
+Both download the pinned ProteinGym v1.3 release into `data/raw/` first (checked against
+`data/manifest.yaml`). The full pipeline (`make pipeline`) scores all 217 assays and takes
+hours on a laptop: masked scoring with ESM-2 650M alone is about 1 h 41 min on an M4 Pro.
 
-## Running the pipeline
-
-`pipeline/main.nf` chains the `mutascope` commands
-([ADR 0007](docs/adr/0007-pipeline-wiring-and-ci.md)):
-
-```
-DOWNLOAD -> [SUBSET] -> VALIDATE -> CLEAN, STRUCT_FEATURES, FOLDSEEK_3DI -> STRUCTURE_REPORT
-                   CLEAN, STRUCT_FEATURES, FOLDSEEK_3DI -> SCORE_ZERO_SHOT -> BENCHMARK_ZERO_SHOT
-```
-
-- `make pipeline` runs on all 217 assays. The release is downloaded once into `data/raw/` and
-  re-verified against `data/manifest.yaml` on every run. Outputs go to
-  `data/processed/{variants,structure_features,three_di}/`, and reports (validation, cleaning,
-  structure) go to `results/data/`.
-- `SCORE_ZERO_SHOT` scores every assay's single mutants, once per model and scoring method:
-  ESM-2 35M, 150M and 650M, each with the masked marginal and the wild-type marginal
-  (`--models esm2_650m --methods masked` narrows it). A score set is written to
-  `data/processed/zero_shot/<label>/`, where the label is the model name, plus `_wt` for the
-  wild-type marginal. Masked scoring covers only the positions each assay measures and is the
-  long step: about 1 h 41 min for 650M, 29 min for 150M and 19 min for 35M on an M4 Pro, against
-  under 30 s per model for the wild-type marginal. On a laptop, run it as `caffeinate -ims make pipeline` so the
-  machine does not sleep, and do not run anything else on the GPU meanwhile.
-- SaProt 650M (`saprot_650m_af2`, masked marginal only) is scored on the 213 assays with an AF2
-  structure, on the residues the structure models, in one pass per position without windows
-  (ADR 0015). It reads its structure tokens from `processed/three_di` and
-  `processed/structure_features` and takes about 1 h 45 min. Its results state 213 assays, and
-  `mutascope eval compare` compares it with ESM-2 650M on those 213.
-- `BENCHMARK_ZERO_SHOT` turns each score set into `results/zero_shot_<label>_single.parquet`
-  (per assay) and `..._summary.parquet` (ProteinGym-style aggregates with bootstrap CIs).
-- `LANDSCAPES` then fills in every residue of every assay, once per model, in the same cache
-  (`mutascope score landscapes`), and `CHECK_LANDSCAPES` fails unless every landscape is a
-  complete `(L, 20)` array (`mutascope score check-landscapes`, no model loaded). An assay whose
-  benchmark region is part of its target (five MSA-region assays for ESM-2, three
-  partial-structure assays for SaProt) also gets a full-target landscape, labelled `full`
-  ([ADR 0018](docs/adr/0018-full-landscapes.md)). On an empty cache this is about 11 h 20 min of
-  model time (SaProt 7 h 11 min); `--landscapes false` skips both steps.
-- `make pipeline-test` runs the same steps on 2 small assays, with the 30 MB `esm2_t6_8M`
-  model and both methods, and skips the 1.9 GB zero-shot archive. It writes only to `pipeline/results/`
-  (gitignored), taking about 30 s from an empty cache. CI runs it on every push.
-- `make pipeline-test-docker` runs the same smoke test in the pipeline image (`-profile
-  docker,test`; CPU-only torch and the pinned Foldseek; build it once with `make
-  pipeline-image`). Data, caches and outputs stay on the host, mounted at their own paths
-  ([ADR 0033](docs/adr/0033-docker-images.md)).
-
-### Resuming an interrupted scoring run
-
-Run the same command again. Every scored sequence is written to `data/cache/logprobs/` as soon
-as it is finished, and that directory is outside Nextflow's work directory, so a rerun (with or
-without `-resume`) reads finished assays from disk and runs the model only for the rest. At most
-the one sequence in progress is lost, which is under 7 minutes of work. The command prints how
-many assays came from the cache, and `results/data/zero_shot_run_<label>.parquet` records
-`positions_computed` per assay (0 = read from the cache)
-([ADR 0013](docs/adr/0013-benchmark-scoring-run.md)).
-
-`score landscapes` goes further: it writes the cache every `scoring.landscapes.checkpoint_tokens`
-of model work (under a minute on the 650M models), also inside one long protein, so a stop at
-any moment loses less than a minute. It logs `landscape_progress` after every write with the
-positions done, the share of the work and the estimated time remaining.
-
-### The model gate
+To run the API and the website locally:
 
 ```bash
-uv run mutascope eval model-gate \
-    --scores-dir data/processed/zero_shot/esm2_650m \
-    --precomputed-dir data/raw/proteingym_v1.3/zero_shot_substitutions_scores \
-    --reference data/raw/proteingym_v1.3/DMS_substitutions.csv --out-dir results
+make api                                  # http://localhost:7860/docs
+cd web && pnpm install && pnpm data:fetch # the pinned bundle into web/public/data/
+make web                                  # http://localhost:3000
 ```
 
-compares our scores with ProteinGym's precomputed `ESM2_650M` on the 696,311 single mutants
-(ADR 0010) and exits 1 if any assay has per-variant Spearman below 0.99 or the aggregate differs
-by more than 0.01. `make test-slow` runs the same check as a test. Add `model=esm2_35m` or
-`model=esm2_150m` (and their score directories) to gate the smaller checkpoints against
-`ESM2_35M` and `ESM2_150M`. The gate applies to masked marginals only: ProteinGym publishes no
-wild-type-marginal ESM-2 scores.
+The website calls the deployed API unless `NEXT_PUBLIC_MUTASCOPE_API_URL` points elsewhere.
 
-`model=saprot_650m_af2` gates SaProt against `SaProt_650M_AF2` on the 213 assays with a
-structure. Two of them are documented exceptions in `conf/eval/model_gate.yaml`: ProteinGym's
-scores for `POLG_HCVJF_Qi_2014` and `BRCA2_HUMAN_Erwood_2022_HEK293T` were made from wrong
-inputs (ADR 0015), which two slow tests show by reproducing them from those inputs. The gate
-covers the other 211 and fails if a listed assay starts to agree.
+Everything else (each pipeline step, resuming a long run, the model gate, experiment tracking,
+the benchmark harness, figures, publishing, Docker, Foldseek) is in
+[docs/OPERATIONS.md](docs/OPERATIONS.md).
 
-### Experiment tracking
+## Links
 
-Every `score zero-shot`, `eval zero-shot` and `eval model-gate` invocation logs one run to a
-local MLflow store, `mlruns/mlflow.db` plus `mlruns/artifacts/` (gitignored; no server and no
-account). A run holds the model name, Hub id and pinned revision, the scoring method, the git
-commit of the code, the full resolved config (`config.yaml`), the metrics, and the files the
-command wrote ([ADR 0014](docs/adr/0014-model-sizes-wt-marginal-tracking.md)).
+| | |
+| --- | --- |
+| Website | https://mutascope.abdullahhanif.me |
+| API docs (OpenAPI) | https://mutascope-api-2lvmztrsha-ew.a.run.app/docs |
+| Dataset and website bundle | [`engAbdullahHanif/mutascope-proteingym-v1.3`](https://huggingface.co/datasets/engAbdullahHanif/mutascope-proteingym-v1.3) ([data card](docs/DATA_CARD.md), [bundle card](docs/BUNDLE_CARD.md)) |
+| Supervised model | [`engAbdullahHanif/mutascope-ridge-seq-struct`](https://huggingface.co/engAbdullahHanif/mutascope-ridge-seq-struct) ([model card](docs/MODEL_CARD.md)) |
+| ONNX ESM-2 (live scoring) | [`engAbdullahHanif/mutascope-esm2-onnx`](https://huggingface.co/engAbdullahHanif/mutascope-esm2-onnx) ([model card](docs/ONNX_MODEL_CARD.md)) |
+| ProteinGym | https://proteingym.org |
+| Roadmap | [docs/ROADMAP.md](docs/ROADMAP.md) |
 
-```bash
-make mlflow          # UI on http://127.0.0.1:5001
-```
-
-`tracking.enabled=false` turns it off, and `tracking.dir=<path>` moves the store. MLflow is the
-`tracking` extra, which `make setup` installs.
-
-Hydra overrides reach every command through `--hydra_overrides`, for example
-`nextflow run pipeline/main.nf -profile local --hydra_overrides 'structure.foldseek.threads=8'`.
-
-## Exploring the data
-
-```bash
-uv run marimo edit notebooks/eda.py
-```
-
-The notebook shows assay sizes, function types, score distributions and sequence lengths for
-the processed data (run `make pipeline` first). All of its tables and charts come from
-`mutascope.eda`. [docs/DATA_CARD.md](docs/DATA_CARD.md) describes the dataset.
-
-## Benchmark harness
-
-`mutascope eval` scores predictions per assay (Spearman, AUC, MCC, NDCG@10%, top-10% recall)
-and aggregates them as ProteinGym does: per UniProt ID and function type, then per function type,
-then overall, with bootstrap 95% CIs over assays
-([ADR 0011](docs/adr/0011-benchmark-harness.md)). Run it on ProteinGym's own precomputed scores
-to check the harness against the published leaderboard:
-
-```bash
-R=data/raw/proteingym_v1.3
-uv run mutascope eval precomputed --scores-dir $R/zero_shot_substitutions_scores \
-    --reference $R/DMS_substitutions.csv --rows all --out-dir results
-uv run mutascope eval compare-leaderboard --results results/proteingym_precomputed_all.parquet
-```
-
-`--rows all` scores single and multi-mutants, as the leaderboard does; `--rows single` scores
-the 696,311 single mutants MutaScope uses. The harness gate in `tests/test_reproduction.py` runs
-the same comparison as a test whenever the release is downloaded.
-
-### Comparing models
-
-```bash
-uv run mutascope eval compare --results-dir results \
-    --reference data/raw/proteingym_v1.3/DMS_substitutions.csv \
-    --out results/zero_shot/comparisons.parquet
-```
-
-runs a paired bootstrap for every pair in `eval.comparisons`: each resample draws one set of
-assays, applies it to both score sets and recomputes the full aggregate, so the CI is of the
-difference itself. Two models scored on the same assays share most of their assay-to-assay
-spread, so their separate CIs overlap even when one is clearly better; comparisons are read
-from this file, never from two separate intervals
-([ADR 0014](docs/adr/0014-model-sizes-wt-marginal-tracking.md)).
-
-### Ensemble
-
-```bash
-E=ensemble_esm2_650m_saprot_650m_af2
-uv run mutascope score ensemble --scores-root data/processed/zero_shot \
-    --reference data/raw/proteingym_v1.3/DMS_substitutions.csv \
-    --out-dir data/processed/zero_shot model=$E
-uv run mutascope eval zero-shot --scores-dir data/processed/zero_shot/$E \
-    --variants-dir data/processed/variants \
-    --reference data/raw/proteingym_v1.3/DMS_substitutions.csv --out-dir results model=$E
-```
-
-builds the ensemble of ESM-2 650M and SaProt from their written scores: each member's scores
-are z-scored within an assay, then averaged ([ADR 0016](docs/adr/0016-ensemble-and-figures.md)).
-No model runs. It covers the 213 assays both members have. On those assays its Spearman is
-0.4663, against 0.4600 for SaProt and 0.4144 for ESM-2 650M. The paired difference is +0.0519
-(95% CI +0.0419 to +0.0615) over ESM-2 650M and +0.0063 (−0.0018 to +0.0145) over SaProt: the
-ensemble is clearly better than ESM-2, and not shown to be better than SaProt.
-
-### Figures
-
-```bash
-uv run mutascope eval shared --results-dir results \
-    --reference data/raw/proteingym_v1.3/DMS_substitutions.csv \
-    --out results/zero_shot/shared_summary.parquet
-uv run mutascope eval figures --results-dir results \
-    --comparisons results/zero_shot/comparisons.parquet \
-    --shared-summary results/zero_shot/shared_summary.parquet --out-dir results/figures
-```
-
-`eval shared` summarises the score sets in `eval.shared_summary` again on the assays all of
-them have, so they can be drawn side by side. `eval figures` then draws four figures as SVG and
-PNG, reading results files only (`conf/eval/figures.yaml` says what each shows):
-
-| Figure | Shows |
-|---|---|
-| [`model_size_vs_spearman`](results/figures/model_size_vs_spearman.svg) | ESM-2 35M, 150M and 650M on 217 assays, with the paired difference of each size step |
-| [`function_type_spearman`](results/figures/function_type_spearman.svg) | ESM-2 650M, SaProt and the ensemble per function type, on the 213 shared assays |
-| [`ensemble_gain`](results/figures/ensemble_gain.svg) | Ensemble minus each member, with paired CIs |
-| [`fast_vs_masked`](results/figures/fast_vs_masked.svg) | Masked minus wild-type marginal for the three ESM-2 sizes, with paired CIs |
-
-Grey whiskers are a score set's own CI and do not compare two score sets; coloured intervals
-are paired-bootstrap CIs of a difference. Zero-shot results on DMS assays: they describe
-functional effect in those assays, not pathogenicity. matplotlib is the `figures` extra, which
-`make setup` installs.
-
-![Zero-shot Spearman by function type](results/figures/function_type_spearman.png)
-
-## Publishing the dataset
-
-The processed dataset is on the Hugging Face Hub as
-[`engAbdullahHanif/mutascope-proteingym-v1.3`](https://huggingface.co/datasets/engAbdullahHanif/mutascope-proteingym-v1.3)
-(`publish.repo_id` in `conf/publish/hub.yaml`).
-
-`uv run mutascope data publish` stages the Hub copy in `build/hf_dataset/` (Parquet tables,
-reports, card, `provenance.json`, `SHA256SUMS`) without uploading anything. To upload it, with a
-write token in `HF_TOKEN`:
-
-```bash
-uv run mutascope data publish --push
-```
-
-A new repo is created private; an existing one keeps its visibility
-([ADR 0008](docs/adr/0008-eda-and-hub-publication.md)).
-
-## Docker
-
-Two images ([ADR 0033](docs/adr/0033-docker-images.md)), built from the repository root:
-
-```bash
-make api-image                          # mutascope-api:dev, this machine's architecture
-make api-image PLATFORM=linux/amd64     # the deployed architecture (Cloud Run)
-docker compose up                       # http://localhost:7860/docs; settings from .env
-make test-container                     # the image with 2 CPUs and 16 GB (Cloud Run has 4 GiB)
-make pipeline-image                     # mutascope-pipeline:dev, for -profile docker
-```
-
-The API image has no torch or transformers. It holds the website bundle and the fp32 ONNX
-models, fetched at the pinned commits and checked against their `SHA256SUMS` when the image is
-built. It runs offline as UID 1000, as one process (`python -m api.app.serve`), on port 7860.
-Settings are `MUTASCOPE_API_*` environment variables, all listed in `.env.example`. Copy it to
-`.env` for `docker compose`. Never put a secret in the image or in a committed file.
-
-The package's dependencies are split so that the API image can leave torch out: `mutascope`
-alone is the base the API imports, and `mutascope[pipeline]` is what the pipeline and the CLI
-need. `make setup` installs every extra.
-
-## Installing Foldseek
-
-`mutascope data foldseek-3di` needs [Foldseek](https://github.com/steineggerlab/foldseek) release
-**`10-941cd33`** exactly: 3Di tokens depend on the build, so any other version is refused
-([ADR 0006](docs/adr/0006-structure-features.md)). Homebrew has no `foldseek` formula (checked
-2026-10-10), so install the official release binary:
-
-```bash
-# macOS (universal). On Linux/amd64 (CI, Docker) use foldseek-linux-avx2.tar.gz instead.
-curl -LO https://github.com/steineggerlab/foldseek/releases/download/10-941cd33/foldseek-osx-universal.tar.gz
-shasum -a 256 foldseek-osx-universal.tar.gz
-# expect 6d8b07e188d443044f0c98db30aa3d4cca6750e97b50679372b54b45a664cae5
-tar xzf foldseek-osx-universal.tar.gz
-sudo install -m 755 foldseek/bin/foldseek /usr/local/bin/foldseek   # any directory on PATH works
-foldseek version   # must print 941cd33ff0771cd2e3f144e3293e22a2b87e9fda
-```
-
-The command finds the binary in this order:
-
-1. `FOLDSEEK_BIN`, if set (for example `export FOLDSEEK_BIN=$HOME/tools/foldseek`). It must be an
-   executable file.
-2. Otherwise, `foldseek` on `PATH`.
-
-If neither is found, the command fails before doing any work and points here. The structure
-report (`results/data/structure_report.md`) records the binary it used by version, sha256 and
-how it was found (`FOLDSEEK_BIN` or `PATH`), never by path, so the report is identical on any
-machine. The full path is kept only in `<three_di dir>/foldseek_run.json`, under the gitignored
-`data/`, for local debugging. The macOS binary
-above has sha256 `1b446bbece6b01cf0a50b28419f353522204f44a10a5872462f8ad400d9aadab`. Without
-Foldseek, `make test` still passes, because one golden test is skipped.
+Built with AI assistance (Claude); the design and decisions are my own.
 
 ## License
 
