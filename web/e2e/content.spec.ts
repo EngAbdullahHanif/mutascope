@@ -198,20 +198,28 @@ test("About has the author's text, with bold lead-ins, and links", async ({ page
     "Why I built MutaScope.",
     "Let's talk.",
   ]);
-  const links = page.getByTestId("about-links").getByRole("link");
-  await expect(links).toHaveText([
-    "abha00004@stud.uni-saarland.de",
-    "abdullahhanif.me",
-    "GitHub",
-    "LinkedIn",
-  ]);
+  const block = page.getByTestId("about-links");
+  const links = block.getByRole("link");
+  await expect(links).toHaveText(["abdullahhanif.me", "Email", "GitHub", "LinkedIn"]);
   const hrefs = await links.evaluateAll((els) => els.map((el) => el.getAttribute("href")));
   expect(hrefs).toEqual([
-    "mailto:abha00004@stud.uni-saarland.de",
     "https://abdullahhanif.me",
+    "mailto:abha00004@stud.uni-saarland.de",
     "https://github.com/EngAbdullahHanif/",
     "https://www.linkedin.com/in/engabdullahhanif/",
   ]);
+  // The address is the Email link's title, never visible text.
+  await expect(links.nth(1)).toHaveAttribute("title", "abha00004@stud.uni-saarland.de");
+  await expect(block).not.toContainText("abha00004");
+  // Two lines: the site, then Email · GitHub · LinkedIn.
+  await expect(block.locator("div")).toHaveText("abdullahhanif.me");
+  await expect(block.locator("ul")).toHaveText(/^Email\s*·\s*GitHub\s*·\s*LinkedIn$/);
+  // 32–40 px between the "Let's talk" paragraph and the links.
+  const above = (await paragraphs.last().boundingBox())!;
+  const below = (await block.boundingBox())!;
+  const gap = below.y - (above.y + above.height);
+  expect(gap).toBeGreaterThanOrEqual(32);
+  expect(gap).toBeLessThanOrEqual(40);
 });
 
 test("every page has a canonical URL and an Open Graph image on the production origin", async ({
