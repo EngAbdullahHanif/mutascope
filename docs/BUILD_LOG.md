@@ -3982,3 +3982,57 @@ passed.
   structure placeholder: they now scroll the Structure section.
 - *Verified:* 90 of 90 runs of the Landing tests and 105 of 105 of the structure and quality
   tests under the same load. Full suite 69 + 1 skipped; `make lint test` passes.
+
+---
+
+## Entry 45 — Launch checks (Phase 5 Task 7, 2026-10-19)
+
+**Plain-language summary.** The website (Vercel, https://mutascope.abdullahhanif.me) and the API
+(Cloud Run) were already live. This task added one script that checks them together, the way a
+visitor meets them: `tools/smoke/launch.py`. It wakes the API (up to 30 s for a cold start),
+loads the seven pages, checks that a protein page names its protein, sends CORS preflights from
+the site's origins and from a stranger's, and scores one substitution in fast mode from the
+site's origin. It is not a CI job, because it tests the production deployment, which changes
+outside any pull request. The README now says the project is launched and links the site.
+
+**The 3 most important design choices.**
+
+1. *Standard library only, run with `uv run python`.* The script needs nothing beyond `urllib`,
+   so it runs in the project's environment with no new dependency and no locked tool project
+   (unlike `tools/loadtest`, which needs Locust).
+2. *The sequence comes from the API, and only its length is logged.* The fast-mode request
+   scores the assay's own target sequence (from `GET /v1/proteins/<assay>`) with one
+   substitution at residue 1, so wild-type matching always passes, and neither the sequence nor
+   the mutation reaches the output (CLAUDE.md, API logs).
+3. *A refusal must be an answer.* The `https://evil.example` preflight passes only if the API
+   answers (Starlette: 400) without `access-control-allow-origin`; no answer at all is a failure,
+   not a refusal (problem 1).
+
+**Problems encountered and how they were solved.**
+
+1. *Every request failed, and the refused-origin check passed anyway.* The first run used
+   python.org's `python3`, which has no CA certificates on this Mac: every request failed with
+   `CERTIFICATE_VERIFY_FAILED` (13 of 14 checks failed), and the `evil.example` check passed, because
+   "no header" was all it asked for. Fix: run with `uv run python` (documented in the usage), and
+   the refused-origin check needs a status other than 0. Verified: the next run gave the refusal
+   as status 400 with no header.
+2. *The protein-name check could not fail.* It looked for "GFP" in the page, and "GFP" is also
+   in the assay id `GFP_AEQVI_Sarkisyan_2016`, which every page for it contains. Fix: it looks
+   for the page title, `<title>GFP (GFP_AEQVI_Sarkisyan_2016)`, built by `pageMetadata` from the
+   name. Verified: the title is in the production HTML, and a run against `--site
+   https://example.com` fails 9 checks.
+
+**Supporting details.**
+
+- *Result, 2026-10-19:* 15 of 15 passed. `/health` 200 (version 0.8.0, warm, 0.2–0.3 s, so the
+  30 s cold-start allowance was not used); seven pages 200; protein title found; preflights from
+  `https://mutascope.abdullahhanif.me` and `https://mutascope-web.vercel.app` allowed (200, own
+  origin echoed), from `https://evil.example` refused (400, no header); `POST /v1/score` 200,
+  `esm2_35m_onnx_fp32`, 238 residues, with `access-control-allow-origin:
+  https://mutascope.abdullahhanif.me`.
+- *CORS:* `conf/deploy/cloudrun.yaml` allows exactly `https://mutascope.abdullahhanif.me` and
+  `https://mutascope-web.vercel.app`; preview deployments and local development are not allowed
+  against the live API.
+- *Loose ends (the author's):* no favicon (`/favicon.ico` 404); `web quality` is not yet a
+  required check; GHCR visibility, Sentry, the trusted-proxy log check and the precise-mode
+  limit stay open (ROADMAP); demo video and write-up.

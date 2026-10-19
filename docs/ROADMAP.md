@@ -358,5 +358,9 @@ measured at 20 users on 4 GiB.
 - [ ] Lighthouse reports ~130 kB of unused JavaScript (mostly 3Dmol's chunk, fetched once the
       page is idle) and ~13 kB of legacy polyfills in a framework chunk (`browserslist` could
       drop them); not needed for the budgets
-- [ ] Deploy frontend (Vercel / Cloudflare Pages) on a subdomain
+- [x] Deploy frontend (Vercel / Cloudflare Pages) on a subdomain: Vercel,
+      https://mutascope.abdullahhanif.me (`main` deploys to production)
+- [x] Launch checks (Task 7): `tools/smoke/launch.py` against the site and the live API (7 pages,
+      protein name, `/health`, CORS preflights allowed and refused, fast-mode score from the
+      site's origin); 15 of 15 passed on 2026-10-19
 - [ ] README, 2-minute demo video, write-up
