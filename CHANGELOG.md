@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/EngAbdullahHanif/mutascope/compare/v0.9.1...v0.10.0) (2026-10-19)
+
+
+### Features
+
+* **web:** copyright line in the footer ([fd780b6](https://github.com/EngAbdullahHanif/mutascope/commit/fd780b623360feb1eac34918a37b0713459f3e06))
+
 ## [0.9.1](https://github.com/EngAbdullahHanif/mutascope/compare/v0.9.0...v0.9.1) (2026-10-19)
 
 
