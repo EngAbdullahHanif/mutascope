@@ -1,10 +1,14 @@
 """The website bundle's file format, as Pydantic models, and its compact number encoding.
 
-Three kinds of file (ADR 0028), each exported as a versioned JSON Schema
+Four kinds of file (ADR 0028, 0039), each exported as a versioned JSON Schema
 (:func:`json_schemas`):
 
 - ``proteins/<assay_id>.json.gz``: one :class:`ProteinFile` per ProteinGym assay, everything the
   protein page shows. The browser downloads one at a time.
+- ``structures/<pdb>.json.gz``: one :class:`StructureFile` per ProteinGym AF2 structure that an
+  assay with a structure uses (backbone atoms, residue numbers, pLDDT). Assays of one protein
+  share it; each protein file points to its structure with a :class:`StructureRef`. The browser
+  fetches it after the heatmap is drawn.
 - ``manifest.json``: :class:`Manifest`, every protein with its default model and label.
 - ``benchmarks.json``: :class:`Benchmarks`, the headline tables (no per-variant data).
 
@@ -29,6 +33,7 @@ That no reported number moves by more than the stated tolerance is checked, not 
 """
 
 import math
+from itertools import pairwise
 from typing import Final, Literal, Self
 
 import numpy as np
@@ -37,11 +42,14 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from mutascope.alphabet import AA_ORDER
 
-SCHEMA_VERSION: Final = "1.0.0"
+SCHEMA_VERSION: Final = "1.1.0"
 """Version of the bundle format. A change a reader can notice bumps it (semver); the JSON
-Schema ``$id`` carries it."""
+Schema ``$id`` carries it. 1.1.0 (ADR 0039): structure files and
+:attr:`ProteinFile.structure_file`."""
 
 WIDTH = len(AA_ORDER)
+BACKBONE_ATOMS: Final = ("N", "CA", "C", "O")
+"""The atoms a structure file keeps per residue, in this order."""
 MAX_SAFE_INTEGER = 2**53 - 1
 """Largest integer a JavaScript number holds exactly."""
 
@@ -185,6 +193,66 @@ class StructureFeatures(_Model):
     contact_count: list[int | None]
 
 
+class StructureRef(_Model):
+    """Where a protein's AF2 structure is, and which residues of the target it models.
+
+    Structure residue ``i`` (file order) is target residue ``start + i``; the builder checked
+    every one of them against ``target_seq`` (CLAUDE.md, data rule 3). Residues outside
+    ``start..end`` are not in the structure.
+    """
+
+    file: str
+    """Path relative to the bundle root: ``structures/<pdb>.json.gz``."""
+    bytes: int = Field(ge=1)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    """Of the gzip file as stored; a reader checks it before parsing."""
+    start: int = Field(ge=0)
+    """0-indexed first target residue the structure models (``pdb_range`` start - 1)."""
+    end: int = Field(ge=1)
+    """0-indexed, exclusive: ``end - start`` residues."""
+    low_plddt_threshold: float = Field(ge=0, le=100)
+    """Residues with a lower pLDDT are low-confidence (``structure.low_plddt_threshold``)."""
+
+
+class StructureFile(_Model):
+    """One ProteinGym AF2 structure (matched to the DMS target sequences), backbone only.
+
+    Per residue: its number and amino acid as in the PDB, the coordinates of
+    :data:`BACKBONE_ATOMS` and AF2's pLDDT (the PDB's B-factor, the same on every atom of a
+    residue). Side chains and hydrogens are dropped: the viewer draws a cartoon.
+    """
+
+    schema_version: Literal["1.1.0"] = SCHEMA_VERSION
+    pdb_file: str
+    """The file's name in ProteinGym's ``ProteinGym_AF2_structures.zip``."""
+    source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    """Of the PDB file the structure was read from."""
+    chain: str
+    residue_numbers: list[int]
+    """PDB residue numbers, strictly increasing."""
+    sequence: str = Field(pattern=r"^[ACDEFGHIKLMNPQRSTVWY]+$")
+    atoms: tuple[Literal["N"], Literal["CA"], Literal["C"], Literal["O"]] = BACKBONE_ATOMS
+    coordinates: Quantized
+    """Å, flattened ``(residue, atom, xyz)``: ``12 * n`` values, none null."""
+    plddt: Quantized
+    """Per residue, 0-100."""
+
+    @model_validator(mode="after")
+    def _shapes(self) -> Self:
+        n = len(self.sequence)
+        if len(self.residue_numbers) != n or len(self.plddt.values) != n:
+            raise ValueError("residue_numbers, sequence and plddt differ in length")
+        if len(self.coordinates.values) != n * len(BACKBONE_ATOMS) * 3:
+            raise ValueError(f"{len(self.coordinates.values)} coordinates for {n} residues")
+        if any(v is None for v in self.coordinates.values) or any(
+            v is None for v in self.plddt.values
+        ):
+            raise ValueError("a structure file has no missing values")
+        if any(b <= a for a, b in pairwise(self.residue_numbers)):
+            raise ValueError("residue numbers are not strictly increasing")
+        return self
+
+
 class ZeroShotLandscape(_Model):
     """Masked-marginal scores ``log P(mt) - log P(wt)`` of the full target (ADR 0018)."""
 
@@ -251,13 +319,15 @@ class VersionStamp(_Model):
 class ProteinFile(_Model):
     """Everything the website shows for one assay."""
 
-    schema_version: Literal["1.0.0"] = SCHEMA_VERSION
+    schema_version: Literal["1.1.0"] = SCHEMA_VERSION
     assay: AssayInfo
     default: DefaultModel
     msa_region: MsaRegion | None
     measured: Quantized
     """``(L, 20)`` grid of ``DMS_score`` (higher = fitter); ``null`` where not measured."""
     structure: StructureFeatures | None
+    structure_file: StructureRef | None
+    """The AF2 structure (ADR 0039); present exactly where :attr:`structure` is."""
     zero_shot: dict[str, ZeroShotLandscape]
     """By model name: ``esm2_650m`` always, ``saprot_650m_af2`` where there is a structure."""
     supervised: SupervisedLandscape | None
@@ -296,6 +366,11 @@ class ProteinFile(_Model):
                 raise ValueError(f"{name}: {size} residues, expected {length}")
         if self.msa_region is not None and not self.msa_region.end <= length:
             raise ValueError("msa_region ends after the target")
+        if (self.structure is None) != (self.structure_file is None):
+            raise ValueError("structure features and structure file must come together")
+        ref = self.structure_file
+        if ref is not None and not ref.start < ref.end <= length:
+            raise ValueError(f"structure range {ref.start}-{ref.end} outside the target")
         return self
 
 
@@ -321,7 +396,7 @@ class ManifestEntry(_Model):
 class Manifest(_Model):
     """Every protein in the bundle; what the site's index page reads."""
 
-    schema_version: Literal["1.0.0"] = SCHEMA_VERSION
+    schema_version: Literal["1.1.0"] = SCHEMA_VERSION
     version: VersionStamp
     proteins: list[ManifestEntry]
     total_bytes: int = Field(ge=0)
@@ -414,7 +489,7 @@ class FinalCoverage(_Model):
 class Benchmarks(_Model):
     """The benchmark numbers the website shows; every value is copied from a results table."""
 
-    schema_version: Literal["1.0.0"] = SCHEMA_VERSION
+    schema_version: Literal["1.1.0"] = SCHEMA_VERSION
     version: VersionStamp
     deployed_model: str
     zero_shot_comparator: str
@@ -441,6 +516,7 @@ def json_schemas() -> dict[str, dict[str, object]]:
         ("protein", ProteinFile),
         ("manifest", Manifest),
         ("benchmarks", Benchmarks),
+        ("structure", StructureFile),
     ):
         schema = model.model_json_schema()
         schemas[f"{name}.schema.json"] = {

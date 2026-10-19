@@ -17,9 +17,13 @@ import {
   type ViewMode,
 } from "@/lib/explorer/landscape";
 
-import { Heatmap, type FocusCell } from "./heatmap";
+import { Heatmap, type FocusCell, type HeatmapApi } from "./heatmap";
 import { LandscapeTable } from "./landscape-table";
 import { SidePanel } from "./side-panel";
+import { StructurePanel } from "./structure-panel";
+
+/** A residue pointed at in one view and shown in the other (ADR 0039). */
+type Linked = { position: number; from: "heatmap" | "structure" };
 
 type State =
   | { state: "loading" }
@@ -80,6 +84,21 @@ function Loaded({ protein, loadedAt }: { protein: ProteinFile; loadedAt: number 
   const [maskUnmeasured, setMaskUnmeasured] = useState(false);
   const [focus, setFocus] = useState<FocusCell | null>(null);
   const [showTable, setShowTable] = useState(false);
+  const [linked, setLinked] = useState<Linked | null>(null);
+  const heatmapApi = useRef<HeatmapApi>(null);
+  // A pointer leaving one view clears only what that view set.
+  const linkFrom = useCallback(
+    (from: Linked["from"]) => (position: number | null) =>
+      setLinked((cur) =>
+        position !== null ? { position, from } : cur?.from === from ? null : cur,
+      ),
+    [],
+  );
+  const onHeatmapHover = useMemo(() => linkFrom("heatmap"), [linkFrom]);
+  const onStructureHover = useMemo(() => linkFrom("structure"), [linkFrom]);
+  const onStructureSelect = useCallback((position: number) => {
+    heatmapApi.current?.select(position);
+  }, []);
   const view = useMemo(
     () => buildView(landscape, { model, mode, maskUnmeasured }),
     [landscape, model, mode, maskUnmeasured],
@@ -246,6 +265,9 @@ function Loaded({ protein, loadedAt }: { protein: ProteinFile; loadedAt: number 
             focus={focus}
             onFocusChange={setFocus}
             onDrawn={onDrawn}
+            onHoverPosition={onHeatmapHover}
+            linkedPosition={linked?.from === "structure" ? linked.position : null}
+            apiRef={heatmapApi}
           />
           <p
             className="text-xs text-muted-foreground"
@@ -259,6 +281,18 @@ function Loaded({ protein, loadedAt }: { protein: ProteinFile; loadedAt: number 
         </div>
         <SidePanel landscape={landscape} view={view} mode={mode} onSelect={setFocus} />
       </div>
+
+      {/* After the heatmap's first frame, so the structure never delays it (ADR 0039). */}
+      {timing.render === undefined ? null : (
+        <StructurePanel
+          protein={protein}
+          view={view}
+          means={means}
+          highlight={linked?.position ?? null}
+          onHover={onStructureHover}
+          onSelect={onStructureSelect}
+        />
+      )}
 
       <section className="flex flex-col gap-2">
         <div>

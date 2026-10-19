@@ -169,7 +169,8 @@ from mutascope.export.onnx import (
     quantize_int8,
     run_optimum,
 )
-from mutascope.export.schemas import BundleFidelitySchema, BundleSizeSchema
+from mutascope.export.schemas import BundleFidelitySchema, BundleSizeSchema, StructureSizeSchema
+from mutascope.export.structure import StructureError, read_structures_zip
 from mutascope.features.base import FEATURE_SETS, KEY_COLUMNS, KeyDesign
 from mutascope.features.schemas import (
     SUBSTITUTIONS_PER_RESIDUE,
@@ -3633,13 +3634,24 @@ def export_bundle(
     coverage must stay within ``export.fidelity`` of the unrounded and the reported values,
     and every file within ``export.budget``. Size and fidelity tables go to
     ``export.results_dir`` either way; the bundle replaces the previous one only on success.
+
+    Structures (ADR 0039) are read from ProteinGym's AF2 archive in ``data.raw_dir``, after its
+    sha256 matches ``data/manifest.yaml``; each structure residue must be the assay's target
+    residue at its mapped position.
     """
     base = [o for o in overrides or [] if not o.startswith("model=")]
     cfg = load_config(config_dir, base)
     spec = cfg.export
     deployed = _final_label(cfg)
     table = pd.read_csv(reference)
+    release = load_release(cfg.data)
+    archive = release.file("af2_structures").filename
+    recorded = Manifest.load(release.manifest_path).get(release.manifest_key, archive)
+    if recorded is None:
+        typer.echo(f"error: {archive} has no entry in {release.manifest_path}", err=True)
+        raise typer.Exit(code=1)
     try:
+        structures = read_structures_zip(release.raw_dir / archive, recorded.sha256)
         dataset = fetch_pinned(
             str(cfg.publish.repo_id),
             repo_type="dataset",
@@ -3731,6 +3743,8 @@ def export_bundle(
                 zero_shot=zero_shot,
                 msa_regions=msa_regions,
                 reported=reported,
+                structures=structures,
+                low_plddt_threshold=FeatureParams.from_config(cfg.structure).low_plddt_threshold,
             ),
             out_dir=Path(str(spec.out_dir)),
             benchmarks=benchmarks,
@@ -3750,6 +3764,8 @@ def export_bundle(
         CacheError,
         ScoringRegionError,
         StructTokenError,
+        StructureError,
+        OSError,
         pa.errors.SchemaErrors,
     ) as exc:
         typer.echo(f"error: {exc}", err=True)
@@ -3757,6 +3773,7 @@ def export_bundle(
     out = Path(str(spec.results_dir))
     write_table(result.fidelity, BundleFidelitySchema, out / "bundle_fidelity.parquet")
     write_table(result.sizes, BundleSizeSchema, out / "bundle_sizes.parquet")
+    write_table(result.structure_sizes, StructureSizeSchema, out / "structure_sizes.parquet")
     _echo_bundle(result)
     if result.failure is not None:
         typer.echo(f"FAIL: {result.failure}", err=True)
@@ -3804,6 +3821,14 @@ def _echo_bundle(result: BundleResult) -> None:
         f"largest {largest['assay_id']} {int(largest['bytes']):,} bytes "
         f"(L = {int(largest['length']):,})"
     )
+    structures = result.structure_sizes
+    if len(structures):
+        big = structures.sort_values("bytes").iloc[-1]
+        typer.echo(
+            f"{len(structures)} structure files for {int(structures['n_assays'].sum())} assays, "
+            f"{int(structures['bytes'].sum()):,} bytes; largest {big['file']} "
+            f"{int(big['bytes']):,} bytes ({int(big['n_residues']):,} residues)"
+        )
     for (model, metric), rows in fidelity[fidelity["level"] == "assay"].groupby(
         ["model", "metric"], sort=True
     ):

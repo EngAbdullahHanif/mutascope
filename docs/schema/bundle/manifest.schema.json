@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:mutascope:bundle:1.0.0:manifest",
+  "$id": "urn:mutascope:bundle:1.1.0:manifest",
   "$defs": {
     "ManifestEntry": {
       "additionalProperties": false,
@@ -174,8 +174,8 @@
   "description": "Every protein in the bundle; what the site's index page reads.",
   "properties": {
     "schema_version": {
-      "const": "1.0.0",
-      "default": "1.0.0",
+      "const": "1.1.0",
+      "default": "1.1.0",
       "title": "Schema Version",
       "type": "string"
     },

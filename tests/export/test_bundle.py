@@ -11,6 +11,7 @@ import pandas as pd
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
+from tests.synthetic_pdb import make_pdb
 from typer.testing import CliRunner
 
 from mutascope.alphabet import AA_ORDER
@@ -26,12 +27,14 @@ from mutascope.export.bundle import (
     build_protein,
     decoded_grids,
     load_protein,
+    load_structure,
 )
 from mutascope.export.fidelity import Tolerances
 from mutascope.export.format import (
     MAX_SAFE_INTEGER,
     Benchmarks,
     ProteinFile,
+    StructureRef,
     SupervisedStamp,
     VersionStamp,
     decimals_below,
@@ -41,6 +44,7 @@ from mutascope.export.format import (
     quantize,
 )
 from mutascope.export.hub import CHECKSUMS_FILE, checksums
+from mutascope.export.structure import BACKBONE_ATOMS
 
 ROOT = Path(__file__).parents[2]
 ENCODING = Encoding(
@@ -54,7 +58,7 @@ ENCODING = Encoding(
 TOLERANCES = Tolerances(spearman=0.001, coverage=0.002)
 INFO = SupervisedInfo(model="ridge_seq_struct", levels=(0.8, 0.9))
 VERSION = VersionStamp(
-    schema_version="1.0.0",
+    schema_version="1.1.0",
     mutascope_version="0.1.0",
     code_version="abc",
     proteingym_release="v1.3",
@@ -68,6 +72,8 @@ VERSION = VersionStamp(
 )
 SUPERVISED, ZERO_SHOT = "SUP", "ZS"
 TARGETS = {SUPERVISED: "MKVARLLW", ZERO_SHOT: "MKVA"}
+SUP_PLDDT = [91.23, 88.0, 75.5, 60.25, 99.9, 70.0]
+"""pLDDT of SUP.pdb, which models residues 1-6 of SUP's 8 (a partial structure)."""
 _AA = {aa: i for i, aa in enumerate(AA_ORDER)}
 
 
@@ -272,6 +278,8 @@ def _inputs(**changes: Any) -> BundleInputs:
         "zero_shot": [esm, saprot],
         "msa_regions": {ZERO_SHOT: ScoringRegion(ZERO_SHOT, 1, 3, 4)},
         "reported": {},
+        "structures": {"SUP.pdb": make_pdb(TARGETS[SUPERVISED][:6], SUP_PLDDT)},
+        "low_plddt_threshold": 70.0,
     }
     return BundleInputs(**(fields | changes))
 
@@ -293,7 +301,11 @@ BENCHMARKS = Benchmarks(
 
 
 def _write(tmp_path: Path, inputs: BundleInputs | None = None, **budget: int) -> Any:
-    sizes = {"protein_bytes": 2_000_000, "total_bytes": 40_000_000} | budget
+    sizes = {
+        "protein_bytes": 2_000_000,
+        "structure_bytes": 500_000,
+        "total_bytes": 40_000_000,
+    } | budget
     return write_bundle(
         inputs or _inputs(),
         out_dir=tmp_path / "bundle",
@@ -327,7 +339,18 @@ def _build(assay_id: str, inputs: BundleInputs | None = None) -> tuple[ProteinFi
         n_assays_for_protein=2,
         encoding=ENCODING,
         version=VERSION,
+        structure_file=REF if assay_id == SUPERVISED else None,
     )
+
+
+REF = StructureRef(
+    file="structures/SUP.json.gz",
+    bytes=1,
+    sha256="e" * 64,
+    start=0,
+    end=6,
+    low_plddt_threshold=70.0,
+)
 
 
 # --- protein files -------------------------------------------------------------------------------
@@ -515,8 +538,95 @@ def test_files_are_gzip_json_a_browser_can_parse(tmp_path: Path) -> None:
     _write(tmp_path)
     raw = gzip.decompress((tmp_path / "bundle" / "proteins" / f"{SUPERVISED}.json.gz").read_bytes())
     document = json.loads(raw)
-    assert document["schema_version"] == "1.0.0"
+    assert document["schema_version"] == "1.1.0"
     assert all(isinstance(v, int) or v is None for v in document["measured"]["values"])
+
+
+# --- structures (ADR 0039) ----------------------------------------------------------------------
+
+
+def _with(assays: dict[str, Any] | None = None, **changes: Any) -> BundleInputs:
+    base = _inputs()
+    frame = base.assays.copy()
+    for column, value in (assays or {}).items():
+        frame.loc[frame["assay_id"] == SUPERVISED, column] = value
+    return _inputs(assays=frame, **changes)
+
+
+def test_a_structure_file_is_written_once_and_the_protein_points_to_it(tmp_path: Path) -> None:
+    import hashlib
+
+    result = _write(tmp_path)
+    assert result.failure is None, result.failure
+    bundle = tmp_path / "bundle"
+    sup = load_protein((bundle / "proteins" / f"{SUPERVISED}.json.gz").read_bytes())
+    ref = sup.structure_file
+    assert ref is not None
+    assert (ref.file, ref.start, ref.end, ref.low_plddt_threshold) == (
+        "structures/SUP.json.gz",
+        0,
+        6,
+        70.0,
+    )
+    data = (bundle / ref.file).read_bytes()
+    assert (len(data), hashlib.sha256(data).hexdigest()) == (ref.bytes, ref.sha256)
+    structure = load_structure(data)
+    assert structure.sequence == TARGETS[SUPERVISED][:6]
+    assert structure.atoms == BACKBONE_ATOMS
+    assert dequantize(structure.plddt).tolist() == SUP_PLDDT
+    assert (
+        load_protein((bundle / "proteins" / f"{ZERO_SHOT}.json.gz").read_bytes()).structure_file
+        is None
+    )
+    # Listed in SHA256SUMS like every file, and in the size table.
+    assert f"  {ref.file}" in (bundle / CHECKSUMS_FILE).read_text()
+    assert result.structure_sizes[["pdb_file", "n_residues", "n_assays"]].values.tolist() == [
+        ["SUP.pdb", 6, 1]
+    ]
+    assert "1 structure files" in (bundle / "README.md").read_text()
+
+
+def test_a_structure_residue_that_is_not_the_target_residue_fails_loudly(tmp_path: Path) -> None:
+    pdb = make_pdb("MKVWRL", SUP_PLDDT)  # A -> W at target position 3
+    with pytest.raises(
+        BundleError,
+        match=r"SUP: SUP\.pdb residue 3 \(PDB number 4\) is W, target position 3 is A",
+    ):
+        _write(tmp_path, _inputs(structures={"SUP.pdb": pdb}))
+    assert not (tmp_path / "bundle").exists() and not (tmp_path / "bundle.tmp").exists()
+
+
+def test_a_structure_shifted_against_its_pdb_range_fails(tmp_path: Path) -> None:
+    with pytest.raises(BundleError, match=r"SUP: SUP\.pdb has 6 residues"):
+        _write(tmp_path, _with({"pdb_range": "2-8"}))
+    with pytest.raises(BundleError, match=r"residue 0 .* is M, target position 1 is K"):
+        _write(tmp_path, _with({"pdb_range": "2-7"}))
+
+
+def test_a_pdb_missing_from_the_archive_fails(tmp_path: Path) -> None:
+    with pytest.raises(BundleError, match=r"SUP\.pdb is not in the AF2 archive"):
+        _write(tmp_path, _inputs(structures={}))
+
+
+def test_plddt_that_disagrees_with_the_structure_features_fails(tmp_path: Path) -> None:
+    pdb = make_pdb(TARGETS[SUPERVISED][:6], [91.23, 88.0, 75.5, 61.0, 99.9, 70.0])
+    with pytest.raises(BundleError, match="pLDDT at target position 3"):
+        _write(tmp_path, _inputs(structures={"SUP.pdb": pdb}))
+
+
+def test_structure_files_have_their_own_budget_not_the_proteins(tmp_path: Path) -> None:
+    proteins = _write(tmp_path / "a")
+    assert proteins.failure is None
+    largest = int(proteins.sizes["bytes"].max())
+    # A protein budget just above the largest protein file passes: structures are not in it.
+    assert _write(tmp_path / "b", protein_bytes=largest).failure is None
+    result = _write(tmp_path / "c", structure_bytes=100)
+    assert result.manifest is None
+    assert result.failure is not None
+    assert "1 structure files over the 100-byte budget: structures/SUP.json.gz" in result.failure
+    # They do count towards the total.
+    total = int(proteins.sizes["bytes"].sum())
+    assert _write(tmp_path / "d", total_bytes=total).failure is not None
 
 
 # --- JSON Schema ---------------------------------------------------------------------------------
@@ -533,7 +643,9 @@ def test_schema_command_writes_versioned_schemas(tmp_path: Path) -> None:
     result = CliRunner().invoke(app, ["export", "schema", "--out-dir", str(tmp_path)])
     assert result.exit_code == 0, result.output
     protein = json.loads((tmp_path / "protein.schema.json").read_text())
-    assert protein["$id"] == "urn:mutascope:bundle:1.0.0:protein"
+    assert protein["$id"] == "urn:mutascope:bundle:1.1.0:protein"
+    structure = json.loads((tmp_path / "structure.schema.json").read_text())
+    assert structure["$id"] == "urn:mutascope:bundle:1.1.0:structure"
 
 
 # --- the real bundle -----------------------------------------------------------------------------
@@ -549,6 +661,7 @@ def test_the_built_bundle_loads_and_matches_its_manifest() -> None:
     bundle = ROOT / "build" / "bundle"
     manifest = json.loads((bundle / MANIFEST_FILE).read_text())
     assert len(manifest["proteins"]) == 217
+    with_structure = partial = 0
     for entry in manifest["proteins"]:
         data = (bundle / entry["file"]).read_bytes()
         assert hashlib.sha256(data).hexdigest() == entry["sha256"]
@@ -556,3 +669,16 @@ def test_the_built_bundle_loads_and_matches_its_manifest() -> None:
         protein = load_protein(data)
         assert protein.assay.assay_id == entry["assay_id"]
         assert protein.default.label == entry["label"]
+        ref = protein.structure_file
+        assert (ref is not None) == protein.assay.has_structure
+        if ref is not None:
+            data = (bundle / ref.file).read_bytes()
+            assert hashlib.sha256(data).hexdigest() == ref.sha256
+            assert len(data) == ref.bytes <= 500_000
+            structure = load_structure(data)
+            target = protein.assay.target_seq
+            assert structure.sequence == target[ref.start : ref.end]
+            with_structure += 1
+            partial += ref.end - ref.start < protein.assay.length
+    # ADR 0003: 213 assays have a structure; ZIKV, BRCA2 and POLG_HCVJF only of part of the target.
+    assert (with_structure, partial) == (213, 3)

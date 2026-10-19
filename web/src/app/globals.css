@@ -141,6 +141,18 @@
   --color-effect-pos-5: #67001f;
   /* Not measured / no value: hatched in charts, this colour in legends. */
   --color-effect-missing: #bdbdbd;
+  /*
+   * AF2 confidence (pLDDT, ADR 0039): ColorBrewer Purples, light = low, dark = high. A hue on
+   * neither pole of the effect scale, so a structure coloured by pLDDT is never read as
+   * effects. src/lib/color/sequential.ts interpolates between these stops; pLDDT only.
+   */
+  --color-plddt-0: #dadaeb;
+  --color-plddt-1: #bcbddc;
+  --color-plddt-2: #9e9ac8;
+  --color-plddt-3: #807dba;
+  --color-plddt-4: #6a51a3;
+  --color-plddt-5: #54278f;
+  --color-plddt-6: #3f007d;
 }
 
 @layer base {

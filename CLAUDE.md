@@ -282,6 +282,12 @@ Run `make lint test` before declaring any task done.
 - Inputs come from the pinned Hub revisions (checked against their `SHA256SUMS`) where they
   exist; zero-shot landscapes from the cache (full target; MSA region as a label).
 - Every protein file stays within `export.budget.protein_bytes`; the build fails otherwise.
+- Structures (ADR 0039, format 1.1.0): `structures/<pdb>.json.gz`, backbone (N, CA, C, O),
+  residue numbers and pLDDT, one per PDB, read from the AF2 zip after its sha256 matches
+  `data/manifest.yaml`. Every structure residue of every assay must equal the target residue at
+  its mapped position and its pLDDT the structure features', or the build fails. Structure files
+  have their own `export.budget.structure_bytes`, not `protein_bytes`, and count towards
+  `total_bytes`.
 - Readers use the bundle by `export.publish.revision`; a new published bundle gets a new tag.
 
 ## API (`api/`)
@@ -291,7 +297,8 @@ Run `make lint test` before declaring any task done.
   a test fails if they differ. Commit hashes only (ADR 0030).
 - `lifespan` loads, once: the bundle at the pinned revision (every `SHA256SUMS` file checked,
   schema version in `SUPPORTED_SCHEMA_VERSIONS` or the API does not start) and the fp32 ONNX
-  scorers (any other precision is refused). The API reads only the bundle, never `data/`.
+  scorers (any other precision is refused). The API reads only the bundle, never `data/`, and
+  never downloads, checks or opens its `structures/` (`IGNORED`, ADR 0039).
 - Versioned routes under `/v1`: `proteins`, `proteins/{id}`, `proteins/{id}/landscape`, `score`
   (fast mode), `jobs` + `jobs/{id}/stream` (precise mode via Server-Sent Events), `benchmarks`;
   plus `/health` (liveness), `/ready`, `/metrics`.
@@ -388,9 +395,12 @@ Run `make lint test` before declaring any task done.
   keyword it does not translate; never make it skip one.
 - Design tokens and rules: `web/DESIGN.md`. One accent (teal); colours are tokens, never raw
   values in components.
-- Heatmap colour scale: colourblind-safe diverging (blue–white–red), symmetric around 0: blue =
-  harmful, white = neutral, red = tolerated (RdBu, OKLab, `src/lib/color/diverging.ts`); missing
-  is grey, never white; every chart using it shows `EffectLegend`.
+- Heatmap colour scale: colourblind-safe diverging (blue–white–red), symmetric around the
+  quantity's neutral point (ADR 0038): 0 for zero-shot log-ratios, the assay's median measured
+  `DMS_score` for anything in DMS units (measured, supervised), so white = 0 or median, never a
+  min-to-max domain. Blue = harmful (less fit), white = neutral, red = tolerated (fitter) (RdBu,
+  OKLab, `src/lib/color/diverging.ts`); missing is grey, never white; every chart using it shows
+  `EffectLegend` (DMS units: ends "Less fit", "Assay median", "Fitter").
 - Explorer (ADR 0038): `/explore` (picker) and `/explore/[assayId]` (prerendered from the
   manifest). The heatmap is one window-sized canvas drawn from a one-pixel-per-cell raster, never
   SVG. White is 0 for zero-shot log-ratios and the assay's median measured score for DMS units
@@ -399,7 +409,17 @@ Run `make lint test` before declaring any task done.
   `src/lib/explorer/` (pure, unit-tested); `mutationCode` is the only place that writes a
   1-indexed residue. Budget: a ~1,000-residue protein drawn < 300 ms after its data loads
   (Playwright test).
-- Linked views: hovering a heatmap column highlights the residue in 3D and vice versa.
+- Structure view (ADR 0039): 3Dmol.js, mounted after the heatmap's first frame, its own chunk;
+  structure files load only through `loadStructure` (protein file's sha256, Zod, sequence =
+  target `start..end`). Residues are coloured by the summary bar's mean (same table, centre,
+  clipping, legend, label) or by pLDDT (Purples, `src/lib/color/sequential.ts`, never the effect
+  scale); below `low_plddt_threshold` a thin trace; outside a partial structure grey, never
+  white. Assays without a structure say why; the page states the 3D view is not
+  keyboard-accessible and the heatmap and table are.
+- Linked views: hovering a heatmap column highlights the residue in 3D and vice versa; a click in
+  3D selects the residue's column. They meet only through 0-indexed target positions
+  (`positionOfResi` / `resiOfPosition`); state is exposed as `data-*-position` attributes, which
+  tests assert on (never pixels or WebGL).
 - Always label results as "Supervised (n = …)" or "Zero-shot".
 
 ## CI (GitHub Actions)
@@ -469,8 +489,12 @@ https://mutascope-api-2lvmztrsha-ew.a.run.app. Done in Phase 5 Task 0 (ADR 0036)
 pass at a time, one ONNX thread on Cloud Run (read p99 at 5 users 140 ms), the metrics token from
 Secret Manager, and the website's CORS origins (Vercel: mutascope.abdullahhanif.me,
 mutascope-web.vercel.app). Still open (ROADMAP): the precise limit (293 s at 400 residues with
-one ONNX thread), GHCR visibility, the trusted-proxy log check, Sentry (no project yet). The
-frontend reads the bundle from the Hub at
+one ONNX thread), GHCR visibility, the trusted-proxy log check, Sentry (no project yet). Phase 5
+Task 1 built the site foundation (ADR 0037), Task 2 the Explorer and canvas heatmap (ADR 0038),
+Task 3 the structure view (ADR 0039): bundle format 1.1.0 (`bundle-v1.1.0`) adds 185 backbone
+structure files for the 213 assays with a structure, shown in 3Dmol.js and linked to the heatmap
+both ways. Next (ROADMAP): the Landing, Benchmarks, How it works and About pages, README, demo
+and write-up. The frontend reads the bundle from the Hub at
 `export.publish.revision` and must work with the API asleep (cold start ~20 s).
 Update this section at the start of each phase.
 The per-phase task checklist lives in `docs/ROADMAP.md`; mark items `[x]` there as they land.

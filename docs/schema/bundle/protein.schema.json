@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:mutascope:bundle:1.0.0:protein",
+  "$id": "urn:mutascope:bundle:1.1.0:protein",
   "$defs": {
     "AssayInfo": {
       "additionalProperties": false,
@@ -279,6 +279,57 @@
       "title": "StructureFeatures",
       "type": "object"
     },
+    "StructureRef": {
+      "additionalProperties": false,
+      "description": "Where a protein's AF2 structure is, and which residues of the target it models.\n\nStructure residue ``i`` (file order) is target residue ``start + i``; the builder checked\nevery one of them against ``target_seq`` (CLAUDE.md, data rule 3). Residues outside\n``start..end`` are not in the structure.",
+      "properties": {
+        "file": {
+          "description": "Path relative to the bundle root: ``structures/<pdb>.json.gz``.",
+          "title": "File",
+          "type": "string"
+        },
+        "bytes": {
+          "minimum": 1,
+          "title": "Bytes",
+          "type": "integer"
+        },
+        "sha256": {
+          "description": "Of the gzip file as stored; a reader checks it before parsing.",
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "start": {
+          "description": "0-indexed first target residue the structure models (``pdb_range`` start - 1).",
+          "minimum": 0,
+          "title": "Start",
+          "type": "integer"
+        },
+        "end": {
+          "description": "0-indexed, exclusive: ``end - start`` residues.",
+          "minimum": 1,
+          "title": "End",
+          "type": "integer"
+        },
+        "low_plddt_threshold": {
+          "description": "Residues with a lower pLDDT are low-confidence (``structure.low_plddt_threshold``).",
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Low Plddt Threshold",
+          "type": "number"
+        }
+      },
+      "required": [
+        "file",
+        "bytes",
+        "sha256",
+        "start",
+        "end",
+        "low_plddt_threshold"
+      ],
+      "title": "StructureRef",
+      "type": "object"
+    },
     "SupervisedLandscape": {
       "additionalProperties": false,
       "description": "The deployed supervised model's 19 x L landscape (ADR 0025); grids are ``(L, 20)`` with\n``null`` at the wild type.\n\n``prediction`` is out-of-fold at measured variants (from the fold model that never saw the\nvariant) and the all-data model's elsewhere, never an in-sample fit; a variant is measured\nexactly where :attr:`ProteinFile.measured` has a value. Intervals are constant-width CV+\nin ``DMS_score`` units, calibrated on ``calibration_scheme``'s folds.",
@@ -479,8 +530,8 @@
   "description": "Everything the website shows for one assay.",
   "properties": {
     "schema_version": {
-      "const": "1.0.0",
-      "default": "1.0.0",
+      "const": "1.1.0",
+      "default": "1.1.0",
       "title": "Schema Version",
       "type": "string"
     },
@@ -514,6 +565,17 @@
         }
       ]
     },
+    "structure_file": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StructureRef"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The AF2 structure (ADR 0039); present exactly where :attr:`structure` is."
+    },
     "zero_shot": {
       "additionalProperties": {
         "$ref": "#/$defs/ZeroShotLandscape"
@@ -542,6 +604,7 @@
     "msa_region",
     "measured",
     "structure",
+    "structure_file",
     "zero_shot",
     "supervised",
     "version"

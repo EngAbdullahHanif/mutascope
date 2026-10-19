@@ -58,3 +58,18 @@ class BundleSizeSchema(pa.DataFrameModel):
     class Config:  # pyright: ignore[reportIncompatibleVariableOverride]
         strict = True
         ordered = True
+
+
+class StructureSizeSchema(pa.DataFrameModel):
+    """One structure file's gzip size (ADR 0039), and how many assays use it."""
+
+    pdb_file: Series[str] = pa.Field(unique=True)
+    file: Series[str] = pa.Field(unique=True)
+    n_residues: Series[int] = pa.Field(ge=1)
+    n_assays: Series[int] = pa.Field(ge=1)
+    bytes: Series[int] = pa.Field(ge=1)
+    budget_bytes: Series[int] = pa.Field(ge=1)
+
+    class Config:  # pyright: ignore[reportIncompatibleVariableOverride]
+        strict = True
+        ordered = True

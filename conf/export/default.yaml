@@ -52,13 +52,18 @@ fidelity:
 # browser downloads at once; the total is what the Hub folder and a static deployment hold.
 budget:
   protein_bytes: 2000000
+  # Per structure file (ADR 0039): fetched on its own after the protein file, so not part of
+  # protein_bytes; structure files do count towards total_bytes.
+  structure_bytes: 500000
   total_bytes: 40000000
 # Publishing (`mutascope export push`): into a folder of the dataset repo (publish.repo_id), as a
 # new commit that replaces only that folder, tagged. A tag names one bundle: a new bundle needs a
-# new tag. `revision` is the pushed commit, pinned for the API and the website: bundle-v1.0.0,
-# built at 5c8d778 and pushed 2026-10-17 (public; 224 files matching build/bundle, the 14 files
-# outside bundle/ unchanged; checked through the Hub API without a token).
+# new tag. `revision` is the pushed commit, pinned for the API and the website: bundle-v1.1.0
+# (format 1.1.0, ADR 0039), built at 3889105 and pushed 2026-10-19 as two commits (df77169, then
+# 1bfc294; the tag resolves to 1bfc294). Public; its 410 bundle files match build/bundle by
+# sha256, the 14 files outside bundle/ are unchanged; checked through the Hub API without a token.
+# Before: bundle-v1.0.0 = 3ae7672 (built at 5c8d778, pushed 2026-10-17).
 publish:
   path_in_repo: bundle
-  tag: bundle-v1.0.0
-  revision: 3ae767217bb0a56b8f2e7c79c68b73119e308066
+  tag: bundle-v1.1.0
+  revision: 1bfc294371d4adeb31d8613989bed9055f03409a

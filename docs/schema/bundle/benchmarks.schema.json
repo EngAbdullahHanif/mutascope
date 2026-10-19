@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:mutascope:bundle:1.0.0:benchmarks",
+  "$id": "urn:mutascope:bundle:1.1.0:benchmarks",
   "$defs": {
     "CalibrationRow": {
       "additionalProperties": false,
@@ -427,8 +427,8 @@
   "description": "The benchmark numbers the website shows; every value is copied from a results table.",
   "properties": {
     "schema_version": {
-      "const": "1.0.0",
-      "default": "1.0.0",
+      "const": "1.1.0",
+      "default": "1.1.0",
       "title": "Schema Version",
       "type": "string"
     },

@@ -5,7 +5,9 @@
  * - the schema version is one this code reads, before anything else, so a newer bundle fails
  *   with that message rather than a list of schema errors;
  * - the whole file passes the generated Zod validator (unknown fields included);
- * - a protein file's bytes have the manifest's sha256 (checked on the gzip as stored).
+ * - a protein file's bytes have the manifest's sha256 (checked on the gzip as stored);
+ * - a structure file's bytes have the sha256 its protein file lists, and it models exactly the
+ *   target residues the protein file says it does (ADR 0039).
  * A file that fails is an error shown to the reader, never data shown with a warning.
  */
 import type { z } from "zod";
@@ -15,10 +17,12 @@ import {
   BenchmarksSchema,
   ManifestSchema,
   ProteinFileSchema,
+  StructureFileSchema,
   type Benchmarks,
   type Manifest,
   type ManifestEntry,
   type ProteinFile,
+  type StructureFile,
 } from "./schemas.generated";
 
 export const DATA_BASE = "/data";
@@ -122,4 +126,36 @@ export async function loadProtein(
     throw new BundleLoadError(entry.file, `holds ${protein.assay.assay_id}, not ${entry.assay_id}`);
   }
   return protein;
+}
+
+/**
+ * A protein's AF2 structure (ADR 0039), checked against the protein file that names it.
+ *
+ * The digest comes from the protein file, which was itself checked against the manifest. The
+ * structure's residues must be the target's residues `start..end`: the bundle builder asserted
+ * that, and a structure paired with the wrong protein is an error here too, never a picture.
+ */
+export async function loadStructure(
+  protein: ProteinFile,
+  fetchFn: Fetch = fetch,
+): Promise<StructureFile> {
+  const ref = protein.structure_file;
+  if (!ref) throw new BundleLoadError(protein.assay.assay_id, "has no structure");
+  const bytes = await fetchBytes(ref.file, fetchFn);
+  if (!isGzip(bytes)) throw new BundleLoadError(ref.file, "was not served as gzip bytes");
+  if ((await sha256Hex(bytes)) !== ref.sha256) {
+    throw new BundleLoadError(ref.file, "sha256 differs from the protein file");
+  }
+  const structure = validate(
+    ref.file,
+    parseJson(ref.file, await gunzip(bytes)),
+    StructureFileSchema,
+  );
+  if (structure.sequence !== protein.assay.target_seq.slice(ref.start, ref.end)) {
+    throw new BundleLoadError(
+      ref.file,
+      `is not residues ${ref.start + 1}–${ref.end} of ${protein.assay.assay_id}'s target`,
+    );
+  }
+  return structure;
 }

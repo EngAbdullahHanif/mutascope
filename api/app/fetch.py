@@ -5,7 +5,8 @@ The API image runs this at build time (ADR 0033), so the container starts offlin
 
 - the website bundle at ``bundle_revision``: every file in its ``SHA256SUMS``, the manifest's
   protein files and the schema version, exactly as the API's startup checks them
-  (:func:`api.app.bundle.open_bundle`; the startup check runs again in the container);
+  (:func:`api.app.bundle.open_bundle`; the startup check runs again in the container). The
+  structure files (``structures/``, ADR 0039) are the website's and are not fetched;
 - the fp32 ONNX graph and ``tokenizer.json`` of every served model at ``onnx_revision``: each
   against the ONNX repo's ``SHA256SUMS`` of that commit. A file the list does not name is an
   error, not a pass.
