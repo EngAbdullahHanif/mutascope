@@ -61,7 +61,7 @@ towards `total_bytes`, which is what the Hub folder and a static deployment hold
 
 Measured (2026-10-19): 185 structure files, 2,587,538 bytes, largest
 `structures/BRCA2_HUMAN.json.gz` 114,664 bytes (2,832 residues; a quarter of the budget); 217
-protein files 29,251,647 bytes (largest 1,154,136, ZIKV); total 31,839,185 of 40,000,000. The
+protein files 29,249,984 bytes (largest 1,154,127, ZIKV); total 31,837,522 of 40,000,000. The
 fidelity checks are unchanged and give the same largest differences as 1.0.0 (ADR 0028:
 Spearman 4.30e-4 ESM-2, 6.56e-4 SaProt, 4.04e-4 ridge; coverage exact).
 
