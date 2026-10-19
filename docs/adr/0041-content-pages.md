@@ -75,9 +75,11 @@ one, or drawing two models' own intervals side by side as if that compared them.
 9. **"Try your own sequence" is a link, not a form.** A form on the Landing would have to carry
    the sequence to `/score` in the URL or in storage, both of which ADR 0040 forbids. The box
    describes live scoring and links to `/score`.
-10. **About is the author's text only.** A link to the author's site, GitHub and LinkedIn, and
-    one sentence on AI use. There is no CV link, by choice: a CV is a document to keep current
-    in two places, and the project itself serves that purpose.
+10. **About is the author's text only.** Three short paragraphs in the author's words, each with
+    a bold lead-in (who, why MutaScope, let's talk), then a line of links: email, the author's
+    site, GitHub and LinkedIn. The sentence on AI use that was here first was removed by the
+    author's choice (2026-10-19). There is no CV link, by choice: a CV is a document to keep
+    current in two places, and the project itself serves that purpose.
     The bundle provenance box stays (an end-to-end test uses it).
 11. **SEO.** `metadataBase` is `SITE.url` (`https://mutascope.abdullahhanif.me`). Every page
     gets its title, description, canonical URL, Open Graph and Twitter fields from one helper

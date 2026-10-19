@@ -174,21 +174,33 @@ test("How it works states the deployment rule from the manifest and keeps the cl
   await expect(page.getByTestId("pipeline")).toBeVisible();
 });
 
-test("About has the author's links and the AI statement", async ({ page }) => {
+test("About has the author's text, with bold lead-ins, and links", async ({ page }) => {
   await page.goto("/about");
-  const links = page.getByTestId("about-links");
-  await expect(links.getByRole("link", { name: "GitHub" })).toHaveAttribute(
-    "href",
+  const paragraphs = page.getByTestId("about-text").locator("p");
+  await expect(paragraphs).toHaveText([
+    "Hi, I'm Abdullah Hanif. I use machine learning to understand genomes and proteins, and I'm doing a Master's in Bioinformatics at Saarland University.",
+    "Why I built MutaScope. Protein language models are usually summarised by a single score. I wanted to see where they predict well and where they don't, so the benchmark results here come with their test setup, their uncertainty and their limits.",
+    "Let's talk. I'd love to join a team working on similar ideas, where machine learning meets genomics and biomedicine. If you're working on something similar, I'd love to hear from you.",
+  ]);
+  await expect(paragraphs.locator("strong")).toHaveText([
+    "Hi, I'm Abdullah Hanif.",
+    "Why I built MutaScope.",
+    "Let's talk.",
+  ]);
+  const links = page.getByTestId("about-links").getByRole("link");
+  await expect(links).toHaveText([
+    "abha00004@stud.uni-saarland.de",
+    "abdullahhanif.me",
+    "GitHub",
+    "LinkedIn",
+  ]);
+  const hrefs = await links.evaluateAll((els) => els.map((el) => el.getAttribute("href")));
+  expect(hrefs).toEqual([
+    "mailto:abha00004@stud.uni-saarland.de",
+    "https://abdullahhanif.me",
     "https://github.com/EngAbdullahHanif/",
-  );
-  await expect(links.getByRole("link", { name: "LinkedIn" })).toHaveAttribute(
-    "href",
     "https://www.linkedin.com/in/engabdullahhanif/",
-  );
-  await expect(page.getByRole("link", { name: "http://abdullahhanif.me/" })).toBeVisible();
-  await expect(page.getByTestId("ai-statement")).toHaveText(
-    "MutaScope is my own project: the idea, the scientific design, the evaluation rules and every decision recorded in the ADRs are mine. I used Claude as an AI assistant for writing code and for reviewing my plans, and I review and test everything before it is merged.",
-  );
+  ]);
 });
 
 test("every page has a canonical URL and an Open Graph image on the production origin", async ({
