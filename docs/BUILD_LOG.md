@@ -4043,3 +4043,56 @@ outside any pull request. The README now says the project is launched and links 
 - *Loose ends (the author's):* no favicon (`/favicon.ico` 404); `web quality` is not yet a
   required check; GHCR visibility, Sentry, the trusted-proxy log check and the precise-mode
   limit stay open (ROADMAP); demo video and write-up.
+
+## Entry 46 — README and launch drafts (Phase 5 Task 8, 2026-10-19)
+
+**Plain-language summary.** The README was written for a developer running the pipeline; it is
+now written for a first-time visitor. Its first screen has the live site link, a hero image
+(`docs/img/explorer.png`, captured by hand: says exactly what to
+capture), a one-paragraph summary and the headline results, followed by an architecture
+diagram (Mermaid), short "run it yourself" steps, links to the site, the API docs, the dataset
+and the models, a line on AI assistance and the statement that the results are not for clinical
+use. Everything operational (the pipeline steps, resuming a run, the model gate, experiment
+tracking, the benchmark harness, publishing, Docker, Foldseek) moved word for word to
+`docs/OPERATIONS.md`.  holds drafts for the demo video script, a LinkedIn post and
+a portfolio description.
+
+**The 3 most important design choices.**
+
+1. **Numbers come only from the rows the site shows.** Each headline number is a row of
+   `benchmarks.json` in `bundle-v1.1.0` (revision `1bfc294`, whose `SHA256SUMS` the local copy
+   matches) that the Landing or Benchmarks page reads through `web/src/lib/benchmarks/select.ts`,
+   rounded as the pages round it. An HTML comment beside each number names its row, and each
+   launch draft ends with a table of its sources. Nothing was copied from an ADR.
+2. **The headline table shows paired differences.** The first table lists four paired
+   comparisons: SaProt − ESM-2 650M; the ensemble − SaProt, whose interval includes 0 and is
+   kept to show it; the deployed ridge − zero-shot SaProt on the contiguous split (the
+   headline); and the same on modulo. Each model's own Spearman is in a second table, with a
+   note not to compare models from it (ADR 0014).
+3. **Moved, not rewritten.** The operational sections went into `docs/OPERATIONS.md`
+   unchanged, with only their relative links adjusted (every one checked to resolve). The one
+   pointer to them in code, Foldseek's install hint, now names the new file.
+
+**Problems encountered and how they were solved.**
+
+1. *Foldseek's install hint pointed at a README section that no longer exists.*
+   `mutascope.data.three_di.INSTALL_HINT` said "see README, 'Installing Foldseek'". Found by
+   grepping `src`, `tests` and `pipeline` for "README". Fix: it names `docs/OPERATIONS.md`, and
+   so does the comment in `pipeline/modules/foldseek_3di.nf`. The section heading is unchanged,
+   so `tests/data/test_three_di.py`'s check for "Installing Foldseek" still holds.
+2. *The LinkedIn draft was 1,299 characters, with no margin under 1,300.* Measured with
+   Python's `len` on the post text after the first draft. Fix: three sentences shortened, to
+   1,249. A later edit (the reproduction test's wording, "in cross-validation" beside +0.092 and
+   the author's closing line) took it to 1,320; four phrases shortened again, now 1,276. The
+   file records the measured count.
+
+**Supporting details.**
+
+- GitHub's Markdown API (`POST /markdown`, `gfm`) renders the new README with 3 tables and the
+  Mermaid block, and none of the source comments shows in the rendered text.
+- The site, API `/health`, the dataset, both model repositories and proteingym.org all
+  returned 200 on 2026-10-19.
+- *Loose ends (the author's):* capture `docs/img/explorer.png` before merging (until then the
+  README shows a broken image); record the video; check the flags at the end of each draft in
+  . ROADMAP's "README, 2-minute demo video, write-up" stays open until the video
+  exists.
