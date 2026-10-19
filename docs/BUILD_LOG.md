@@ -3692,6 +3692,11 @@ no structures and never downloads or reads these files. Decision record: ADR 003
   click; Zika env click scrolls a 3,423-residue heatmap; p53 no structure).
 - New dependency: `3dmol` 2.5.5 (BSD-3-Clause). Licence line for the AF2 structures in
   `docs/DATA_CARD.md` (ProteinGym, MIT; AlphaFold2, Jumper et al. 2021, parameters CC BY 4.0).
-- Loose end: the bundle is published by the author (`mutascope export push`), then the commit is
-  pinned in `conf/export/default.yaml`, `api/app/settings.py`, `.env.example` and
-  `web/bundle.json`.
+- Published by the author with `mutascope export push` on 2026-10-19: the Hub split the upload
+  into two commits (`df77169`, then `1bfc294`), and tag `bundle-v1.1.0` resolves to `1bfc294`.
+  Checked through the Hub API without a token: public, its 410 bundle files match `build/bundle`
+  by sha256, and the 14 files outside `bundle/` are identical to `3ae7672`. Pinned in
+  `conf/export/default.yaml`, `api/app/settings.py`, `.env.example` and `web/bundle.json`. The
+  API started on it (`/ready`: schema 1.1.0, revision `1bfc294`, 217 proteins; 224 files checked,
+  no `structures/` in its snapshot). `make web-check` downloaded and verified 409 files, and
+  Playwright passed 18 of 18 on them.

@@ -47,8 +47,8 @@ class Settings(BaseSettings):
     """Hub dataset repo holding the bundle (``publish.repo_id``)."""
     bundle_path: str = "bundle"
     """Folder of the bundle in that repo (``export.publish.path_in_repo``)."""
-    bundle_revision: CommitHash = "3ae767217bb0a56b8f2e7c79c68b73119e308066"
-    """Commit of ``bundle-v1.0.0`` (``export.publish.revision``)."""
+    bundle_revision: CommitHash = "1bfc294371d4adeb31d8613989bed9055f03409a"
+    """Commit of ``bundle-v1.1.0`` (``export.publish.revision``)."""
     bundle_dir: Path | None = None
     """Read a local copy of the bundle instead of the Hub (tests, development). It must hold
     ``SHA256SUMS``, ``manifest.json`` and ``benchmarks.json``; protein files are checked
