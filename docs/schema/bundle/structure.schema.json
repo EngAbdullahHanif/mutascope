@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:mutascope:bundle:1.1.0:structure",
+  "$defs": {
+    "Quantized": {
+      "additionalProperties": false,
+      "description": "Fixed-point numbers: ``value = q / 10**decimals``; ``null`` is no value.",
+      "properties": {
+        "decimals": {
+          "maximum": 12,
+          "minimum": 0,
+          "title": "Decimals",
+          "type": "integer"
+        },
+        "values": {
+          "items": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Values",
+          "type": "array"
+        }
+      },
+      "required": [
+        "decimals",
+        "values"
+      ],
+      "title": "Quantized",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "One ProteinGym AF2 structure (matched to the DMS target sequences), backbone only.\n\nPer residue: its number and amino acid as in the PDB, the coordinates of\n:data:`BACKBONE_ATOMS` and AF2's pLDDT (the PDB's B-factor, the same on every atom of a\nresidue). Side chains and hydrogens are dropped: the viewer draws a cartoon.",
+  "properties": {
+    "schema_version": {
+      "const": "1.1.0",
+      "default": "1.1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "pdb_file": {
+      "description": "The file's name in ProteinGym's ``ProteinGym_AF2_structures.zip``.",
+      "title": "Pdb File",
+      "type": "string"
+    },
+    "source_sha256": {
+      "description": "Of the PDB file the structure was read from.",
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Source Sha256",
+      "type": "string"
+    },
+    "chain": {
+      "title": "Chain",
+      "type": "string"
+    },
+    "residue_numbers": {
+      "description": "PDB residue numbers, strictly increasing.",
+      "items": {
+        "type": "integer"
+      },
+      "title": "Residue Numbers",
+      "type": "array"
+    },
+    "sequence": {
+      "pattern": "^[ACDEFGHIKLMNPQRSTVWY]+$",
+      "title": "Sequence",
+      "type": "string"
+    },
+    "atoms": {
+      "default": [
+        "N",
+        "CA",
+        "C",
+        "O"
+      ],
+      "maxItems": 4,
+      "minItems": 4,
+      "prefixItems": [
+        {
+          "const": "N",
+          "type": "string"
+        },
+        {
+          "const": "CA",
+          "type": "string"
+        },
+        {
+          "const": "C",
+          "type": "string"
+        },
+        {
+          "const": "O",
+          "type": "string"
+        }
+      ],
+      "title": "Atoms",
+      "type": "array"
+    },
+    "coordinates": {
+      "$ref": "#/$defs/Quantized",
+      "description": "\u00c5, flattened ``(residue, atom, xyz)``: ``12 * n`` values, none null."
+    },
+    "plddt": {
+      "$ref": "#/$defs/Quantized",
+      "description": "Per residue, 0-100."
+    }
+  },
+  "required": [
+    "pdb_file",
+    "source_sha256",
+    "chain",
+    "residue_numbers",
+    "sequence",
+    "coordinates",
+    "plddt"
+  ],
+  "title": "StructureFile",
+  "type": "object"
+}
