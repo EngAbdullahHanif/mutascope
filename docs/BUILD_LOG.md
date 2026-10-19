@@ -3974,3 +3974,18 @@ accessibility 1.00.
 - Also fixed: the CI artifact had no Lighthouse reports (`upload-artifact` skips hidden
   directories), and the summary now lists the metrics behind each score and the machine's CPU
   benchmark.
+
+**Follow-up (2026-10-19): a race in the Landing structure test.** After the merge, CI on `main`
+(run #154) failed "the Landing structure loads after first paint and turns" with
+`scrollIntoViewIfNeeded: Element is not attached to the DOM`; the run before it (#152) had
+passed.
+- *Found:* on a desktop-sized window the placeholder is on screen at once, so React replaces
+  it, first with the module's loading fallback, which had no test id, then with the viewer.
+  The test was scrolling the element being replaced. Reproduced locally: 5 failures in 45 runs
+  of the three Landing structure tests (8 workers, no retries).
+- *Fix:* the loading fallback carries the same test id (`data-state="loading"`), so there is
+  always exactly one `landing-structure` element (waiting → loading → ready). The tests scroll
+  the figure, which is never replaced. The Explorer tests had the same pattern with the
+  structure placeholder: they now scroll the Structure section.
+- *Verified:* 90 of 90 runs of the Landing tests and 105 of 105 of the structure and quality
+  tests under the same load. Full suite 69 + 1 skipped; `make lint test` passes.
