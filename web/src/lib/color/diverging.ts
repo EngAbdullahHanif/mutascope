@@ -28,7 +28,7 @@ export const EFFECT_MISSING = "#bdbdbd";
 
 type Lab = readonly [number, number, number];
 
-function hexToRgb(hex: string): [number, number, number] {
+export function hexToRgb(hex: string): [number, number, number] {
   const n = Number.parseInt(hex.slice(1), 16);
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
@@ -56,7 +56,8 @@ export function hexToOklab(hex: string): Lab {
   ];
 }
 
-function oklabToHex([L, A, B]: Lab): string {
+/** OKLab to sRGB hex, clipped to the gamut. */
+export function oklabToHex([L, A, B]: Lab): string {
   const l = (L + 0.3963377774 * A + 0.2158037573 * B) ** 3;
   const m = (L - 0.1055613458 * A - 0.0638541728 * B) ** 3;
   const s = (L - 0.0894841775 * A - 1.291485548 * B) ** 3;
