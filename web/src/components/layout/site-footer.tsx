@@ -4,11 +4,14 @@ export function SiteFooter() {
   return (
     <footer className="mt-16 border-t text-sm text-muted-foreground">
       <div className="mx-auto flex max-w-6xl flex-col gap-4 px-4 py-8 md:flex-row md:items-start md:justify-between">
-        <p className="max-w-prose" data-testid="clinical-note">
-          <strong className="font-medium text-foreground">Not for clinical use.</strong> MutaScope
-          predicts functional effects measured in deep mutational scanning (DMS) assays. It does not
-          predict pathogenicity and must not inform diagnosis or treatment.
-        </p>
+        <div className="flex max-w-prose flex-col gap-2">
+          <p data-testid="clinical-note">
+            <strong className="font-medium text-foreground">Not for clinical use.</strong> MutaScope
+            predicts functional effects measured in deep mutational scanning (DMS) assays. It does
+            not predict pathogenicity and must not inform diagnosis or treatment.
+          </p>
+          <p data-testid="copyright">© 2026 Abdullah Hanif</p>
+        </div>
         <ul className="flex shrink-0 gap-4">
           <li>
             <a
