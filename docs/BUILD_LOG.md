@@ -3655,7 +3655,7 @@ no structures and never downloads or reads these files. Decision record: ADR 003
    LEU"). With equal residue names it would have overwritten coordinates silently, or failed with
    a misleading "appears twice". *Fix:* a residue number that comes back after other residues is
    its own error ("appears again after others"), separate from "not strictly increasing".
-   *Verified:* two parametrised cases (a number reused, numbers decreasing); all 185 real PDBs
+   *Verified:* two parametrised cases (a number reused, numbers decreasing); the 185 PDBs the assays use all
    parse, and all 213 assays pass the residue check.
 2. **The 3D hover tests found no residue.** *Found:* the first Playwright run. Two of the three new
    tests failed with "no residue found under the pointer in the 3D view", although the same scan

@@ -71,8 +71,9 @@ The API serves no structure. `api.app.bundle` lists `structures/` as `IGNORED`: 
 excludes it (`ignore_patterns`), `verify_checksums` skips its lines, and nothing opens a structure
 file, so the image and the 4 GiB instance hold none of them. A test lists structure lines with
 wrong digests and missing files and the bundle still opens; another checks the download pattern.
-The API's response schemas are unchanged (`structure_file` is not in `ProteinDetail`), so
-`api-types.ts` does not change.
+The API's responses gain no structure field (`structure_file` is not in `ProteinDetail`); the
+only change to `api-types.ts` is the `schema_version` constant of `/v1/benchmarks`, which returns
+the bundle's `Benchmarks` model (1.0.0 → 1.1.0).
 
 ### 5. Viewer: 3Dmol.js, after the heatmap
 
