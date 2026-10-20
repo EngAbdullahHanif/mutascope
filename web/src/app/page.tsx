@@ -10,12 +10,16 @@ import { benchmarksFromDisk, manifestFromDisk } from "@/lib/bundle/static-params
 import { pageMetadata } from "@/lib/seo";
 import { EXAMPLES, SITE } from "@/lib/site";
 
-export const metadata: Metadata = pageMetadata({
-  title: `${SITE.name}: mutation landscapes for ProteinGym assays`,
-  description: `Predicted functional effect of every single amino-acid substitution in ${manifestFromDisk().proteins.length} ProteinGym DMS assays, with an honest benchmark.`,
-  path: "/",
-  absoluteTitle: true,
-});
+// The tab title is the name alone; the Open Graph and Twitter titles keep the longer line.
+export const metadata: Metadata = {
+  ...pageMetadata({
+    title: `${SITE.name}: mutation landscapes for ProteinGym assays`,
+    description: `Predicted functional effect of every single amino-acid substitution in ${manifestFromDisk().proteins.length} ProteinGym DMS assays, with an honest benchmark.`,
+    path: "/",
+    absoluteTitle: true,
+  }),
+  title: { absolute: SITE.name },
+};
 
 /** The example ids, checked against the manifest: a missing one fails the build. */
 function examples() {
