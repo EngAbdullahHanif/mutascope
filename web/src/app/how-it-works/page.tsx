@@ -306,16 +306,6 @@ export default function HowItWorksPage() {
             </li>
           </ul>
         </Section>
-
-        <aside
-          className="max-w-prose rounded-md border bg-muted/50 p-4 text-sm"
-          data-testid="not-clinical"
-        >
-          <strong className="font-medium">Not for clinical use.</strong> MutaScope predicts
-          functional effects measured in deep mutational scanning assays. It does not predict
-          pathogenicity and must not inform diagnosis or treatment. Zero-shot and supervised
-          predictions are always labelled as such.
-        </aside>
       </div>
     </>
   );

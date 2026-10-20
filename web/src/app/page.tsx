@@ -10,12 +10,16 @@ import { benchmarksFromDisk, manifestFromDisk } from "@/lib/bundle/static-params
 import { pageMetadata } from "@/lib/seo";
 import { EXAMPLES, SITE } from "@/lib/site";
 
-export const metadata: Metadata = pageMetadata({
-  title: `${SITE.name}: mutation landscapes for ProteinGym assays`,
-  description: `Predicted functional effect of every single amino-acid substitution in ${manifestFromDisk().proteins.length} ProteinGym DMS assays, with an honest benchmark.`,
-  path: "/",
-  absoluteTitle: true,
-});
+// The tab title is the name alone; the Open Graph and Twitter titles keep the longer line.
+export const metadata: Metadata = {
+  ...pageMetadata({
+    title: `${SITE.name}: mutation landscapes for ProteinGym assays`,
+    description: `Predicted functional effect of every single amino-acid substitution in ${manifestFromDisk().proteins.length} ProteinGym DMS assays, with an honest benchmark.`,
+    path: "/",
+    absoluteTitle: true,
+  }),
+  title: { absolute: SITE.name },
+};
 
 /** The example ids, checked against the manifest: a missing one fails the build. */
 function examples() {
@@ -46,7 +50,7 @@ export default function HomePage() {
             Predicted effects of every single amino-acid substitution in {nAssays} ProteinGym
             assays, tested against real measurements.
           </p>
-          <div className="mt-6 flex flex-wrap gap-3">
+          <div className="mt-8 flex flex-wrap gap-3" data-testid="landing-actions">
             <Button asChild>
               <Link href="/explore">Open the Explorer</Link>
             </Button>
@@ -54,7 +58,7 @@ export default function HomePage() {
               <Link href="/benchmarks">See the benchmark</Link>
             </Button>
           </div>
-          <div className="mt-8">
+          <div className="mt-10" data-testid="landing-examples">
             <h2 className="text-sm font-medium text-muted-foreground">Start with an example</h2>
             <ul className="mt-2 flex flex-wrap gap-2" data-testid="examples">
               {picks.map((p) => (
@@ -86,7 +90,7 @@ export default function HomePage() {
         </figure>
       </section>
 
-      <section aria-labelledby="headlines" className="flex flex-col gap-4">
+      <section aria-labelledby="headlines" className="mt-6 flex flex-col gap-4">
         <h2 id="headlines" className="text-xl font-semibold tracking-tight">
           What the benchmark shows
         </h2>

@@ -31,7 +31,15 @@ test("every page carries the not-for-clinical-use note, the copyright and the pr
     await page.goto(href);
     const footer = page.getByRole("contentinfo");
     await expect(footer.getByTestId("clinical-note")).toContainText("Not for clinical use.");
-    await expect(footer.getByTestId("copyright")).toHaveText("© 2026 Abdullah Hanif");
+    const copyright = footer.getByTestId("copyright");
+    await expect(copyright).toHaveText("© 2026 Abdullah Hanif");
+    // Its own centred bottom row, under a divider, below the note and the links.
+    await expect(copyright).toHaveCSS("text-align", "center");
+    await expect(copyright).toHaveCSS("border-top-style", "solid");
+    const note = (await footer.getByTestId("clinical-note").boundingBox())!;
+    const links = (await footer.getByRole("list").boundingBox())!;
+    const row = (await copyright.boundingBox())!;
+    expect(row.y).toBeGreaterThanOrEqual(Math.max(note.y + note.height, links.y + links.height));
     await expect(footer.getByRole("link", { name: "GitHub" })).toHaveAttribute(
       "href",
       "https://github.com/EngAbdullahHanif/mutascope",
@@ -119,4 +127,29 @@ test("protein files are served as the gzip bytes the manifest lists", async ({ r
   const body = await res.body();
   expect(body.length).toBe(entry.bytes);
   expect([body[0], body[1]]).toEqual([0x1f, 0x8b]);
+});
+
+test("the page links the site icon, and it is served as SVG", async ({ page, request }) => {
+  await page.goto("/");
+  const href = await page
+    .locator('head link[rel="icon"][type="image/svg+xml"]')
+    .getAttribute("href");
+  expect(href).toMatch(/^\/icon\.svg/);
+  for (const url of [href!, "/icon.svg"]) {
+    const res = await request.get(url);
+    expect(res.status()).toBe(200);
+    expect(res.headers()["content-type"]).toContain("image/svg+xml");
+  }
+  // A 200 is not enough: an SVG that is not well-formed XML is served but never drawn.
+  const width = await page.evaluate(
+    (src) =>
+      new Promise<number>((resolve) => {
+        const img = new Image();
+        img.onload = () => resolve(img.naturalWidth);
+        img.onerror = () => resolve(0);
+        img.src = src;
+      }),
+    href!,
+  );
+  expect(width).toBeGreaterThan(0);
 });
