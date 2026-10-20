@@ -76,6 +76,38 @@ test("the bundle loads and validates from the site alone (API asleep)", async ({
   expect(external).toEqual([]);
 });
 
+test("the PNG icon and the Apple touch icon are linked, served and decodable", async ({
+  page,
+  request,
+}) => {
+  await page.goto("/");
+  for (const [rel, path, size] of [
+    ["icon", "/icon.png", 192],
+    ["apple-touch-icon", "/apple-icon.png", 180],
+  ] as const) {
+    const href = await page
+      .locator(`head link[rel="${rel}"][href^="${path}"]`)
+      .getAttribute("href");
+    expect(href).not.toBeNull();
+    for (const url of [href!, path]) {
+      const res = await request.get(url);
+      expect(res.status()).toBe(200);
+      expect(res.headers()["content-type"]).toBe("image/png");
+    }
+    const width = await page.evaluate(
+      (src) =>
+        new Promise<number>((resolve) => {
+          const img = new Image();
+          img.onload = () => resolve(img.naturalWidth);
+          img.onerror = () => resolve(0);
+          img.src = src;
+        }),
+      href!,
+    );
+    expect(width).toBe(size);
+  }
+});
+
 test("protein files are served as the gzip bytes the manifest lists", async ({ request }) => {
   const manifest = (await (await request.get("/data/manifest.json")).json()) as {
     proteins: { file: string; bytes: number }[];
