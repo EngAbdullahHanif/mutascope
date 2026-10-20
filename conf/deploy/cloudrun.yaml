@@ -42,8 +42,9 @@ timeout_seconds: 900
 env:
   # ADR 0031's rule: 150M's fast-mode p95 at 1,000 residues was 5.72 s on this service (> 2 s).
   MUTASCOPE_API_SCORE_DEFAULT_MODEL: esm2_35m
-  # A precise job stays under ~3 min (ADR 0029): 400 residues took 163 s, 600 took 406 s.
-  MUTASCOPE_API_PRECISE_MAX_LENGTH: "400"
+  # A precise job should stay under ~3 min (ADR 0029). With one ONNX thread (below), 400 residues
+  # took 293 s live, so the limit is 300 (ADR 0036, addendum); 300's time is not measured yet.
+  MUTASCOPE_API_PRECISE_MAX_LENGTH: "300"
   # One ONNX thread leaves one vCPU to the event loop (ADR 0036, section 7). Read p99 at 5 users
   # fell from 8.5 s to 140 ms; the cost: a 400-residue precise job takes 293 s, not 203 s.
   MUTASCOPE_API_ONNX_THREADS: "1"

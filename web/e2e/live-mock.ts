@@ -172,7 +172,7 @@ export async function mockApi(page: Page, opts: MockOptions = {}): Promise<Reque
         proteins: 217,
         models: ["esm2_150m_onnx_fp32", MODEL],
         score_default_model: "esm2_35m",
-        precise_max_length: 400,
+        precise_max_length: 300,
         ...opts.ready,
       }),
     ),
