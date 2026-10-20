@@ -100,4 +100,16 @@ test("the page links the site icon, and it is served as SVG", async ({ page, req
     expect(res.status()).toBe(200);
     expect(res.headers()["content-type"]).toContain("image/svg+xml");
   }
+  // A 200 is not enough: an SVG that is not well-formed XML is served but never drawn.
+  const width = await page.evaluate(
+    (src) =>
+      new Promise<number>((resolve) => {
+        const img = new Image();
+        img.onload = () => resolve(img.naturalWidth);
+        img.onerror = () => resolve(0);
+        img.src = src;
+      }),
+    href!,
+  );
+  expect(width).toBeGreaterThan(0);
 });
