@@ -3,7 +3,7 @@
 export PYTORCH_ENABLE_MPS_FALLBACK := 1
 
 .PHONY: setup lint fmt test test-slow pipeline pipeline-test pipeline-test-docker mlflow api web types
-.PHONY: api-image pipeline-image images test-container web-check web-e2e web-quality
+.PHONY: api-image pipeline-image images test-container web-check web-e2e web-quality readme-gif
 
 setup:
 	uv sync --all-extras
@@ -88,6 +88,12 @@ web-check: require-web
 # chromium` once).
 web-e2e: require-web
 	cd web && pnpm test:e2e
+
+# The README's animated Explorer, docs/img/explorer.gif (`make web-check` first: it runs against
+# the production build).
+readme-gif: require-web
+	cd web && pnpm exec playwright test --config=playwright.media.config.ts
+	uv run python tools/readme/make_gif.py web/.media-frames docs/img/explorer.gif
 
 # The website's quality gate (`make web-check` first): the JavaScript size budget, Playwright
 # (axe, 375 px, end-to-end), then Lighthouse, mobile and desktop, median of 3, with the budgets
