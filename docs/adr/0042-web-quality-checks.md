@@ -8,6 +8,9 @@
   machine with GPU rendering (`make web-quality`); CI records its scores without asserting them,
   and the 3D views load only when on screen (ADR 0039 and 0041 addenda). See "Follow-up" at the
   end.
+- Addendum (2026-10-20): the Landing page's ~140 s blocking time on CI comes from the turning
+  structure in software WebGL on the slower runners, not from the site (see "Addendum" at the
+  end).
 
 ## Context
 
@@ -129,3 +132,51 @@ it still loads and turns there.
 The budgets stay as they were. Neither lowering them for CI nor turning the turn off when WebGL
 reports software rendering (`failIfMajorPerformanceCaveat`) was taken: the second is keyed to
 exactly the condition CI runs in, too close to a measurement trick.
+
+## Addendum (2026-10-20): the Landing page's blocking time on CI
+
+ADR 0043 lists the Landing page's total blocking time on CI (about 140 s, mobile) as not
+investigated. It is the turning structure under software WebGL, and whether it reaches 140 s
+depends on which runner the job gets. It does not come from the site's code.
+
+**Two results for the same page.** CI's `main` runs from `cd90538` to `046dfcb` (mobile Landing,
+median run): TBT is either 6–8 s or 136–143 s. Which one it is follows the runner, not the
+commit. It mostly tracks the runner's CPU benchmark (`benchmarkIndex`, which is noisy: one slow
+run scored 2,979):
+
+| Runner benchmark | Runs | Mobile TBT | Performance |
+|---|---|---|---|
+| 2,294–2,486 (one 2,979) | 11 (e.g. `046dfcb`, a release bump) | 136,798–142,515 ms | 0.65–0.66 |
+| 2,926–4,137 | 4 (e.g. `71f9623`, docs only, the commit before) | 6,220–8,270 ms | 0.66–0.67 |
+
+`71f9623` → `046dfcb` changed only the version number, and TBT went from 8.3 s to 139 s.
+
+**Where the time goes** (Lighthouse reports from the `web-quality` artifacts of those two runs):
+- Slow runner, mobile: 177 s of script evaluation on the main thread (simulated). Long tasks
+  from the 3Dmol chunk run to the end of the trace (the last start at about 159 s), so there is
+  no quiet window. Time to interactive is the end of the trace (181 s), and TBT adds up the
+  whole turn.
+- Fast runner, mobile: 11–14 s of script evaluation. The long tasks stop by about 15 s, time to
+  interactive is about 16 s, and TBT is 7–8 s.
+- Desktop, the same split: TBT 12.1–12.4 s against 0.8–1.1 s. Median long task 75–77 ms
+  against 55–56 ms. Mobile's long tasks are about 3.4× desktop's: Lighthouse's simulated 4×
+  CPU slowdown.
+
+Each frame of the turn is redrawn in software on the main thread (this ADR's follow-up). On the
+slower runners those frames stay over the 50 ms long-task line under the simulated slowdown, so
+the blocking never ends. On the faster ones they drop under it. On the M4 Pro with software
+rendering forced (`--use-angle=swiftshader`), the Landing's mobile TBT was 0.9–2.3 s, and the
+same with reduced motion (no turn). On a fast CPU the turn's frames are not long tasks at all.
+The performance score is about 0.66 on both kinds of runner, because TBT's score is already at
+zero above a few seconds.
+
+**What this means.** The 140 s is not a 140 s freeze that a reader would see. It is a
+never-ending animation, measured in software rendering on a slow 2-vCPU machine and multiplied
+by the simulated phone. Nothing changes:
+- CI keeps recording Lighthouse without asserting it.
+- The budgets are still asserted with GPU rendering (`make web-quality`).
+- The turn still stops for reduced motion.
+
+What remains is what the follow-up already says. A reader whose browser renders WebGL in
+software, on a slow CPU, gets a turn that keeps the main thread busy (frames of about 75 ms on
+CI's desktop runs), so input on the Landing can lag while the figure is on screen.

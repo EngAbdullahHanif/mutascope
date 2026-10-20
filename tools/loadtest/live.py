@@ -36,6 +36,10 @@ requests) and stays inside one client's rate limits where it can:
    the score cache (the instance's disk is memory) against the 4 GiB limit, and the inference
    gauges. The scrapes count against the same client's read limit.
 
+``--precise-only L [L ...]`` runs step 0 and then only step 4, one job per length in turn
+(each waits for the one before), and writes ``precise.json``: for measuring the precise limit
+without the rest of the run.
+
 Then ADR 0031's rule: if 150M's fast-mode p95 at 1,000 residues exceeds 2 s, the default
 model becomes 35M (``MUTASCOPE_API_SCORE_DEFAULT_MODEL`` in ``conf/deploy/cloudrun.yaml``, ``env``).
 """
@@ -284,6 +288,10 @@ def fast_latency(base: str, n: int, spacing: float, rng: random.Random) -> dict[
     return cells
 
 
+MAX_RECONNECTS = 5
+"""Stream resumptions per precise job before it is reported as it stands."""
+
+
 def precise_job(base: str, length: int, rng: random.Random, timeout: float = 600) -> dict[str, Any]:
     """Submit one job and follow it on its SSE stream, as the website does.
 
@@ -297,16 +305,30 @@ def precise_job(base: str, length: int, rng: random.Random, timeout: float = 600
     if status != 202:
         raise RuntimeError(f"precise job: unexpected {status}: {payload[:200]!r}")
     job = json.loads(payload)["id"]
-    events = 0
-    with urllib.request.urlopen(f"{base}/v1/jobs/{job}/stream", timeout=timeout) as stream:
-        for line in stream:  # the server ends the stream when the job has finished
-            events += line.startswith(b"event:")
-    _, _, payload, _ = request(f"{base}/v1/jobs/{job}")
+    log.info("precise job %s: %d residues", job, length)
+    events, last_id, reconnects = 0, None, 0
+    while True:
+        # The server ends the stream only when the job has finished; a stream that ends before
+        # that was cut on the way, and is resumed after the last event, as the website does.
+        headers = {} if last_id is None else {"Last-Event-ID": last_id}
+        req = urllib.request.Request(f"{base}/v1/jobs/{job}/stream", headers=headers)
+        with urllib.request.urlopen(req, timeout=timeout) as stream:
+            for line in stream:
+                events += line.startswith(b"event:")
+                if line.startswith(b"id:"):
+                    last_id = line[3:].strip().decode()
+        _, _, payload, _ = request(f"{base}/v1/jobs/{job}")
+        final = json.loads(payload)["status"]
+        if final not in ("queued", "running") or reconnects >= MAX_RECONNECTS:
+            break
+        reconnects += 1
+        log.info("precise job %s: stream ended while %s; resuming", job, final)
     return {
         "length": length,
-        "status": json.loads(payload)["status"],
+        "status": final,
         "seconds": round(time.perf_counter() - started, 1),
         "events": events,
+        "reconnects": reconnects,
     }
 
 
@@ -368,6 +390,10 @@ def main() -> None:
     parser.add_argument("--load-seconds", type=int, default=120, help="per load run (<= 120)")
     parser.add_argument("--scrape-seconds", type=float, default=10)
     parser.add_argument("--seed", type=int, default=7)
+    parser.add_argument(
+        "--precise-only", type=int, nargs="+", metavar="LENGTH",
+        help="only time one precise job per length (no reads, fast mode or load)",
+    )  # fmt: skip
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     base = args.url.rstrip("/")
@@ -386,6 +412,17 @@ def main() -> None:
         "ready": json.loads(payload),
         "version": json.loads(health)["version"],
     }
+    if args.precise_only:
+        summary["precise"] = []
+        for length in args.precise_only:
+            try:
+                result = precise_job(base, length, rng)
+            except (OSError, RuntimeError) as error:  # one failed length does not end the run
+                result = {"length": length, "status": "error", "error": repr(error)}
+            summary["precise"].append(result)
+            log.info("precise: %s", result)
+        (args.out / "precise.json").write_text(json.dumps(summary, indent=1))
+        return
     summary["metrics"] = metrics_check(base, token)
     log.info("metrics: %s", summary["metrics"])
     summary["network"] = network_baseline(base, args.rtt)
