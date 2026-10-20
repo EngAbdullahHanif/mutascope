@@ -1,0 +1,41 @@
+{
+ "url": "https://mutascope-api-2lvmztrsha-ew.a.run.app",
+ "version": "0.11.1",
+ "ready": {
+  "status": "ready",
+  "schema_version": "1.1.0",
+  "bundle_revision": "1bfc294371d4adeb31d8613989bed9055f03409a",
+  "proteins": 217,
+  "models": [
+   "esm2_150m_onnx_fp32",
+   "esm2_35m_onnx_fp32"
+  ],
+  "score_default_model": "esm2_35m",
+  "precise_max_length": 400
+ },
+ "note": "one job per length, each followed on its SSE stream (live.py --precise-only); 250 from the first run (seed 7), whose 300 stream got no data for 600 s; 300 from the second run (seed 7), whose 350 stream ended early and was cancelled; 350 from the third run (seed 11, stream resume, none needed)",
+ "precise": [
+  {
+   "length": 250,
+   "status": "succeeded",
+   "seconds": 101.0,
+   "events": 19,
+   "run": "2026-10-20T13:07Z"
+  },
+  {
+   "length": 300,
+   "status": "succeeded",
+   "seconds": 147.8,
+   "events": 22,
+   "run": "2026-10-20T13:20:53Z"
+  },
+  {
+   "length": 350,
+   "status": "succeeded",
+   "seconds": 205.9,
+   "events": 25,
+   "reconnects": 0,
+   "run": "2026-10-20T13:26:52Z"
+  }
+ ]
+}

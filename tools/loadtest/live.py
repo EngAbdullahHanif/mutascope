@@ -288,6 +288,10 @@ def fast_latency(base: str, n: int, spacing: float, rng: random.Random) -> dict[
     return cells
 
 
+MAX_RECONNECTS = 5
+"""Stream resumptions per precise job before it is reported as it stands."""
+
+
 def precise_job(base: str, length: int, rng: random.Random, timeout: float = 600) -> dict[str, Any]:
     """Submit one job and follow it on its SSE stream, as the website does.
 
@@ -302,16 +306,29 @@ def precise_job(base: str, length: int, rng: random.Random, timeout: float = 600
         raise RuntimeError(f"precise job: unexpected {status}: {payload[:200]!r}")
     job = json.loads(payload)["id"]
     log.info("precise job %s: %d residues", job, length)
-    events = 0
-    with urllib.request.urlopen(f"{base}/v1/jobs/{job}/stream", timeout=timeout) as stream:
-        for line in stream:  # the server ends the stream when the job has finished
-            events += line.startswith(b"event:")
-    _, _, payload, _ = request(f"{base}/v1/jobs/{job}")
+    events, last_id, reconnects = 0, None, 0
+    while True:
+        # The server ends the stream only when the job has finished; a stream that ends before
+        # that was cut on the way, and is resumed after the last event, as the website does.
+        headers = {} if last_id is None else {"Last-Event-ID": last_id}
+        req = urllib.request.Request(f"{base}/v1/jobs/{job}/stream", headers=headers)
+        with urllib.request.urlopen(req, timeout=timeout) as stream:
+            for line in stream:
+                events += line.startswith(b"event:")
+                if line.startswith(b"id:"):
+                    last_id = line[3:].strip().decode()
+        _, _, payload, _ = request(f"{base}/v1/jobs/{job}")
+        final = json.loads(payload)["status"]
+        if final not in ("queued", "running") or reconnects >= MAX_RECONNECTS:
+            break
+        reconnects += 1
+        log.info("precise job %s: stream ended while %s; resuming", job, final)
     return {
         "length": length,
-        "status": json.loads(payload)["status"],
+        "status": final,
         "seconds": round(time.perf_counter() - started, 1),
         "events": events,
+        "reconnects": reconnects,
     }
 
 
