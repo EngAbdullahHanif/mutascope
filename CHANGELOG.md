@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.12.0](https://github.com/EngAbdullahHanif/mutascope/compare/v0.11.1...v0.12.0) (2026-10-20)
+
+
+### Features
+
+* **web:** about 24 px between the About page's two link lines ([4473111](https://github.com/EngAbdullahHanif/mutascope/commit/44731112948d0510d05cf3ec3337ad7cc7ca2c5d))
+* **web:** drop the not-for-clinical-use box from How it works ([0d312e3](https://github.com/EngAbdullahHanif/mutascope/commit/0d312e363a2c21652195d1cd8d6f3e96b774ae25))
+* **web:** layout polish (Landing spacing and title, footer row, How it works, About) ([f4916dc](https://github.com/EngAbdullahHanif/mutascope/commit/f4916dc1c24899d504ab557c309a5456c236ec6c))
+* **web:** more space in the Landing hero and above the benchmark heading ([674fb0d](https://github.com/EngAbdullahHanif/mutascope/commit/674fb0dca99de8cc8aa7cb799855f0d048e5ca12))
+* **web:** PNG site icon and Apple touch icon ([67091e6](https://github.com/EngAbdullahHanif/mutascope/commit/67091e62226c9ebf3de794284d4a39f56a6977f7))
+* **web:** the copyright gets its own centred footer row under a divider ([64c4752](https://github.com/EngAbdullahHanif/mutascope/commit/64c4752961566d2e30eb3ccfa5da2f0c59639bae))
+* **web:** the Landing tab title is "MutaScope" ([e75d651](https://github.com/EngAbdullahHanif/mutascope/commit/e75d6514adc8f936cf61ce7f038ce6d3c9701001))
+
+
+### Bug Fixes
+
+* precise limit 300 on Cloud Run; feat(web): site icon ([9832b20](https://github.com/EngAbdullahHanif/mutascope/commit/9832b20620cefee8cdeed50d1a3da83c7c7a9053))
+* **web:** make icon.svg well-formed XML so browsers draw it ([0835e3b](https://github.com/EngAbdullahHanif/mutascope/commit/0835e3be50d517c7266ee4dae565bd23c35dee56))
+
+
+### Documentation
+
+* ADR 0042 addendum, the Landing's CI blocking time ([dcc0445](https://github.com/EngAbdullahHanif/mutascope/commit/dcc0445e111085ff21b7c62ec8ac5647b4ccb01a))
+* precise mode measured live at 250, 300 and 350 residues ([2eaa26b](https://github.com/EngAbdullahHanif/mutascope/commit/2eaa26bb0b8294d6164335302988cceb0e279fa5))
+
 ## [0.11.1](https://github.com/EngAbdullahHanif/mutascope/compare/v0.11.0...v0.11.1) (2026-10-20)
 
 
