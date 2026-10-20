@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.11.1](https://github.com/EngAbdullahHanif/mutascope/compare/v0.11.0...v0.11.1) (2026-10-20)
+
+
+### Documentation
+
+* ADR 0043, Phase 5 close ([71f9623](https://github.com/EngAbdullahHanif/mutascope/commit/71f9623992088245e0ec9dd8744fd541b75e1535))
+* ADR 0043, Phase 5 close ([d59f84d](https://github.com/EngAbdullahHanif/mutascope/commit/d59f84dd3da902594459bba25ebde19f11a42ae5))
+
 ## [0.11.0](https://github.com/EngAbdullahHanif/mutascope/compare/v0.10.0...v0.11.0) (2026-10-19)
 
 
