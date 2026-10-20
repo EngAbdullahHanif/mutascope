@@ -138,7 +138,7 @@ test("cold start: says the server is waking up, then scores", async ({ page }) =
 
   wakeUp.open();
   await expect(status).toHaveAttribute("data-state", "ready");
-  await expect(page.getByText("Up to 400 residues on this server.")).toBeVisible();
+  await expect(page.getByText("Up to 300 residues on this server.")).toBeVisible();
   await scoreButton(page).click();
   await expect(result(page)).toHaveAttribute("data-complete", "true");
 });

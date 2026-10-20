@@ -26,7 +26,7 @@ requests) and stays inside one client's rate limits where it can:
    (``X-MutaScope-Cache: miss`` is checked); one warm-up request per model is not counted, so
    a cold start (the service scales to zero) is not in the percentiles.
    Latency is the client's wall time for the whole request, network included.
-4. **Precise mode:** one job of ``--precise-length`` residues (the deployed limit, 400),
+4. **Precise mode:** one job of ``--precise-length`` residues (the deployed limit, 300),
    timed from submission to ``succeeded``.
 5. **Load:** Locust's ``Visitor`` mix (locustfile.py) for ``--load-seconds`` at each of
    ``--load-users``. Through Google's front end every user is this machine's address, so all
@@ -363,7 +363,7 @@ def main() -> None:
     parser.add_argument("--rtt", type=int, default=20)
     parser.add_argument("--spacing", type=float, default=3.5)
     parser.add_argument("--read-spacing", type=float, default=0.6)
-    parser.add_argument("--precise-length", type=int, default=400)
+    parser.add_argument("--precise-length", type=int, default=300)
     parser.add_argument("--load-users", type=int, nargs="+", default=[5])
     parser.add_argument("--load-seconds", type=int, default=120, help="per load run (<= 120)")
     parser.add_argument("--scrape-seconds", type=float, default=10)
