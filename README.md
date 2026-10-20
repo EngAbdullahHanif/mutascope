@@ -2,7 +2,7 @@
 
 **Live site: https://mutascope.abdullahhanif.me**
 
-![The MutaScope Explorer: GFP's mutation landscape as a heatmap, linked to its AF2 structure](docs/img/explorer.png)
+![The MutaScope Explorer: the pointer moves along GFP's mutation heatmap, each cell showing its predicted score and intervals, while the AF2 structure below marks the same residue](docs/img/explorer.gif)
 
 MutaScope predicts the functional effect of every single amino-acid substitution in a protein and
 shows it as an interactive mutation landscape: a heatmap of all 19 × L substitutions, linked to
