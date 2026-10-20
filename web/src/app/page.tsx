@@ -46,7 +46,7 @@ export default function HomePage() {
             Predicted effects of every single amino-acid substitution in {nAssays} ProteinGym
             assays, tested against real measurements.
           </p>
-          <div className="mt-6 flex flex-wrap gap-3">
+          <div className="mt-8 flex flex-wrap gap-3" data-testid="landing-actions">
             <Button asChild>
               <Link href="/explore">Open the Explorer</Link>
             </Button>
@@ -54,7 +54,7 @@ export default function HomePage() {
               <Link href="/benchmarks">See the benchmark</Link>
             </Button>
           </div>
-          <div className="mt-8">
+          <div className="mt-10" data-testid="landing-examples">
             <h2 className="text-sm font-medium text-muted-foreground">Start with an example</h2>
             <ul className="mt-2 flex flex-wrap gap-2" data-testid="examples">
               {picks.map((p) => (
@@ -86,7 +86,7 @@ export default function HomePage() {
         </figure>
       </section>
 
-      <section aria-labelledby="headlines" className="flex flex-col gap-4">
+      <section aria-labelledby="headlines" className="mt-6 flex flex-col gap-4">
         <h2 id="headlines" className="text-xl font-semibold tracking-tight">
           What the benchmark shows
         </h2>
