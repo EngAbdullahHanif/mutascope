@@ -84,6 +84,48 @@ test("the Landing headline, and a subline whose assay count is the manifest's", 
   );
 });
 
+test("the Landing's title is the name alone; its description and Open Graph tags are unchanged", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect(page).toHaveTitle("MutaScope");
+  const longTitle = "MutaScope: mutation landscapes for ProteinGym assays";
+  await expect(page.locator('meta[property="og:title"]')).toHaveAttribute("content", longTitle);
+  await expect(page.locator('meta[name="twitter:title"]')).toHaveAttribute("content", longTitle);
+  await expect(page.locator('meta[name="description"]')).toHaveAttribute(
+    "content",
+    /^Predicted functional effect of every single amino-acid substitution in \d+ ProteinGym DMS assays, with an honest benchmark\.$/,
+  );
+  // Other pages keep "<page> · MutaScope".
+  await page.goto("/about");
+  await expect(page).toHaveTitle("About · MutaScope");
+});
+
+test("the Landing hero spaces its subline, buttons, examples and the benchmark heading", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const box = async (testId: string) => (await page.getByTestId(testId).boundingBox())!;
+  const subline = await box("landing-subline");
+  const actions = await box("landing-actions");
+  const examples = await box("landing-examples");
+  // About 32 px from the subline to the buttons, 40 px from the buttons to the examples.
+  const gap1 = actions.y - (subline.y + subline.height);
+  expect(gap1).toBeGreaterThanOrEqual(30);
+  expect(gap1).toBeLessThanOrEqual(34);
+  const gap2 = examples.y - (actions.y + actions.height);
+  expect(gap2).toBeGreaterThanOrEqual(38);
+  expect(gap2).toBeLessThanOrEqual(42);
+  // About 80 px from the bottom of the hero to "What the benchmark shows".
+  const hero = (await page.locator("main section").first().boundingBox())!;
+  const heading = (await page
+    .getByRole("heading", { name: "What the benchmark shows" })
+    .boundingBox())!;
+  const gap3 = heading.y - (hero.y + hero.height);
+  expect(gap3).toBeGreaterThanOrEqual(76);
+  expect(gap3).toBeLessThanOrEqual(84);
+});
+
 test("the Landing links to the examples and to live scoring", async ({ page }) => {
   await page.goto("/");
   const examples = page.getByTestId("examples").getByRole("link");
@@ -197,7 +239,9 @@ test("How it works states the deployment rule from the manifest and keeps the cl
   await expect(page.getByTestId("upstream-errors")).toContainText(
     "BRCA2_HUMAN_Erwood_2022_HEK293T",
   );
-  await expect(page.getByTestId("not-clinical")).toContainText("Not for clinical use.");
+  // The not-for-clinical-use note is the footer's alone; the page has no box of its own.
+  await expect(page.getByTestId("not-clinical")).toHaveCount(0);
+  await expect(page.getByRole("main")).not.toContainText("Not for clinical use.");
   await expect(page.getByTestId("pipeline")).toBeVisible();
 });
 
@@ -230,7 +274,7 @@ test("About has the author's text, with bold lead-ins, and links", async ({ page
   // Two lines: the site, then Email · GitHub · LinkedIn.
   await expect(block.locator("div")).toHaveText("abdullahhanif.me");
   await expect(block.locator("ul")).toHaveText(/^Email\s*·\s*GitHub\s*·\s*LinkedIn$/);
-  // About 56 px between the "Let's talk" paragraph and the links, about 14 px between the lines.
+  // About 56 px between the "Let's talk" paragraph and the links, about 24 px between the lines.
   const above = (await paragraphs.last().boundingBox())!;
   const below = (await block.boundingBox())!;
   const gap = below.y - (above.y + above.height);
@@ -239,8 +283,8 @@ test("About has the author's text, with bold lead-ins, and links", async ({ page
   const line1 = (await block.locator("div").boundingBox())!;
   const line2 = (await block.locator("ul").boundingBox())!;
   const lineGap = line2.y - (line1.y + line1.height);
-  expect(lineGap).toBeGreaterThanOrEqual(12);
-  expect(lineGap).toBeLessThanOrEqual(16);
+  expect(lineGap).toBeGreaterThanOrEqual(22);
+  expect(lineGap).toBeLessThanOrEqual(26);
 });
 
 test("every page has a canonical URL and an Open Graph image on the production origin", async ({
