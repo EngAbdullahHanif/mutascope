@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.12.1](https://github.com/EngAbdullahHanif/mutascope/compare/v0.12.0...v0.12.1) (2026-10-20)
+
+
+### Documentation
+
+* animated Explorer in the README (make readme-gif) ([421f170](https://github.com/EngAbdullahHanif/mutascope/commit/421f17085de41e84bbd94d17ea37c7a54fb4519e))
+* the README shows the Explorer as an animation ([719cd16](https://github.com/EngAbdullahHanif/mutascope/commit/719cd16d413c026489abb4faa87d70ffae7dc220))
+
 ## [0.12.0](https://github.com/EngAbdullahHanif/mutascope/compare/v0.11.1...v0.12.0) (2026-10-20)
 
 
