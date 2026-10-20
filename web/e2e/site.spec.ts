@@ -96,3 +96,28 @@ test("protein files are served as the gzip bytes the manifest lists", async ({ r
   expect(body.length).toBe(entry.bytes);
   expect([body[0], body[1]]).toEqual([0x1f, 0x8b]);
 });
+
+test("the page links the site icon, and it is served as SVG", async ({ page, request }) => {
+  await page.goto("/");
+  const href = await page
+    .locator('head link[rel="icon"][type="image/svg+xml"]')
+    .getAttribute("href");
+  expect(href).toMatch(/^\/icon\.svg/);
+  for (const url of [href!, "/icon.svg"]) {
+    const res = await request.get(url);
+    expect(res.status()).toBe(200);
+    expect(res.headers()["content-type"]).toContain("image/svg+xml");
+  }
+  // A 200 is not enough: an SVG that is not well-formed XML is served but never drawn.
+  const width = await page.evaluate(
+    (src) =>
+      new Promise<number>((resolve) => {
+        const img = new Image();
+        img.onload = () => resolve(img.naturalWidth);
+        img.onerror = () => resolve(0);
+        img.src = src;
+      }),
+    href!,
+  );
+  expect(width).toBeGreaterThan(0);
+});
