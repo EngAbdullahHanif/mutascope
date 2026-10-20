@@ -43,7 +43,7 @@ test("fast mode on the live API: wakes the server and returns a full landscape",
   await expect(page.getByTestId("server-status")).toHaveAttribute("data-state", "ready", {
     timeout: 90_000,
   });
-  // The limit shown is the live setting (400 when this test was written; not asserted).
+  // The limit shown is the live setting (300 when this test was last updated; not asserted).
   await expect(page.getByText(/Up to [\d,]+ residues on this server\./)).toBeVisible();
 
   await page.getByRole("button", { name: "Ubiquitin (yeast, 128 residues)" }).click();

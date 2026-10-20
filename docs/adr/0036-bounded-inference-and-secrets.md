@@ -7,6 +7,8 @@
 - Builds on: ADR 0031 (live scoring, jobs), ADR 0032 (limits, `/metrics`, Sentry), ADR 0033
   (the image, the 20-user container run), ADR 0034 (Cloud Run, `secrets`), ADR 0035 (items 1
   and 3)
+- Addendum (2026-10-20): the precise limit on Cloud Run is lowered from 400 to 300 residues
+  (see "Addendum" at the end)
 
 ## Context
 
@@ -324,3 +326,18 @@ counted as `no_answer`. It is a network event; it does not affect the percentile
   within 10 s.
 - The API's secrets live only in Secret Manager. The repository names them but never holds them,
   and the one GitHub secret is still `RELEASE_PLEASE_TOKEN`.
+
+## Addendum (2026-10-20): precise limit 300
+
+With one ONNX thread (section 7), a 400-residue precise job took 293 s on the live service: over
+ADR 0029's target of about three minutes, and within 7 s of 300 s, Cloud Run's default request
+timeout. This service sets `timeout_seconds: 900`, so the job did not fail, but the limit left no
+margin against the target. `conf/deploy/cloudrun.yaml` now sets
+`MUTASCOPE_API_PRECISE_MAX_LENGTH` to **300**. The image's default (600, `.env.example`) is
+unchanged; it applies outside Cloud Run.
+
+How long 300 residues take is **not measured**. Section 7's numbers suggest about 250–300
+residues would fit, but that is an estimate, not a result. ADR 0031's rule asks for a measurement
+at the new value: after the next deploy, run one 300-residue job on its SSE stream
+(`tools/loadtest/live.py`) and record the time in `docs/load-test.md`, section 6. If it is still
+over about three minutes, the limit goes lower.

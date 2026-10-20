@@ -249,7 +249,8 @@ has CPU only while a request is open):
 600 residues took 6.3× the M4 Pro's 64 s, more than twice ADR 0029's target of about 3
 minutes. **The limit is now 400** (`MUTASCOPE_API_PRECISE_MAX_LENGTH`). Between the two
 measurements time grows as about length^2.24, so 450 residues would take about 210 s, over the
-target. 400 was measured, not extrapolated.
+target. 400 was measured, not extrapolated. (With one ONNX thread, 400 took 293 s and the limit
+is now 300, not yet measured: ADR 0036, addendum.)
 
 ### 6.3 Cold start
 
