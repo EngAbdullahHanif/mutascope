@@ -76,8 +76,8 @@ describe("sequence checks (the API's rules)", () => {
   });
 
   it("applies precise mode's limit as given by the server", () => {
-    expect(preciseLengthError(400, 400)).toBeNull();
-    expect(preciseLengthError(401, 400)).toMatch(/at most 400 residues .* has 401\)/);
+    expect(preciseLengthError(300, 300)).toBeNull();
+    expect(preciseLengthError(301, 300)).toMatch(/at most 300 residues .* has 301\)/);
   });
 
   it("ships only valid examples", () => {
@@ -396,7 +396,7 @@ describe("following a job", () => {
 });
 
 describe("waking the server", () => {
-  const ready = { status: "ready", precise_max_length: 400, score_default_model: "esm2_35m" };
+  const ready = { status: "ready", precise_max_length: 300, score_default_model: "esm2_35m" };
 
   it("pings /health, then reads the limits from /ready", async () => {
     const urls: string[] = [];
@@ -411,7 +411,7 @@ describe("waking the server", () => {
     });
     const onWaking = vi.fn();
     await expect(wake(client, new AbortController().signal, { onWaking })).resolves.toMatchObject({
-      precise_max_length: 400,
+      precise_max_length: 300,
     });
     expect(urls).toEqual([`${BASE}/health`, `${BASE}/ready`]);
     expect(onWaking).not.toHaveBeenCalled();
