@@ -26,7 +26,7 @@ export default function AboutPage() {
               <strong className="font-semibold">{lead}</strong> {text}
             </p>
           ))}
-          <div className="mt-10 flex flex-col gap-3.5" data-testid="about-links">
+          <div className="mt-10 flex flex-col gap-6" data-testid="about-links">
             <div>
               <a className={link} href={ABOUT.site.href}>
                 {ABOUT.site.label}

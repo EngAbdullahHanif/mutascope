@@ -31,7 +31,15 @@ test("every page carries the not-for-clinical-use note, the copyright and the pr
     await page.goto(href);
     const footer = page.getByRole("contentinfo");
     await expect(footer.getByTestId("clinical-note")).toContainText("Not for clinical use.");
-    await expect(footer.getByTestId("copyright")).toHaveText("© 2026 Abdullah Hanif");
+    const copyright = footer.getByTestId("copyright");
+    await expect(copyright).toHaveText("© 2026 Abdullah Hanif");
+    // Its own centred bottom row, under a divider, below the note and the links.
+    await expect(copyright).toHaveCSS("text-align", "center");
+    await expect(copyright).toHaveCSS("border-top-style", "solid");
+    const note = (await footer.getByTestId("clinical-note").boundingBox())!;
+    const links = (await footer.getByRole("list").boundingBox())!;
+    const row = (await copyright.boundingBox())!;
+    expect(row.y).toBeGreaterThanOrEqual(Math.max(note.y + note.height, links.y + links.height));
     await expect(footer.getByRole("link", { name: "GitHub" })).toHaveAttribute(
       "href",
       "https://github.com/EngAbdullahHanif/mutascope",
