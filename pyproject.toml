@@ -1,6 +1,6 @@
 [project]
 name = "mutascope"
-version = "0.10.0"
+version = "0.11.0"
 description = "Predict and explore the functional effect of every single amino-acid substitution in a protein."
 readme = "README.md"
 license = "MIT"
