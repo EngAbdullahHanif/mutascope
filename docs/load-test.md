@@ -316,6 +316,26 @@ One forward pass at a time (`inference_concurrency = 1`). Details and every numb
   the first attempt lost one 150M request that way, with the instance still up (its counters
   continued).
 
+## 8. The precise limit with one ONNX thread (2026-10-20)
+
+Precise jobs on the live service (v0.11.1, one ONNX thread, `precise_max_length` 400 at the
+time), one job per length, each followed on its SSE stream (`live.py --precise-only`;
+`docs/live-measure-precise-summary.json`):
+
+| residues | time to `succeeded` |
+|---|---|
+| 250 | 101.0 s |
+| 300 | 147.8 s |
+| 350 | 205.9 s |
+| 400 (section 7) | 293 s |
+
+300 residues stay under ADR 0029's target of about 3 minutes; 350 do not. One job per length,
+from one client on a mobile connection, so these times are a single sample each. Twice the
+stream was cut before the job finished: once with no data for 600 s (300, repeated), once ended
+early (350, cancelled and repeated). The server ends a stream only when its job has finished,
+and a job advances only while a stream is open, so `live.py` now resumes a cut stream with
+`Last-Event-ID`, as the website does. The repeated 350 run needed no resume.
+
 ## What this does not show
 
 - Latency from other places than a laptop in Germany, or with more than one client address
