@@ -4,7 +4,9 @@ Usage (``make readme-gif`` runs both steps)::
 
     uv run python tools/readme/make_gif.py web/.media-frames docs/img/explorer.gif
 
-The frames are captured at 2x and scaled down to ``--width``, so the text stays sharp. All
+The frames are captured at 2x and scaled to ``--width`` (1,800 px). The README shows the GIF
+at half that (``width="900"``), so it has two image pixels per CSS pixel and stays sharp on
+high-density screens; at 900 px it was blurred there. All
 frames share one 256-colour palette, built from a mosaic of several of them: a palette from a
 single frame lacks the colours the others need. Maximum coverage, without dithering, keeps
 the effect scale's gradients smooth (median cut banded its red end) and the file small.
@@ -20,7 +22,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("frames", type=Path)
     parser.add_argument("out", type=Path)
-    parser.add_argument("--width", type=int, default=900)
+    parser.add_argument("--width", type=int, default=1800)
     parser.add_argument("--ms", type=int, default=110, help="per frame")
     parser.add_argument("--hold-ms", type=int, default=1500, help="last frame, before the loop")
     args = parser.parse_args()
