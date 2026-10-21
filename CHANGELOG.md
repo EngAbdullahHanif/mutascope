@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.12.2](https://github.com/EngAbdullahHanif/mutascope/compare/v0.12.1...v0.12.2) (2026-10-21)
+
+
+### Documentation
+
+* sharp README GIF on high-density screens ([fe70683](https://github.com/EngAbdullahHanif/mutascope/commit/fe7068328f4eb198dee00339a7bac2c0c5c3e203))
+* sharp README GIF on high-density screens ([01e1531](https://github.com/EngAbdullahHanif/mutascope/commit/01e1531d7f510226cf0f17936ec823f0a879c29d))
+
 ## [0.12.1](https://github.com/EngAbdullahHanif/mutascope/compare/v0.12.0...v0.12.1) (2026-10-20)
 
 
