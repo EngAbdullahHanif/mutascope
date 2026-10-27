@@ -14,10 +14,10 @@
 
 # Base images are literal FROM lines (tag and digest), so Dependabot can read and bump them.
 
-FROM ghcr.io/astral-sh/uv:0.13.1@sha256:4a1f3666816dafadd20ceb71eac9a7d56d7ef30279f7d64048519ab901ada336 AS uv
+FROM ghcr.io/astral-sh/uv:0.13.6@sha256:af22a52f5eafef3d78e551599d405c02df61919d18028f0cea8eda93bc9986d0 AS uv
 
 # --- builder: /opt/venv ------------------------------------------------------------------------
-FROM python:3.11.17-slim-trixie@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce AS builder
+FROM python:3.11.17-slim-trixie@sha256:b7a9e5f6a93d6d4a31f129bbd4bdee69efccb6ded0fb230d78aafaf37af98377 AS builder
 COPY --from=uv /uv /usr/local/bin/uv
 ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
     UV_PYTHON_DOWNLOADS=never \
@@ -37,7 +37,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # --- weights: /opt/mutascope/hf ----------------------------------------------------------------
 # Only the modules the fetch imports, so a change elsewhere in the API does not download
 # the 760 MB again.
-FROM python:3.11.17-slim-trixie@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce AS weights
+FROM python:3.11.17-slim-trixie@sha256:b7a9e5f6a93d6d4a31f129bbd4bdee69efccb6ded0fb230d78aafaf37af98377 AS weights
 COPY --from=builder /opt/venv /opt/venv
 WORKDIR /app
 COPY conf ./conf
@@ -51,7 +51,7 @@ RUN python -m api.app.fetch \
     && rm -rf /opt/mutascope/hf/xet /opt/mutascope/hf/hub/.locks
 
 # --- runtime -----------------------------------------------------------------------------------
-FROM python:3.11.17-slim-trixie@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce AS runtime
+FROM python:3.11.17-slim-trixie@sha256:b7a9e5f6a93d6d4a31f129bbd4bdee69efccb6ded0fb230d78aafaf37af98377 AS runtime
 ARG VCS_REF=unknown
 LABEL org.opencontainers.image.title="mutascope-api" \
       org.opencontainers.image.description="MutaScope API: precomputed landscapes and live zero-shot ESM-2 scoring (ONNX, CPU)" \
