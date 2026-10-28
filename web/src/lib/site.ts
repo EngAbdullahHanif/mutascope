@@ -17,6 +17,24 @@ export const SITE = {
   api: process.env.NEXT_PUBLIC_MUTASCOPE_API_URL ?? "https://mutascope-api-2lvmztrsha-ew.a.run.app",
 } as const;
 
+/**
+ * Visit counting (ADR 0044): GoatCounter, no cookies. The script is GoatCounter's versioned
+ * `count.v5.js`, pinned by its published SHA-384, so a changed file is refused by the browser.
+ */
+export const GOATCOUNTER = {
+  endpoint: "https://mutascope.goatcounter.com/count",
+  script: "https://gc.zgo.at/count.v5.js",
+  integrity: "sha384-atnOLvQb9t+jTSipvd75X2yginT4PjVbqDdlJAmxMm+wYElFmeR6EmLP5bYeoRVQ",
+} as const;
+
+/**
+ * Whether this build counts visits: only Vercel's production build. Previews, CI and local builds
+ * never load the script, so they neither count nor make a request to GoatCounter.
+ */
+export function countsVisits(env: Record<string, string | undefined> = process.env): boolean {
+  return env.VERCEL_ENV === "production";
+}
+
 export const NAV = [
   { href: "/explore", label: "Explorer" },
   { href: "/score", label: "Score" },

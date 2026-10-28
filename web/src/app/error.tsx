@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 
 /**
  * A page that threw while rendering: the header and footer stay, the page says so and offers to
- * try again. Nothing is logged or sent anywhere (no analytics); a server error's digest is shown
+ * try again. The error is not logged or reported anywhere; a server error's digest is shown
  * so it can be matched with the server's own log.
  */
 export default function ErrorPage({ error, retry }: { error: unknown; retry: () => void }) {

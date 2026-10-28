@@ -247,7 +247,7 @@ test("How it works states the deployment rule from the manifest and keeps the cl
 
 test("About has the author's text, with bold lead-ins, and links", async ({ page }) => {
   await page.goto("/about");
-  const paragraphs = page.getByTestId("about-text").locator("p");
+  const paragraphs = page.getByTestId("about-text").locator("p:not([data-testid])");
   await expect(paragraphs).toHaveText([
     "Hi, I'm Abdullah Hanif. I use machine learning to understand genomes and proteins, and I'm doing a Master's in Bioinformatics at Saarland University.",
     "Why I built MutaScope. Protein language models are usually summarised by a single score. I wanted to see where they predict well and where they don't, so the benchmark results here come with their test setup, their uncertainty and their limits.",
@@ -258,6 +258,11 @@ test("About has the author's text, with bold lead-ins, and links", async ({ page
     "Why I built MutaScope.",
     "Let's talk.",
   ]);
+  // How visits are counted (ADR 0044), and that a scored sequence is never sent.
+  await expect(page.getByTestId("privacy-note")).toContainText("without cookies");
+  await expect(page.getByTestId("privacy-note")).toContainText(
+    "a sequence you score is never sent",
+  );
   const block = page.getByTestId("about-links");
   const links = block.getByRole("link");
   await expect(links).toHaveText(["abdullahhanif.me", "Email", "GitHub", "LinkedIn"]);

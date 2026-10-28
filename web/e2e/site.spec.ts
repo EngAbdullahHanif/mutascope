@@ -153,3 +153,13 @@ test("the page links the site icon, and it is served as SVG", async ({ page, req
   );
   expect(width).toBeGreaterThan(0);
 });
+
+test("a build outside Vercel's production loads no visit counter", async ({ page }) => {
+  const requests: string[] = [];
+  page.on("request", (r) => requests.push(r.url()));
+  await page.goto("/");
+  await page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "About" }).click();
+  await expect(page).toHaveURL("/about");
+  await page.waitForLoadState("networkidle");
+  expect(requests.filter((u) => /goatcounter|gc\.zgo\.at/.test(u))).toEqual([]);
+});
