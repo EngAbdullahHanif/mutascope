@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.13.0](https://github.com/EngAbdullahHanif/mutascope/compare/v0.12.1...v0.13.0) (2026-10-28)
+
+
+### Features
+
+* **web:** count visits with GoatCounter (ADR 0044) ([0cdda27](https://github.com/EngAbdullahHanif/mutascope/commit/0cdda2724b5f23f7c07a4efbab56e40bf378506a))
+* **web:** count visits with GoatCounter in production ([22c5c58](https://github.com/EngAbdullahHanif/mutascope/commit/22c5c58e1160c995cf6e86f2c403d7e72e4226a2))
+
+
+### Documentation
+
+* ADR 0044, visit counting with GoatCounter ([dc0173e](https://github.com/EngAbdullahHanif/mutascope/commit/dc0173ed72d5b2ae847d66a983ea1e376809ad7f))
+* sharp README GIF on high-density screens ([fe70683](https://github.com/EngAbdullahHanif/mutascope/commit/fe7068328f4eb198dee00339a7bac2c0c5c3e203))
+* sharp README GIF on high-density screens ([01e1531](https://github.com/EngAbdullahHanif/mutascope/commit/01e1531d7f510226cf0f17936ec823f0a879c29d))
+
 ## [0.12.1](https://github.com/EngAbdullahHanif/mutascope/compare/v0.12.0...v0.12.1) (2026-10-20)
 
 
