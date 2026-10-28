@@ -8,6 +8,8 @@
   machine with GPU rendering (`make web-quality`); CI records its scores without asserting them,
   and the 3D views load only when on screen (ADR 0039 and 0041 addenda). See "Follow-up" at the
   end.
+- Amended (2026-10-28) by ADR 0044: decision 9 no longer holds; visits are counted with
+  GoatCounter in production.
 - Addendum (2026-10-20): the Landing page's ~140 s blocking time on CI comes from the turning
   structure in software WebGL on the slower runners, not from the site (see "Addendum" at the
   end).

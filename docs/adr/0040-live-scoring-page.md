@@ -5,6 +5,9 @@
 - Builds on: ADR 0031 (live scoring routes, SSE job log), ADR 0032 (rate limits, CORS), ADR 0034
   (Cloud Run: scale to zero, CPU only during a request), ADR 0036 (one forward pass at a time,
   503 `scoring-busy`), ADR 0037 (site works with the API asleep), ADR 0038 (canvas heatmap)
+- Amended (2026-10-28) by ADR 0044: the site now counts visits (GoatCounter, production only,
+  path only); section 4's "the site has no analytics" no longer holds, and the sequence still
+  never leaves the request body
 
 ## Context
 
