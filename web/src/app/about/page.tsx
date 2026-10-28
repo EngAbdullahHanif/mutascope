@@ -47,6 +47,14 @@ export default function AboutPage() {
               ))}
             </ul>
           </div>
+          <p className="text-sm text-muted-foreground" data-testid="privacy-note">
+            Visits are counted with{" "}
+            <a className={link} href="https://www.goatcounter.com">
+              GoatCounter
+            </a>
+            , without cookies: the page, the site you came from, your browser, screen size and
+            country. Nothing that identifies you is stored, and a sequence you score is never sent.
+          </p>
         </div>
         <BundleStatus />
       </div>

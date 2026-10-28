@@ -4,8 +4,9 @@ import type { ReactNode } from "react";
 
 import { SiteFooter } from "@/components/layout/site-footer";
 import { SiteHeader } from "@/components/layout/site-header";
+import { VisitCounter } from "@/components/layout/visit-counter";
 import { ThemeProvider } from "@/components/theme/theme-provider";
-import { SITE } from "@/lib/site";
+import { countsVisits, SITE } from "@/lib/site";
 
 import "./globals.css";
 
@@ -44,6 +45,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           </main>
           <SiteFooter />
         </ThemeProvider>
+        {/* Visit counting, production only (ADR 0044). */}
+        {countsVisits() ? <VisitCounter /> : null}
       </body>
     </html>
   );
