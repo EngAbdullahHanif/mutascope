@@ -19,6 +19,10 @@ const STEP = 4; // residues per frame
 
 test.use({ viewport: { width: 1280, height: 1300 }, colorScheme: "light", deviceScaleFactor: 2 });
 test.setTimeout(180_000);
+// The site opens dark (ADR 0045); the README GIF stays light.
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => window.localStorage.setItem("theme", "light"));
+});
 
 test("Explorer frames", async ({ page }) => {
   rmSync(OUT, { recursive: true, force: true });

@@ -258,11 +258,6 @@ test("About has the author's text, with bold lead-ins, and links", async ({ page
     "Why I built MutaScope.",
     "Let's talk.",
   ]);
-  // How visits are counted (ADR 0044), and that a scored sequence is never sent.
-  await expect(page.getByTestId("privacy-note")).toContainText("without cookies");
-  await expect(page.getByTestId("privacy-note")).toContainText(
-    "a sequence you score is never sent",
-  );
   const block = page.getByTestId("about-links");
   const links = block.getByRole("link");
   await expect(links).toHaveText(["abdullahhanif.me", "Email", "GitHub", "LinkedIn"]);

@@ -7,7 +7,7 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
-/* Dark mode is a class on <html> (next-themes), defaulting to the system preference. */
+/* Dark mode is a class on <html> (next-themes), dark until the reader picks light (ADR 0045). */
 @custom-variant dark (&:where(.dark, .dark *));
 
 :root {

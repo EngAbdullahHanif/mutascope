@@ -2,6 +2,7 @@
 
 - Status: accepted
 - Date: 2026-10-28
+- Amended by: ADR 0045 (decision 6: the About page no longer has the note)
 - Amends: ADR 0042 (decision 9, "No analytics"), ADR 0040 (section 4: "the site has no
   analytics")
 
