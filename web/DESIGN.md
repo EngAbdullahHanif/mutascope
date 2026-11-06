@@ -22,8 +22,8 @@ never raw hex values, pixel sizes or ad-hoc shadows.
 ## Colour
 
 All values are OKLCH. Light and dark are separate token sets (`:root` and `.dark`), not an
-automatic inversion. The theme follows the system until the reader picks one (next-themes, class
-on `<html>`).
+automatic inversion. The theme is dark until the reader picks light, whatever the system's setting
+(next-themes, class on `<html>`; ADR 0045).
 
 | Token                      | Light             | Dark              | Use                                                                 |
 | -------------------------- | ----------------- | ----------------- | ------------------------------------------------------------------- |

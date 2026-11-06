@@ -51,15 +51,15 @@ test("every page carries the not-for-clinical-use note, the copyright and the pr
   }
 });
 
-test("dark mode toggles and survives a reload", async ({ page }) => {
+test("dark by default, even on a light system; light survives a reload", async ({ page }) => {
   await page.emulateMedia({ colorScheme: "light" });
   await page.goto("/");
   const html = page.locator("html");
-  await expect(html).not.toHaveClass(/dark/);
+  await expect(html).toHaveClass(/dark/);
   await page.getByRole("button", { name: "Toggle dark mode" }).click();
-  await expect(html).toHaveClass(/dark/);
+  await expect(html).not.toHaveClass(/dark/);
   await page.reload();
-  await expect(html).toHaveClass(/dark/);
+  await expect(html).not.toHaveClass(/dark/);
 });
 
 test("the bundle loads and validates from the site alone (API asleep)", async ({
